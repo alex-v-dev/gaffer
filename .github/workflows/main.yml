@@ -73,7 +73,7 @@ jobs:
             os: windows-2019
             buildType: RELEASE
             variant: windows-python3
-            publish: false
+            publish: true
             containerImage:
             dependenciesURL: https://github.com/ImageEngine/cortex/releases/download/10.4.2.1/cortex-10.4.2.1-windows-python3.zip
             testRunner: Invoke-Expression
