@@ -4,7 +4,11 @@
 # BuildTarget: images/tutorialDefaultImageNodePath.png
 
 import os
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 import tempfile
 import time
 
@@ -28,7 +32,7 @@ __temporaryDirectory = tempfile.mkdtemp( prefix = "gafferDocs" )
 
 def __getTempFilePath( fileName, directory = __temporaryDirectory ) :
 	filePath = "/".join( ( directory, fileName ) )
-	
+
 	return filePath
 
 def __dispatchScript( script, tasks, settings ) :
@@ -38,10 +42,7 @@ def __dispatchScript( script, tasks, settings ) :
 		" ".join( settings ),
 		__temporaryDirectory
 		)
-	process = subprocess.Popen( command, shell=True, stderr = subprocess.PIPE )
-	process.wait()
-
-	return process
+	subprocess.check_call( command, shell=True )
 
 # Tutorial: bookmarks in a file browser
 __imageName = "tutorialBookmarks"

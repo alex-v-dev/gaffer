@@ -45,9 +45,11 @@
 
 #include "Gaffer/GraphComponent.h"
 
+#include "IECorePython/ExceptionAlgo.h"
 #include "IECorePython/ScopedGILRelease.h"
 
 #include "boost/format.hpp"
+#include "boost/python/suite/indexing/container_utils.hpp"
 
 using namespace boost::python;
 using namespace GafferBindings;
@@ -73,7 +75,7 @@ boost::python::list items( GraphComponent &c )
 	boost::python::list l;
 	for( GraphComponent::ChildContainer::const_iterator it=ch.begin(); it!=ch.end(); it++ )
 	{
-		l.append( boost::python::make_tuple( (*it)->getName(), *it ) );
+		l.append( boost::python::make_tuple( (*it)->getName().c_str(), *it ) );
 	}
 	return l;
 }
@@ -136,6 +138,14 @@ void clearChildren( GraphComponent &g )
 {
 	IECorePython::ScopedGILRelease gilRelease;
 	g.clearChildren();
+}
+
+void reorderChildren( GraphComponent &g, object pythonNewOrder )
+{
+	GraphComponent::ChildContainer newOrder;
+	boost::python::container_utils::extend_container( newOrder, pythonNewOrder );
+	IECorePython::ScopedGILRelease gilRelease;
+	g.reorderChildren( newOrder );
 }
 
 GraphComponentPtr getChild( GraphComponent &g, const IECore::InternedString &n )
@@ -213,7 +223,7 @@ int length( GraphComponent &g )
 	return g.children().size();
 }
 
-bool nonZero( GraphComponent &g )
+bool toBool( GraphComponent &g )
 {
 	return true;
 }
@@ -245,7 +255,7 @@ std::string repr( const GraphComponent *g )
 
 struct UnarySlotCaller
 {
-	boost::signals::detail::unusable operator()( boost::python::object slot, GraphComponentPtr g )
+	void operator()( boost::python::object slot, GraphComponentPtr g )
 	{
 		try
 		{
@@ -253,16 +263,15 @@ struct UnarySlotCaller
 		}
 		catch( const error_already_set &e )
 		{
-			PyErr_PrintEx( 0 ); // clears the error status
+			IECorePython::ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
 	}
 };
 
 struct BinarySlotCaller
 {
 
-	boost::signals::detail::unusable operator()( boost::python::object slot, GraphComponentPtr g, GraphComponentPtr gg )
+	void operator()( boost::python::object slot, GraphComponentPtr g, GraphComponentPtr gg )
 	{
 		try
 		{
@@ -270,9 +279,29 @@ struct BinarySlotCaller
 		}
 		catch( const error_already_set &e )
 		{
-			PyErr_PrintEx( 0 ); // clears the error status
+			IECorePython::ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
+	}
+};
+
+struct ChildrenReorderedSlotCaller
+{
+
+	void operator()( boost::python::object slot, GraphComponentPtr g, const std::vector<size_t> &oldIndices )
+	{
+		try
+		{
+			boost::python::list oldIndicesList;
+			for( auto i : oldIndices )
+			{
+				oldIndicesList.append( i );
+			}
+			slot( g, oldIndicesList );
+		}
+		catch( const error_already_set &e )
+		{
+			IECorePython::ExceptionAlgo::translatePythonException();
+		}
 	}
 };
 
@@ -280,7 +309,7 @@ struct BinarySlotCaller
 
 void GafferModule::bindGraphComponent()
 {
-	typedef GraphComponentWrapper<GraphComponent> Wrapper;
+	using Wrapper = GraphComponentWrapper<GraphComponent>;
 
 	scope s = GraphComponentClass<GraphComponent, Wrapper>()
 		.def( init<>() )
@@ -293,6 +322,7 @@ void GafferModule::bindGraphComponent()
 		.def( "addChild", &addChild )
 		.def( "removeChild", &removeChild )
 		.def( "clearChildren", &clearChildren )
+		.def( "reorderChildren", &reorderChildren )
 		.def( "setChild", &setChild )
 		.def( "getChild", &getChild )
 		.def( "descendant", &descendant )
@@ -303,7 +333,15 @@ void GafferModule::bindGraphComponent()
 		.def( "__delitem__", (void (*)( GraphComponent &, long ))&delItem )
 		.def( "__contains__", contains )
 		.def( "__len__", &length )
-		.def( "__nonzero__", &nonZero )
+// The default conversion to bool uses `__len__`, which trips a lot of
+// people up as they expect `if graphComponent` to be equivalent to
+// `if graphComponent is not None`. So we provide a more specific conversion
+// which is always true.
+#if PY_MAJOR_VERSION > 2
+		.def( "__bool__", &toBool )
+#else
+		.def( "__nonzero__", &toBool )
+#endif
 		.def( "__repr__", &repr )
 		.def( "items", &items )
 		.def( "keys", &keys )
@@ -316,9 +354,11 @@ void GafferModule::bindGraphComponent()
 		.def( "childAddedSignal", &GraphComponent::childAddedSignal, return_internal_reference<1>() )
 		.def( "childRemovedSignal", &GraphComponent::childRemovedSignal, return_internal_reference<1>() )
 		.def( "parentChangedSignal", &GraphComponent::parentChangedSignal, return_internal_reference<1>() )
+		.def( "childrenReorderedSignal", &GraphComponent::childrenReorderedSignal, return_internal_reference<1>() )
 	;
 
 	SignalClass<GraphComponent::UnarySignal, DefaultSignalCaller<GraphComponent::UnarySignal>, UnarySlotCaller>( "UnarySignal" );
 	SignalClass<GraphComponent::BinarySignal, DefaultSignalCaller<GraphComponent::BinarySignal>, BinarySlotCaller>( "BinarySignal" );
+	SignalClass<GraphComponent::ChildrenReorderedSignal, DefaultSignalCaller<GraphComponent::ChildrenReorderedSignal>, ChildrenReorderedSlotCaller>( "BinarySignal" );
 
 }

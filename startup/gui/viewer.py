@@ -73,6 +73,7 @@ GafferUI.View.registerView( GafferScene.ScenePlug.staticTypeId(), __sceneView )
 
 def __viewContextMenu( viewer, view, menuDefinition ) :
 
+	GafferSceneUI.LightUI.appendViewContextMenuItems( viewer, view, menuDefinition )
 	GafferSceneUI.SceneHistoryUI.appendViewContextMenuItems( viewer, view, menuDefinition )
 
 GafferUI.Viewer.viewContextMenuSignal().connect( __viewContextMenu, scoped = False )
@@ -136,6 +137,21 @@ def __createXRayShader() :
 
 GafferSceneUI.SceneView.registerShadingMode( "X-Ray", functools.partial( __createXRayShader ) )
 
+def __loadRendererSettings( fileName ) :
+
+	script = Gaffer.ScriptNode()
+	script["fileName"].setValue( fileName )
+	script.load()
+
+	script["Processor"] = GafferScene.SceneProcessor()
+	script.execute( script.serialise( parent = script["ViewerSettings"] ), parent = script["Processor"] )
+	script["Processor"]["BoxIn"]["__in"].setInput( script["Processor"]["in"] )
+	script["Processor"]["out"].setInput( script["Processor"]["BoxOut"]["__out"] )
+	for plug in Gaffer.ValuePlug.InputRange( script["Processor"] ) :
+		plug.setToDefault()
+
+	return script["Processor"]
+
 with IECore.IgnoredExceptions( ImportError ) :
 
 	import GafferArnold
@@ -155,6 +171,11 @@ with IECore.IgnoredExceptions( ImportError ) :
 		( "Diagnostic/Arnold/Self Shadows", GafferScene.AttributeVisualiser, { "attributeName" : "ai:self_shadows" } ),
 
 	] )
+
+	GafferSceneUI.SceneView.registerRenderer(
+		"Arnold",
+		functools.partial( __loadRendererSettings, os.path.join( os.path.dirname( __file__ ), "arnoldViewerSettings.gfr" ) )
+	)
 
 with IECore.IgnoredExceptions( ImportError ) :
 
@@ -191,6 +212,16 @@ if os.environ.get( "GAFFERAPPLESEED_HIDE_UI", "" ) != "1" :
 
 		] )
 
+if os.environ.get( "CYCLES_ROOT" ) and os.environ.get( "GAFFERCYCLES_HIDE_UI", "" ) != "1" :
+
+	with IECore.IgnoredExceptions( ImportError ) :
+
+		import GafferCycles
+
+		GafferSceneUI.SceneView.registerRenderer(
+			"Cycles",
+			functools.partial( __loadRendererSettings, os.path.join( os.path.dirname( __file__ ), "cyclesViewerSettings.gfr" ) )
+		)
 
 # Add catalogue hotkeys to viewers, eg: up/down navigation
 GafferUI.Editor.instanceCreatedSignal().connect( GafferImageUI.CatalogueUI.addCatalogueHotkeys, scoped = False )

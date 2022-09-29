@@ -35,13 +35,20 @@
 #
 ##########################################################################
 
-import cgi
 import math
 import difflib
 import itertools
 import collections
 import functools
+import six
 import imath
+
+# These modules are not interchangeable in general, but we only
+# use the `escape()` function which is present in both.
+if six.PY3 :
+	import html
+else :
+	import cgi as html
 
 import IECore
 import IECoreScene
@@ -151,7 +158,7 @@ class SceneInspector( GafferUI.NodeSetEditor ) :
 
 		mainColumn = GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Vertical, borderWidth = 8 )
 
-		GafferUI.NodeSetEditor.__init__( self, mainColumn, scriptNode, **kw )
+		GafferUI.NodeSetEditor.__init__( self, mainColumn, scriptNode, nodeSet = scriptNode.focusSet(), **kw )
 
 		self.__sections = []
 
@@ -175,7 +182,7 @@ class SceneInspector( GafferUI.NodeSetEditor ) :
 				column = columns.get( registration.tab )
 				if column is None :
 					with tabbedContainer :
-						with GafferUI.ScrolledContainer( horizontalMode = GafferUI.ScrollMode.Never, parenting = { "label" : registration.tab } ) :
+						with GafferUI.ScrolledContainer( horizontalMode = GafferUI.ScrollMode.Automatic, parenting = { "label" : registration.tab } ) :
 							column = GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Vertical, borderWidth = 4, spacing = 8 )
 							columns[registration.tab] = column
 				column.append( section )
@@ -229,8 +236,8 @@ class SceneInspector( GafferUI.NodeSetEditor ) :
 			outputScenePlug = next( GafferScene.ScenePlug.RecursiveOutputRange( node ), None )
 			if outputScenePlug :
 				self.__scenePlugs.append( outputScenePlug )
-				self.__plugDirtiedConnections.append( node.plugDirtiedSignal().connect( Gaffer.WeakMethod( self.__plugDirtied ) ) )
-				self.__parentChangedConnections.append( outputScenePlug.parentChangedSignal().connect( Gaffer.WeakMethod( self.__plugParentChanged ) ) )
+				self.__plugDirtiedConnections.append( node.plugDirtiedSignal().connect( Gaffer.WeakMethod( self.__plugDirtied ), scoped = True ) )
+				self.__parentChangedConnections.append( outputScenePlug.parentChangedSignal().connect( Gaffer.WeakMethod( self.__plugParentChanged ), scoped = True ) )
 
 		self.__updateLazily()
 
@@ -342,7 +349,7 @@ class SideBySideDiff( Diff ) :
 			for i in range( 0, 2 ) :
 				frame = GafferUI.Frame(
 					borderWidth = 4,
-					borderStyle = GafferUI.Frame.BorderStyle.None,
+					borderStyle = GafferUI.Frame.BorderStyle.None_,
 					parenting = { "index" : ( 0, i ) }
 				)
 
@@ -477,10 +484,10 @@ class TextDiff( SideBySideDiff ) :
 			return self.__formatShaders( values )
 		elif isinstance( values[0], ( float, int ) ) :
 			return self.__formatNumbers( values )
-		elif isinstance( values[0], basestring ) :
+		elif isinstance( values[0], six.string_types ) :
 			return self.__formatStrings( [ str( v ) for v in values ] )
 		else :
-			return [ cgi.escape( str( v ) ) for v in values ]
+			return [ html.escape( str( v ) ) for v in values ]
 
 	def __formatVectors( self, vectors ) :
 
@@ -530,7 +537,7 @@ class TextDiff( SideBySideDiff ) :
 		# transform back into a list of 2d arrays of
 		# formatted strings.
 		formattedRows = zip( *formattedColumns )
-		values = zip( *( [ iter( formattedRows ) ] * len( values[0] ) ) )
+		values = list( zip( *( [ iter( formattedRows ) ] * len( values[0] ) ) ) )
 
 		# build the tables. it'd be nice to control cellspacing
 		# in the stylesheet, but qt doesn't seem to support that.
@@ -557,7 +564,7 @@ class TextDiff( SideBySideDiff ) :
 				formattedValues.append( "Missing output shader" )
 				continue
 			shaderName = shader.name
-			nodeName = shader.blindData().get( "gaffer:nodeName", None )
+			nodeName = shader.blindData().get( "label", shader.blindData().get( "gaffer:nodeName", None ) )
 
 			formattedValue = "<table cellspacing=2><tr>"
 			if nodeName is not None :
@@ -566,10 +573,10 @@ class TextDiff( SideBySideDiff ) :
 					nodeColor = GafferUI.Widget._qtColor( nodeColor.value ).name()
 				else :
 					nodeColor = "#000000"
-				formattedValue += "<td bgcolor=%s>%s</td>" % ( nodeColor, cgi.escape( nodeName.value ) )
-				formattedValue += "<td>(" + cgi.escape( shaderName ) + ")</td>"
+				formattedValue += "<td bgcolor=%s>%s</td>" % ( nodeColor, html.escape( nodeName.value ) )
+				formattedValue += "<td>(" + html.escape( shaderName ) + ")</td>"
 			else :
-				formattedValue += "<td>" + cgi.escape( shaderName ) + "</td>"
+				formattedValue += "<td>" + html.escape( shaderName ) + "</td>"
 
 			formattedValue += "</tr></table>"
 
@@ -580,7 +587,7 @@ class TextDiff( SideBySideDiff ) :
 	def __formatStrings( self, strings ) :
 
 		if len( strings ) == 1 or strings[0] == strings[1] or not self.__highlightDiffs :
-			return [ cgi.escape( s ) for s in strings ]
+			return [ html.escape( s ) for s in strings ]
 
 		a = strings[0]
 		b = strings[1]
@@ -590,15 +597,15 @@ class TextDiff( SideBySideDiff ) :
 		for op, a1, a2, b1, b2 in difflib.SequenceMatcher( None, a, b ).get_opcodes() :
 
 			if op == "equal" :
-				aFormatted += cgi.escape( a[a1:a2] )
-				bFormatted += cgi.escape( b[b1:b2] )
+				aFormatted += html.escape( a[a1:a2] )
+				bFormatted += html.escape( b[b1:b2] )
 			elif op == "replace" :
-				aFormatted += '<span class="diffA">' + cgi.escape( a[a1:a2] ) + "</span>"
-				bFormatted += '<span class="diffB">' + cgi.escape( b[b1:b2] ) + "</span>"
+				aFormatted += '<span class="diffA">' + html.escape( a[a1:a2] ) + "</span>"
+				bFormatted += '<span class="diffB">' + html.escape( b[b1:b2] ) + "</span>"
 			elif op == "delete" :
-				aFormatted += '<span class="diffA">' + cgi.escape( a[a1:a2] ) + "</span>"
+				aFormatted += '<span class="diffA">' + html.escape( a[a1:a2] ) + "</span>"
 			elif op == "insert" :
-				bFormatted += '<span class="diffB">' + cgi.escape( b[b1:b2] ) + "</span>"
+				bFormatted += '<span class="diffB">' + html.escape( b[b1:b2] ) + "</span>"
 
 		return [ aFormatted, bFormatted ]
 
@@ -622,7 +629,7 @@ class TextDiff( SideBySideDiff ) :
 			return values
 
 		# d is the index of the first differing digit, or -1 if there is no difference
-		d = next( ( i for i in xrange( 0, len( values[0] ) ) if values[0][i] != values[1][i] ), -1 )
+		d = next( ( i for i in range( 0, len( values[0] ) ) if values[0][i] != values[1][i] ), -1 )
 		if d < 0 :
 			return values
 
@@ -667,7 +674,7 @@ class Row( GafferUI.Widget ) :
 
 	def __init__( self, borderWidth = 4, alternate = False, **kw ) :
 
-		self.__frame = GafferUI.Frame( borderWidth = borderWidth, borderStyle = GafferUI.Frame.BorderStyle.None )
+		self.__frame = GafferUI.Frame( borderWidth = borderWidth, borderStyle = GafferUI.Frame.BorderStyle.None_ )
 
 		GafferUI.Widget.__init__( self, self.__frame, **kw )
 
@@ -1026,7 +1033,7 @@ class DiffColumn( GafferUI.Widget ) :
 		self.__diffCreator = diffCreator
 
 		with outerColumn :
-			with GafferUI.Frame( borderWidth = 4, borderStyle = GafferUI.Frame.BorderStyle.None ) as self.__header :
+			with GafferUI.Frame( borderWidth = 4, borderStyle = GafferUI.Frame.BorderStyle.None_ ) as self.__header :
 				with GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Horizontal, spacing = 4 ) :
 					if label is not None :
 						l = GafferUI.Label(
@@ -1502,7 +1509,19 @@ class _HistorySection( Section ) :
 						_Rail( _Rail.Type.Middle )
 
 				if i == 0 or i == ( len( history ) - 1 ) or history[i-1].value != history[i].value :
-					GafferUI.NameLabel( history[i].target.scene.node(), formatter = lambda l : ".".join( x.getName() for x in l ) )
+					GafferUI.NameLabel(
+						history[i].target.scene.node(),
+						formatter = lambda l : ".".join( x.getName() for x in l ),
+						numComponents = self.__distance( history[i].target.scene.node().scriptNode(), history[i].target.scene.node() )
+					)
+					editButton = GafferUI.Button( image = "editOn.png", hasFrame = False )
+					if not Gaffer.MetadataAlgo.readOnly( history[i].target.scene.node() ) :
+						editButton.clickedSignal().connect(
+							functools.partial( _HistorySection.__editClicked, node = history[i].target.scene.node() ),
+							scoped = False
+						)
+					else :
+						editButton.setEnabled( False )
 				else :
 					GafferUI.Label( "..." )
 
@@ -1540,6 +1559,23 @@ class _HistorySection( Section ) :
 			return SceneInspector.Target( sourceScene, target.path )
 
 		return None
+
+	@staticmethod
+	def __editClicked( button, node ) :
+
+		GafferUI.NodeEditor.acquire( node, floating = True )
+		return True
+
+	@staticmethod
+	## \todo This might make sense as part of a future GraphComponentAlgo.
+	def __distance( ancestor, descendant ) :
+
+		result = 0
+		while descendant is not None and descendant != ancestor :
+			result += 1
+			descendant = descendant.parent()
+
+		return result
 
 SceneInspector.HistorySection = _HistorySection ## REMOVE ME!!
 
@@ -2433,7 +2469,7 @@ class _SetDiff( Diff ) :
 
 		with self.__row :
 			for i, diffName in enumerate( [ "A", "AB", "B" ] ) :
-				with GafferUI.Frame( borderWidth = 5, borderStyle = GafferUI.Frame.BorderStyle.None ) as frame :
+				with GafferUI.Frame( borderWidth = 5, borderStyle = GafferUI.Frame.BorderStyle.None_ ) as frame :
 
 					frame._qtWidget().setProperty( "gafferDiff", diffName )
 
@@ -2494,7 +2530,7 @@ class _SetDiff( Diff ) :
 
 	def __buttonRelease( self, widget, event ) :
 
-		if event.buttons != event.Buttons.None or event.button != event.Buttons.Left :
+		if event.buttons != event.Buttons.None_ or event.button != event.Buttons.Left :
 			return False
 
 		editor = self.ancestor( SceneInspector )

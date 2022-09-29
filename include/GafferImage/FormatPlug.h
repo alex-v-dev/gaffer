@@ -61,7 +61,7 @@ class GAFFERIMAGE_API FormatPlug : public Gaffer::ValuePlug
 
 	public :
 
-		typedef Format ValueType;
+		using ValueType = Format;
 
 		GAFFER_PLUG_DECLARE_TYPE( GafferImage::FormatPlug, FormatPlugTypeId, Gaffer::ValuePlug );
 
@@ -84,7 +84,7 @@ class GAFFERIMAGE_API FormatPlug : public Gaffer::ValuePlug
 		Gaffer::FloatPlug *pixelAspectPlug();
 		const Gaffer::FloatPlug *pixelAspectPlug() const;
 
-		const Format &defaultValue() const;
+		Format defaultValue() const;
 
 		/// \undoable
 		void setValue( const Format &value );
@@ -129,20 +129,11 @@ class GAFFERIMAGE_API FormatPlug : public Gaffer::ValuePlug
 		void parentChanging( Gaffer::GraphComponent *newParent ) override;
 		void plugDirtied( Gaffer::Plug *plug );
 
-		Format m_defaultValue;
-		boost::signals::scoped_connection m_plugDirtiedConnection;
+		Gaffer::Signals::ScopedConnection m_plugDirtiedConnection;
 
 };
 
 IE_CORE_DECLAREPTR( FormatPlug );
-
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, FormatPlug> > FormatPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, FormatPlug> > InputFormatPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, FormatPlug> > OutputFormatPlugIterator;
-
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, FormatPlug>, Gaffer::PlugPredicate<> > RecursiveFormatPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, FormatPlug>, Gaffer::PlugPredicate<> > RecursiveInputFormatPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, FormatPlug>, Gaffer::PlugPredicate<> > RecursiveOutputFormatPlugIterator;
 
 } // namespace GafferImage
 

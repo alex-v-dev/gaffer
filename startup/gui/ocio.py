@@ -57,6 +57,7 @@ defaultDisplay = config.getDefaultDisplay()
 preferences = application.root()["preferences"]
 preferences["displayColorSpace"] = Gaffer.Plug()
 preferences["displayColorSpace"]["view"] = Gaffer.StringPlug( defaultValue = config.getDefaultView( defaultDisplay ) )
+preferences["displayColorSpace"]["context"] = Gaffer.CompoundDataPlug()
 
 # configure ui for preferences plugs
 
@@ -64,23 +65,37 @@ Gaffer.Metadata.registerValue( preferences["displayColorSpace"], "plugValueWidge
 Gaffer.Metadata.registerValue( preferences["displayColorSpace"], "layout:section", "Display Color Space", persistent = False )
 
 Gaffer.Metadata.registerValue( preferences["displayColorSpace"]["view"], "plugValueWidget:type", "GafferUI.PresetsPlugValueWidget", persistent = False )
-
 for view in config.getViews( defaultDisplay ) :
-	Gaffer.Metadata.registerValue( preferences["displayColorSpace"]["view"], "preset:" + view, view, persistent = False )
+	Gaffer.Metadata.registerValue( preferences["displayColorSpace"]["view"], str( "preset:" + view ), view, persistent = False )
+
+Gaffer.Metadata.registerValue( preferences["displayColorSpace"]["context"], "plugValueWidget:type", "GafferUI.LayoutPlugValueWidget", persistent = False )
+Gaffer.Metadata.registerValue( preferences["displayColorSpace"]["context"], "layout:section", "OCIO Context", persistent = False )
+Gaffer.Metadata.registerValue( preferences["displayColorSpace"], "layout:section:OCIO Context:collapsed", False, persistent = False )
+Gaffer.Metadata.registerValue( preferences["displayColorSpace"]["context"], "layout:customWidget:addButton:widgetType", "GafferImageUI.OpenColorIOTransformUI._ContextFooter" )
+Gaffer.Metadata.registerValue( preferences["displayColorSpace"]["context"], "layout:customWidget:addButton:index", -1 )
 
 # update the display transform from the plugs
 
 def __setDisplayTransform() :
 
-	d = OCIO.DisplayTransform()
-	d.setInputColorSpaceName( OCIO.Constants.ROLE_SCENE_LINEAR )
+	d = OCIO.DisplayViewTransform()
+	d.setSrc( OCIO.ROLE_SCENE_LINEAR )
 	d.setDisplay( defaultDisplay )
 	d.setView( preferences["displayColorSpace"]["view"].getValue() )
-	processor = config.getProcessor( d )
+
+	# \todo : Should be `context = copy.deepcopy( config.getCurrentContext() )`
+	# once https://github.com/AcademySoftwareFoundation/OpenColorIO/pull/1575 gets merged into OCIO2.1.2
+	context = OCIO.Context( searchPaths = list( config.getCurrentContext().getSearchPaths() ), workingDir = config.getCurrentContext().getWorkingDir(), environmentMode = config.getCurrentContext().getEnvironmentMode(), stringVars = dict( config.getCurrentContext().getStringVars() ) )
+	for variable in preferences["displayColorSpace"]["context"] :
+		if variable["enabled"].getValue() :
+			context[ variable["name"].getValue() ] = variable["value"].getValue()
+
+	processor = config.getProcessor( transform = d, context = context, direction = OCIO.TRANSFORM_DIR_FORWARD )
+	cpuProcessor = processor.getDefaultCPUProcessor()
 
 	def f( c ) :
 
-		cc = processor.applyRGB( [ c.r, c.g, c.b ] )
+		cc = cpuProcessor.applyRGB( [ c.r, c.g, c.b ] )
 		return imath.Color3f( *cc )
 
 	GafferUI.DisplayTransform.set( f )
@@ -95,7 +110,6 @@ def __plugSet( plug ) :
 		return
 
 	__setDisplayTransform()
-	__updateDefaultDisplayTransforms()
 
 preferences.plugSetSignal().connect( __plugSet, scoped = False )
 
@@ -105,9 +119,13 @@ def __displayTransformCreator( name ) :
 
 	result = GafferImage.DisplayTransform()
 	result["channels"].setValue( "[RGB] *.[RGB]" )
-	result["inputColorSpace"].setValue( config.getColorSpace( OCIO.Constants.ROLE_SCENE_LINEAR ).getName() )
+	result["inputColorSpace"].setValue( config.getColorSpace( OCIO.ROLE_SCENE_LINEAR ).getName() )
 	result["display"].setValue( defaultDisplay )
 	result["view"].setValue( name )
+
+	for plug in preferences["displayColorSpace"]["context"] :
+		result["context"].addChild( plug.createCounterpart( plug.getName(), plug.Direction.In ) )
+	result["context"].setInput( preferences["displayColorSpace"]["context"] )
 
 	return result
 
@@ -117,24 +135,10 @@ for name in config.getViews( defaultDisplay ) :
 # and register a special "Default" display transform which tracks the
 # global settings from the preferences
 
-__defaultDisplayTransforms = []
-
-def __updateDefaultDisplayTransforms() :
-
-	view = preferences["displayColorSpace"]["view"].getValue()
-	for node in __defaultDisplayTransforms :
-		node["view"].setValue( view )
-
 def __defaultDisplayTransformCreator() :
 
-	result = GafferImage.DisplayTransform()
-	result["channels"].setValue( "[RGB] *.[RGB]" )
-	result["inputColorSpace"].setValue( config.getColorSpace( OCIO.Constants.ROLE_SCENE_LINEAR ).getName() )
-	result["display"].setValue( defaultDisplay )
-	result["view"].setValue( config.getDefaultView( defaultDisplay ) )
-
-	__defaultDisplayTransforms.append( result )
-	__updateDefaultDisplayTransforms()
+	result = __displayTransformCreator( "" )
+	result["view"].setInput( preferences["displayColorSpace"]["view"] )
 
 	return result
 

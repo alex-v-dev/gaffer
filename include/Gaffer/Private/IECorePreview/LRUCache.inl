@@ -49,7 +49,6 @@
 
 #include "tbb/spin_mutex.h"
 #include "tbb/spin_rw_mutex.h"
-#include "tbb/tbb_thread.h"
 
 #include <cassert>
 #include <iostream>
@@ -95,8 +94,8 @@ class Serial
 
 	public :
 
-		typedef typename LRUCache::CacheEntry CacheEntry;
-		typedef typename LRUCache::KeyType Key;
+		using CacheEntry = typename LRUCache::CacheEntry;
+		using Key = typename LRUCache::KeyType;
 
 		struct Item
 		{
@@ -115,7 +114,7 @@ class Serial
 			mutable size_t handleCount;
 		};
 
-		typedef boost::multi_index_container<
+		using MapAndList = boost::multi_index_container<
 			Item,
 			boost::multi_index::indexed_by<
 				// First index is equivalent to std::unordered_map,
@@ -126,10 +125,10 @@ class Serial
 				// Second index is equivalent to std::list.
 				boost::multi_index::sequenced<>
 			>
-		> MapAndList;
+		>;
 
-		typedef typename MapAndList::iterator MapIterator;
-		typedef typename MapAndList::template nth_index<1>::type List;
+		using MapIterator = typename MapAndList::iterator;
+		using List = typename MapAndList::template nth_index<1>::type;
 
 		Serial()
 			:	currentCost( 0 )
@@ -221,7 +220,7 @@ class Serial
 		// handle is writable or not is determined by the AcquireMode.
 		// Returns true on success and false if no entry was
 		// found.
-		bool acquire( const Key &key, Handle &handle, AcquireMode mode )
+		bool acquire( const Key &key, Handle &handle, AcquireMode mode, const IECore::Canceller *canceller )
 		{
 			if( mode == Insert || mode == InsertWritable )
 			{
@@ -303,9 +302,9 @@ class Parallel
 
 	public :
 
-		typedef typename LRUCache::CacheEntry CacheEntry;
-		typedef typename LRUCache::KeyType Key;
-		typedef tbb::atomic<typename LRUCache::Cost> AtomicCost;
+		using CacheEntry = typename LRUCache::CacheEntry;
+		using Key = typename LRUCache::KeyType;
+		using AtomicCost = std::atomic<typename LRUCache::Cost>;
 
 		struct Item
 		{
@@ -315,10 +314,10 @@ class Parallel
 			Key key;
 			mutable CacheEntry cacheEntry;
 			// Mutex to protect cacheEntry.
-			typedef tbb::spin_rw_mutex Mutex;
+			using Mutex = tbb::spin_rw_mutex;
 			mutable Mutex mutex;
 			// Flag used in second-chance algorithm.
-			mutable tbb::atomic<bool> recentlyUsed;
+			mutable std::atomic_bool recentlyUsed;
 		};
 
 		// We would love to use one of TBB's concurrent containers as
@@ -329,7 +328,7 @@ class Parallel
 		// container, but split our storage into multiple bins with a
 		// container in each bin. This way concurrent operations do not
 		// contend on a lock unless they happen to target the same bin.
-		typedef boost::multi_index::multi_index_container<
+		using Map = boost::multi_index::multi_index_container<
 			Item,
 			boost::multi_index::indexed_by<
 				// Equivalent to std::unordered_map, using Item::key
@@ -346,9 +345,9 @@ class Parallel
 					boost::multi_index::member<Item, Key, &Item::key>
 				>
 			>
-		> Map;
+		>;
 
-		typedef typename Map::iterator MapIterator;
+		using MapIterator = typename Map::iterator;
 
 		struct Bin
 		{
@@ -356,15 +355,15 @@ class Parallel
 			Bin( const Bin &other ) : map( other.map ) {}
 			Bin &operator = ( const Bin &other ) { map = other.map; return *this; }
 			Map map;
-			typedef tbb::spin_rw_mutex Mutex;
+			using Mutex = tbb::spin_rw_mutex;
 			Mutex mutex;
 		};
 
-		typedef std::vector<Bin> Bins;
+		using Bins = std::vector<Bin>;
 
 		Parallel()
 		{
-			m_bins.resize( tbb::tbb_thread::hardware_concurrency() );
+			m_bins.resize( std::thread::hardware_concurrency() );
 			m_popBinIndex = 0;
 			m_popIterator = m_bins[0].map.begin();
 			currentCost = 0;
@@ -415,7 +414,7 @@ class Parallel
 
 			private :
 
-				bool acquire( Bin &bin, const Key &key, AcquireMode mode )
+				bool acquire( Bin &bin, const Key &key, AcquireMode mode, const IECore::Canceller *canceller )
 				{
 					assert( !m_item );
 
@@ -460,14 +459,19 @@ class Parallel
 						{
 							if( !m_writable && mode == Insert && it->cacheEntry.status() == LRUCache::Uncached )
 							{
-								// We found an old item that doesn't have
-								// a value. This can either be because it
-								// was erased but hasn't been popped yet,
-								// or because the item was too big to fit
-								// in the cache. Upgrade to writer status
-								// so it can be updated in get().
-								m_itemLock.upgrade_to_writer();
-								m_writable = true;
+								// We found an old item that doesn't have a
+								// value. This can either be because it was
+								// erased but hasn't been popped yet, or because
+								// the item was too big to fit in the cache. We
+								// need to get writer status so it can be
+								// updated in `get()`, but we can't use the obvious
+								// `m_itemLock.upgrade_to_writer()` call as it can
+								// lead to deadlock. So we must retry using
+								// InsertWritable instead.
+								mode = InsertWritable;
+								m_itemLock.release();
+								binLock.release();
+								continue;
 							}
 							// Success!
 							m_item = &*it;
@@ -482,6 +486,10 @@ class Parallel
 							// access another item in the same Bin.
 							binLock.release();
 						}
+						// Check for cancellation before trying again. We could
+						// be waiting a while, and our caller may have lost interest
+						// in the meantime.
+						IECore::Canceller::check( canceller );
 					}
 				}
 
@@ -493,9 +501,9 @@ class Parallel
 
 		};
 
-		bool acquire( const Key &key, Handle &handle, AcquireMode mode )
+		bool acquire( const Key &key, Handle &handle, AcquireMode mode, const IECore::Canceller *canceller )
 		{
-			return handle.acquire( bin( key ), key, mode );
+			return handle.acquire( bin( key ), key, mode, canceller );
 		}
 
 		void push( Handle &handle )
@@ -505,7 +513,7 @@ class Parallel
 			// in pop(), so it will not be evicted immediately.
 			// We don't need the handle to be writable to write
 			// here, because `recentlyUsed` is atomic.
-			handle.m_item->recentlyUsed = true;
+			handle.m_item->recentlyUsed.store( true, std::memory_order_release );
 		}
 
 		bool pop( Key &key, CacheEntry &cacheEntry )
@@ -561,7 +569,7 @@ class Parallel
 
 				if( itemLock.try_acquire( m_popIterator->mutex ) )
 				{
-					if( !m_popIterator->recentlyUsed )
+					if( !m_popIterator->recentlyUsed.load( std::memory_order_acquire ) )
 					{
 						// Pop this item.
 						key = m_popIterator->key;
@@ -582,7 +590,7 @@ class Parallel
 						// Item has been used recently. Flag it so we
 						// can pop it next time round, unless another
 						// thread resets the flag.
-						m_popIterator->recentlyUsed = false;
+						m_popIterator->recentlyUsed.store( false, std::memory_order_release );
 						itemLock.release();
 					}
 				}
@@ -605,11 +613,13 @@ class Parallel
 
 		Bin &bin( const Key &key )
 		{
+			// Note : `testLRUCacheUncacheableItem()` requires keys to share
+			// a bin, and needs updating if the indexing strategy changes.
 			size_t binIndex = boost::hash<Key>()( key ) % m_bins.size();
 			return m_bins[binIndex];
 		};
 
-		typedef tbb::spin_mutex PopMutex;
+		using PopMutex = tbb::spin_mutex;
 		PopMutex m_popMutex;
 		size_t m_popBinIndex;
 		MapIterator m_popIterator;
@@ -638,9 +648,9 @@ class TaskParallel
 
 	public :
 
-		typedef typename LRUCache::CacheEntry CacheEntry;
-		typedef typename LRUCache::KeyType Key;
-		typedef tbb::atomic<typename LRUCache::Cost> AtomicCost;
+		using CacheEntry = typename LRUCache::CacheEntry;
+		using Key = typename LRUCache::KeyType;
+		using AtomicCost = std::atomic<typename LRUCache::Cost>;
 
 		struct Item
 		{
@@ -650,10 +660,10 @@ class TaskParallel
 			Key key;
 			mutable CacheEntry cacheEntry;
 			// Mutex to protect cacheEntry.
-			typedef TaskMutex Mutex;
+			using Mutex = TaskMutex;
 			mutable Mutex mutex;
 			// Flag used in second-chance algorithm.
-			mutable tbb::atomic<bool> recentlyUsed;
+			mutable std::atomic_bool recentlyUsed;
 		};
 
 		// We would love to use one of TBB's concurrent containers as
@@ -664,7 +674,7 @@ class TaskParallel
 		// container, but split our storage into multiple bins with a
 		// container in each bin. This way concurrent operations do not
 		// contend on a lock unless they happen to target the same bin.
-		typedef boost::multi_index::multi_index_container<
+		using Map = boost::multi_index::multi_index_container<
 			Item,
 			boost::multi_index::indexed_by<
 				// Equivalent to std::unordered_map, using Item::key
@@ -681,9 +691,9 @@ class TaskParallel
 					boost::multi_index::member<Item, Key, &Item::key>
 				>
 			>
-		> Map;
+		>;
 
-		typedef typename Map::iterator MapIterator;
+		using MapIterator = typename Map::iterator;
 
 		struct Bin
 		{
@@ -691,15 +701,15 @@ class TaskParallel
 			Bin( const Bin &other ) : map( other.map ) {}
 			Bin &operator = ( const Bin &other ) { map = other.map; return *this; }
 			Map map;
-			typedef tbb::spin_rw_mutex Mutex;
+			using Mutex = tbb::spin_rw_mutex;
 			Mutex mutex;
 		};
 
-		typedef std::vector<Bin> Bins;
+		using Bins = std::vector<Bin>;
 
 		TaskParallel()
 		{
-			m_bins.resize( tbb::tbb_thread::hardware_concurrency() );
+			m_bins.resize( std::thread::hardware_concurrency() );
 			m_popBinIndex = 0;
 			m_popIterator = m_bins[0].map.begin();
 			currentCost = 0;
@@ -766,7 +776,7 @@ class TaskParallel
 
 			private :
 
-				bool acquire( Bin &bin, const Key &key, AcquireMode mode, bool spawnsTasks )
+				bool acquire( Bin &bin, const Key &key, AcquireMode mode, bool spawnsTasks, const IECore::Canceller *canceller )
 				{
 					assert( !m_item );
 
@@ -816,17 +826,30 @@ class TaskParallel
 						const bool acquired = m_itemLock.acquireOr(
 							it->mutex, lockType,
 							// Work accepter
-							[&binLock, &spawnsTasks] ( bool workAvailable ) {
-								if( workAvailable )
-								{
-									assert( spawnsTasks );
-									(void)spawnsTasks;
-								}
+							[&binLock, canceller] ( bool workAvailable ) {
 								// Release the bin lock prior to accepting work, because
 								// the work might involve recursion back into the cache,
 								// thus requiring the bin lock.
 								binLock.release();
-								return true;
+								// Only accept work if our caller still wants
+								// the result. Note : Once we've accepted the
+								// work, the caller has no ability to recall us.
+								// The only canceller being checked at that
+								// point will be the one passed to the
+								// `LRUCache::get()` call that we work in
+								// service of. This isn't ideal, as it can cause
+								// UI stalls if one UI element is waiting to
+								// cancel an operation, but it's tasks have been
+								// "captured" by collaboration on a compute
+								// started by another UI element (which hasn't
+								// requested cancellation).  One alternative is
+								// that we would only accept work if our
+								// canceller matches the one in use by the
+								// original caller. This would rule out
+								// collaboration between UI elements, but would
+								// still allow diamond dependencies in graph
+								// evaluation to use collaboration.
+								return (!canceller || !canceller->cancelled());
 							}
 						);
 
@@ -837,19 +860,27 @@ class TaskParallel
 								mode == Insert && it->cacheEntry.status() == LRUCache::Uncached
 							)
 							{
-								// We found an old item that doesn't have
-								// a value. This can either be because it
-								// was erased but hasn't been popped yet,
-								// or because the item was too big to fit
-								// in the cache. Upgrade to writer status
-								// so it can be updated in get().
-								m_itemLock.upgradeToWriter();
+								// We found an old item that doesn't have a
+								// value. This can either be because it was
+								// erased but hasn't been popped yet, or because
+								// the item was too big to fit in the cache. We
+								// need to get writer status so it can be
+								// updated in `get()`, but we can't use the obvious
+								// `m_itemLock.upgradeToWriter()` call as it can
+								// lead to deadlock. So we must retry using
+								// InsertWritable instead.
+								mode = InsertWritable;
+								m_itemLock.release();
+								binLock.release();
+								continue;
 							}
 							// Success!
 							m_item = &*it;
 							m_spawnsTasks = spawnsTasks;
 							return true;
 						}
+
+						IECore::Canceller::check( canceller );
 					}
 				}
 
@@ -864,7 +895,7 @@ class TaskParallel
 		/// Templated so that we can be called with the GetterKey as
 		/// well as the regular Key.
 		template<typename K>
-		bool acquire( const K &key, Handle &handle, AcquireMode mode )
+		bool acquire( const K &key, Handle &handle, AcquireMode mode, const IECore::Canceller *canceller )
 		{
 			return handle.acquire(
 				bin( key ), key, mode,
@@ -874,7 +905,8 @@ class TaskParallel
 				/// to do. `TaskMutex::ScopedLock::execute()` has significant
 				/// overhead, so we also want to avoid it if tasks won't
 				/// be spawned for a particular key.
-				mode == AcquireMode::Insert && spawnsTasks( key )
+				mode == AcquireMode::Insert && spawnsTasks( key ),
+				canceller
 			);
 		}
 
@@ -885,7 +917,7 @@ class TaskParallel
 			// in pop(), so it will not be evicted immediately.
 			// We don't need the handle to be writable to write
 			// here, because `recentlyUsed` is atomic.
-			handle.m_item->recentlyUsed = true;
+			handle.m_item->recentlyUsed.store( true, std::memory_order_release );
 		}
 
 		bool pop( Key &key, CacheEntry &cacheEntry )
@@ -941,7 +973,7 @@ class TaskParallel
 
 				if( itemLock.tryAcquire( m_popIterator->mutex ) )
 				{
-					if( !m_popIterator->recentlyUsed )
+					if( !m_popIterator->recentlyUsed.load( std::memory_order_acquire ) )
 					{
 						// Pop this item.
 						key = m_popIterator->key;
@@ -962,7 +994,7 @@ class TaskParallel
 						// Item has been used recently. Flag it so we
 						// can pop it next time round, unless another
 						// thread resets the flag.
-						m_popIterator->recentlyUsed = false;
+						m_popIterator->recentlyUsed.store( false, std::memory_order_release );
 						itemLock.release();
 					}
 				}
@@ -985,11 +1017,13 @@ class TaskParallel
 
 		Bin &bin( const Key &key )
 		{
+			// Note : `testLRUCacheUncacheableItem()` requires keys to share
+			// a bin, and needs updating if the indexing strategy changes.
 			size_t binIndex = boost::hash<Key>()( key ) % m_bins.size();
 			return m_bins[binIndex];
 		};
 
-		typedef tbb::spin_mutex PopMutex;
+		using PopMutex = tbb::spin_mutex;
 		PopMutex m_popMutex;
 		size_t m_popBinIndex;
 		MapIterator m_popIterator;
@@ -1017,20 +1051,8 @@ typename LRUCache<Key, Value, Policy, GetterKey>::Status LRUCache<Key, Value, Po
 // =======================================================================
 
 template<typename Key, typename Value, template <typename> class Policy, typename GetterKey>
-LRUCache<Key, Value, Policy, GetterKey>::LRUCache( GetterFunction getter )
-	:	m_getter( getter ), m_removalCallback( nullRemovalCallback ), m_maxCost( 500 )
-{
-}
-
-template<typename Key, typename Value, template <typename> class Policy, typename GetterKey>
-LRUCache<Key, Value, Policy, GetterKey>::LRUCache( GetterFunction getter, Cost maxCost )
-	:	m_getter( getter ), m_removalCallback( nullRemovalCallback ), m_maxCost( maxCost )
-{
-}
-
-template<typename Key, typename Value, template <typename> class Policy, typename GetterKey>
-LRUCache<Key, Value, Policy, GetterKey>::LRUCache( GetterFunction getter, RemovalCallback removalCallback, Cost maxCost )
-	:	m_getter( getter ), m_removalCallback( removalCallback ), m_maxCost( maxCost )
+LRUCache<Key, Value, Policy, GetterKey>::LRUCache( GetterFunction getter, Cost maxCost, RemovalCallback removalCallback, bool cacheErrors )
+	:	m_getter( getter ), m_removalCallback( removalCallback ), m_maxCost( maxCost ), m_cacheErrors( cacheErrors )
 {
 }
 
@@ -1078,10 +1100,10 @@ typename LRUCache<Key, Value, Policy, GetterKey>::Cost LRUCache<Key, Value, Poli
 }
 
 template<typename Key, typename Value, template <typename> class Policy, typename GetterKey>
-Value LRUCache<Key, Value, Policy, GetterKey>::get( const GetterKey &key )
+Value LRUCache<Key, Value, Policy, GetterKey>::get( const GetterKey &key, const IECore::Canceller *canceller )
 {
 	typename Policy<LRUCache>::Handle handle;
-	m_policy.acquire( key, handle, LRUCachePolicy::Insert );
+	m_policy.acquire( key, handle, LRUCachePolicy::Insert, canceller );
 	const CacheEntry &cacheEntry = handle.readable();
 	const Status status = cacheEntry.status();
 
@@ -1091,7 +1113,7 @@ Value LRUCache<Key, Value, Policy, GetterKey>::get( const GetterKey &key )
 		Cost cost = 0;
 		try
 		{
-			handle.execute( [this, &value, &key, &cost] { value = m_getter( key, cost ); } );
+			handle.execute( [this, &value, &key, &cost, canceller] { value = m_getter( key, cost, canceller ); } );
 		}
 		catch( IECore::Cancelled const &c )
 		{
@@ -1099,7 +1121,7 @@ Value LRUCache<Key, Value, Policy, GetterKey>::get( const GetterKey &key )
 		}
 		catch( ... )
 		{
-			if( handle.isWritable() )
+			if( handle.isWritable() && m_cacheErrors )
 			{
 				handle.writable().state = std::current_exception();
 			}
@@ -1132,10 +1154,37 @@ Value LRUCache<Key, Value, Policy, GetterKey>::get( const GetterKey &key )
 }
 
 template<typename Key, typename Value, template <typename> class Policy, typename GetterKey>
+std::optional<Value> LRUCache<Key, Value, Policy, GetterKey>::getIfCached( const Key &key )
+{
+	typename Policy<LRUCache>::Handle handle;
+	if( !m_policy.acquire( key, handle, LRUCachePolicy::FindReadable, /* canceller = */ nullptr ) )
+	{
+		return std::nullopt;
+	}
+
+	const CacheEntry &cacheEntry = handle.readable();
+	const Status status = cacheEntry.status();
+
+	if( status==Uncached )
+	{
+		return std::nullopt;
+	}
+	else if( status==Cached )
+	{
+		m_policy.push( handle );
+		return boost::get<Value>( cacheEntry.state );
+	}
+	else
+	{
+		std::rethrow_exception( boost::get<std::exception_ptr>( cacheEntry.state ) );
+	}
+}
+
+template<typename Key, typename Value, template <typename> class Policy, typename GetterKey>
 bool LRUCache<Key, Value, Policy, GetterKey>::set( const Key &key, const Value &value, Cost cost )
 {
 	typename Policy<LRUCache>::Handle handle;
-	m_policy.acquire( key, handle, LRUCachePolicy::InsertWritable );
+	m_policy.acquire( key, handle, LRUCachePolicy::InsertWritable, /* canceller = */ nullptr );
 	assert( handle.isWritable() );
 	bool result = setInternal( key, handle.writable(), value, cost );
 	m_policy.push( handle );
@@ -1168,7 +1217,7 @@ bool LRUCache<Key, Value, Policy, GetterKey>::cached( const Key &key ) const
 	typename Policy<LRUCache>::Handle handle;
 	// Preferring const_cast over forcing all policies to implement
 	// a ConstHandle and const acquire() variant.
-	if( !const_cast<Policy<LRUCache> &>( m_policy ).acquire( key, handle, LRUCachePolicy::FindReadable ) )
+	if( !const_cast<Policy<LRUCache> &>( m_policy ).acquire( key, handle, LRUCachePolicy::FindReadable, /* canceller = */ nullptr ) )
 	{
 		return false;
 	}
@@ -1180,7 +1229,7 @@ template<typename Key, typename Value, template <typename> class Policy, typenam
 bool LRUCache<Key, Value, Policy, GetterKey>::erase( const Key &key )
 {
 	typename Policy<LRUCache>::Handle handle;
-	if( !m_policy.acquire( key, handle, LRUCachePolicy::FindWritable ) )
+	if( !m_policy.acquire( key, handle, LRUCachePolicy::FindWritable, /* canceller = */ nullptr ) )
 	{
 		return false;
 	}
@@ -1195,7 +1244,10 @@ bool LRUCache<Key, Value, Policy, GetterKey>::eraseInternal( const Key &key, Cac
 	const Status status = cacheEntry.status();
 	if( status == Cached )
 	{
-		m_removalCallback( key, boost::get<Value>( cacheEntry.state ) );
+		if( m_removalCallback )
+		{
+			m_removalCallback( key, boost::get<Value>( cacheEntry.state ) );
+		}
 		m_policy.currentCost -= cacheEntry.cost;
 	}
 
@@ -1230,11 +1282,6 @@ void LRUCache<Key, Value, Policy, GetterKey>::limitCost( Cost cost )
 
 		eraseInternal( key, cacheEntry );
 	}
-}
-
-template<typename Key, typename Value, template <typename> class Policy, typename GetterKey>
-void LRUCache<Key, Value, Policy, GetterKey>::nullRemovalCallback( const Key &key, const Value &value )
-{
 }
 
 } // namespace IECorePreview

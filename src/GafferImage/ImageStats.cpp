@@ -58,10 +58,7 @@ namespace
 int colorIndex( const ValuePlug *plug )
 {
 	const Color4fPlug *colorPlug = plug->parent<Color4fPlug>();
-	if( !colorPlug )
-	{
-		return -1;
-	}
+	assert( colorPlug );
 	for( size_t i = 0; i < 4; ++i )
 	{
 		if( plug == colorPlug->getChild( i ) )
@@ -69,7 +66,24 @@ int colorIndex( const ValuePlug *plug )
 			return i;
 		}
 	}
-	return -1;
+	assert( false );
+	return 0;
+}
+
+std::string channelName( const ValuePlug *outChannelPlug, const vector<string> &selectChannels, const vector<string> &channelNames )
+{
+	int index = colorIndex( outChannelPlug );
+	if( selectChannels.size() <= (size_t)index )
+	{
+		return "";
+	}
+
+	if( find( channelNames.begin(), channelNames.end(), selectChannels[index] ) != channelNames.end() )
+	{
+		return selectChannels[index];
+	}
+
+	return "";
 }
 
 } // namespace
@@ -78,7 +92,7 @@ int colorIndex( const ValuePlug *plug )
 // ImageStats
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( ImageStats );
+GAFFER_NODE_DEFINE_TYPE( ImageStats );
 
 size_t ImageStats::g_firstPlugIndex = 0;
 
@@ -87,6 +101,8 @@ ImageStats::ImageStats( const std::string &name )
 {
 	storeIndexOfNextChild( g_firstPlugIndex );
 	addChild( new ImagePlug( "in", Gaffer::Plug::In ) );
+
+	addChild( new StringPlug( "view", Plug::In, "" ) );
 
 	IECore::StringVectorDataPtr defaultChannelsData = new IECore::StringVectorData;
 	vector<string> &defaultChannels = defaultChannelsData->writable();
@@ -100,6 +116,9 @@ ImageStats::ImageStats( const std::string &name )
 	addChild( new Color4fPlug( "average", Gaffer::Plug::Out, Imath::Color4f( 0, 0, 0, 1 ) ) );
 	addChild( new Color4fPlug( "min", Gaffer::Plug::Out, Imath::Color4f( 0, 0, 0, 1 ) ) );
 	addChild( new Color4fPlug( "max", Gaffer::Plug::Out, Imath::Color4f( 0, 0, 0, 1 ) ) );
+
+	addChild( new ObjectPlug( "__tileStats", Gaffer::Plug::Out, new IECore::V3dData() ) );
+	addChild( new ObjectPlug( "__allStats", Gaffer::Plug::Out, new IECore::V3dData() ) );
 
 	addChild( new ImagePlug( "__flattenedIn", Plug::In, Plug::Default & ~Plug::Serialisable ) );
 
@@ -125,85 +144,129 @@ const ImagePlug *ImageStats::inPlug() const
 	return getChild<ImagePlug>( g_firstPlugIndex );
 }
 
+Gaffer::StringPlug *ImageStats::viewPlug()
+{
+	return getChild<StringPlug>( g_firstPlugIndex + 1 );
+}
+
+const Gaffer::StringPlug *ImageStats::viewPlug() const
+{
+	return getChild<StringPlug>( g_firstPlugIndex + 1 );
+}
+
 Gaffer::StringVectorDataPlug *ImageStats::channelsPlug()
 {
-	return getChild<StringVectorDataPlug>( g_firstPlugIndex + 1 );
+	return getChild<StringVectorDataPlug>( g_firstPlugIndex + 2 );
 }
 
 const Gaffer::StringVectorDataPlug *ImageStats::channelsPlug() const
 {
-	return getChild<StringVectorDataPlug>( g_firstPlugIndex + 1 );
+	return getChild<StringVectorDataPlug>( g_firstPlugIndex + 2 );
 }
 
 Box2iPlug *ImageStats::areaPlug()
 {
-	return getChild<Box2iPlug>( g_firstPlugIndex + 2 );
+	return getChild<Box2iPlug>( g_firstPlugIndex + 3 );
 }
 
 const Box2iPlug *ImageStats::areaPlug() const
 {
-	return getChild<Box2iPlug>( g_firstPlugIndex + 2 );
+	return getChild<Box2iPlug>( g_firstPlugIndex + 3 );
 }
 
 Color4fPlug *ImageStats::averagePlug()
 {
-	return getChild<Color4fPlug>( g_firstPlugIndex + 3 );
+	return getChild<Color4fPlug>( g_firstPlugIndex + 4 );
 }
 
 const Color4fPlug *ImageStats::averagePlug() const
 {
-	return getChild<Color4fPlug>( g_firstPlugIndex + 3 );
+	return getChild<Color4fPlug>( g_firstPlugIndex + 4 );
 }
 
 Color4fPlug *ImageStats::minPlug()
 {
-	return getChild<Color4fPlug>( g_firstPlugIndex + 4 );
+	return getChild<Color4fPlug>( g_firstPlugIndex + 5 );
 }
 
 const Color4fPlug *ImageStats::minPlug() const
 {
-	return getChild<Color4fPlug>( g_firstPlugIndex + 4 );
+	return getChild<Color4fPlug>( g_firstPlugIndex + 5 );
 }
 
 Color4fPlug *ImageStats::maxPlug()
 {
-	return getChild<Color4fPlug>( g_firstPlugIndex + 5 );
+	return getChild<Color4fPlug>( g_firstPlugIndex + 6 );
 }
 
 const Color4fPlug *ImageStats::maxPlug() const
 {
-	return getChild<Color4fPlug>( g_firstPlugIndex + 5 );
+	return getChild<Color4fPlug>( g_firstPlugIndex + 6 );
 }
+
+ObjectPlug *ImageStats::tileStatsPlug()
+{
+	return getChild<ObjectPlug>( g_firstPlugIndex + 7 );
+}
+
+const ObjectPlug *ImageStats::tileStatsPlug() const
+{
+	return getChild<ObjectPlug>( g_firstPlugIndex + 7 );
+}
+
+ObjectPlug *ImageStats::allStatsPlug()
+{
+	return getChild<ObjectPlug>( g_firstPlugIndex + 8 );
+}
+
+const ObjectPlug *ImageStats::allStatsPlug() const
+{
+	return getChild<ObjectPlug>( g_firstPlugIndex + 8 );
+}
+
 
 ImagePlug *ImageStats::flattenedInPlug()
 {
-	return getChild<ImagePlug>( g_firstPlugIndex + 6 );
+	return getChild<ImagePlug>( g_firstPlugIndex + 9 );
 }
 
 const ImagePlug *ImageStats::flattenedInPlug() const
 {
-	return getChild<ImagePlug>( g_firstPlugIndex + 6 );
-}
-
-DeepState *ImageStats::deepState()
-{
-	return getChild<DeepState>( g_firstPlugIndex + 4 );
-}
-
-const DeepState *ImageStats::deepState() const
-{
-	return getChild<DeepState>( g_firstPlugIndex + 4 );
+	return getChild<ImagePlug>( g_firstPlugIndex + 9 );
 }
 
 void ImageStats::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const
 {
 	ComputeNode::affects( input, outputs );
+
 	if(
+		input == viewPlug() ||
+		input == flattenedInPlug()->viewNamesPlug() ||
 		input == flattenedInPlug()->dataWindowPlug() ||
-		input == flattenedInPlug()->channelNamesPlug() ||
 		input == flattenedInPlug()->channelDataPlug() ||
-		input == channelsPlug() ||
 		areaPlug()->isAncestorOf( input )
+	)
+	{
+		outputs.push_back( tileStatsPlug() );
+	}
+
+	if(
+		input == viewPlug() ||
+		input == flattenedInPlug()->viewNamesPlug() ||
+		input == tileStatsPlug() ||
+		input == flattenedInPlug()->dataWindowPlug() ||
+		areaPlug()->isAncestorOf( input )
+	)
+	{
+		outputs.push_back( allStatsPlug() );
+	}
+
+	if(
+		input == viewPlug() ||
+		input == flattenedInPlug()->viewNamesPlug() ||
+		input == allStatsPlug() ||
+		input == flattenedInPlug()->channelNamesPlug() ||
+		input == channelsPlug()
 	)
 	{
 		for( unsigned int i = 0; i < 4; ++i )
@@ -212,7 +275,6 @@ void ImageStats::affects( const Gaffer::Plug *input, AffectedPlugsContainer &out
 			outputs.push_back( averagePlug()->getChild(i) );
 			outputs.push_back( maxPlug()->getChild(i) );
 		}
-		return;
 	}
 }
 
@@ -220,94 +282,212 @@ void ImageStats::hash( const ValuePlug *output, const Context *context, IECore::
 {
 	ComputeNode::hash( output, context, h);
 
-	const int colorIndex = ::colorIndex( output );
-	if( colorIndex == -1 )
+	ImagePlug::ViewScope viewScope( context );
+
+	std::string view = viewPlug()->getValue();
+	if( !view.size() )
 	{
-		// Not a plug we know about
+		view = context->get<std::string>( ImagePlug::viewNameContextName, ImagePlug::defaultViewName );
+	}
+	viewScope.setViewNameChecked( &view, inPlug()->viewNames().get() );
+
+	const Plug *parent = output->parent<Plug>();
+	if( parent == minPlug() || parent == maxPlug() || parent == averagePlug() )
+	{
+		IECore::ConstStringVectorDataPtr channelsData = channelsPlug()->getValue();
+		IECore::ConstStringVectorDataPtr channelNamesData = inPlug()->channelNamesPlug()->getValue();
+		const std::string channelName = ::channelName( output, channelsData->readable(), channelNamesData->readable() );
+		if( channelName.empty() )
+		{
+			h.append( 0.0f );
+			return;
+		}
+
+		int statIndex = ( parent == averagePlug() ) ? 2 : ( parent == maxPlug() );
+		h.append( statIndex );
+
+		ImagePlug::ChannelDataScope s( context );
+		s.setChannelName( &channelName );
+		allStatsPlug()->hash( h );
 		return;
 	}
 
-	const std::string channelName = this->channelName( colorIndex );
-	const Imath::Box2i area = areaPlug()->getValue();
+	Imath::Box2i boundsIntersection;
+	double areaMult;
 
-	if( channelName.empty() || BufferAlgo::empty( area ) )
 	{
-		h.append( 0.0f );
-		return;
+		ImagePlug::GlobalScope s( viewScope.context() );
+		const Imath::Box2i area = areaPlug()->getValue();
+		const Imath::Box2i dataWindow = flattenedInPlug()->dataWindowPlug()->getValue();
+		boundsIntersection = BufferAlgo::intersection( area, dataWindow );
+		areaMult = double(area.size().x) * area.size().y;
 	}
 
-	Sampler s( inPlug(), channelName, area );
-	s.hash( h );
+	if( output == tileStatsPlug() )
+	{
+		Imath::V2i tileOrigin = context->get<Imath::V2i>( ImagePlug::tileOriginContextName );
+		const Imath::Box2i tileBound = BufferAlgo::intersection(
+			Imath::Box2i( boundsIntersection.min - tileOrigin, boundsIntersection.max - tileOrigin ),
+			Imath::Box2i( Imath::V2i( 0 ), Imath::V2i( ImagePlug::tileSize() ) )
+		);
+		h.append( tileBound );
+		flattenedInPlug()->channelDataPlug()->hash( h );
+	}
+	else if( output == allStatsPlug() )
+	{
+		if( BufferAlgo::empty( boundsIntersection ) )
+		{
+			h.append( 0.0f );
+			return;
+		}
+
+		// We traverse in TopToBottom order because otherwise the hash could change just based on
+		// the order in which hashes are combined
+		ImageAlgo::parallelGatherTiles(
+			flattenedInPlug(),
+			// Tile
+			[this] ( const ImagePlug *imageP, const Imath::V2i &tileOrigin )
+			{
+				return tileStatsPlug()->hash();
+			},
+			// Gather
+			[ &h ] ( const ImagePlug *imageP, const Imath::V2i &tileOrigin, const IECore::MurmurHash &tileHash )
+			{
+				h.append( tileHash );
+			},
+			boundsIntersection,
+			ImageAlgo::TopToBottom
+		);
+		h.append( areaMult );
+	}
 }
 
 void ImageStats::compute( ValuePlug *output, const Context *context ) const
 {
-	const int colorIndex = ::colorIndex( output );
-	if( colorIndex == -1 )
+	ImagePlug::ViewScope viewScope( context );
+
+	std::string view = viewPlug()->getValue();
+	if( !view.size() )
 	{
-		// Not a plug we know about
-		ComputeNode::compute( output, context );
-		return;
+		view = context->get<std::string>( ImagePlug::viewNameContextName, ImagePlug::defaultViewName );
 	}
+	viewScope.setViewNameChecked( &view, inPlug()->viewNames().get() );
 
-	const std::string channelName = this->channelName( colorIndex );
-	const Imath::Box2i area = areaPlug()->getValue();
-
-	if( channelName.empty() || BufferAlgo::empty( area ) )
+	const Plug *parent = output->parent<Plug>();
+	if(
+		parent == minPlug() ||
+		parent == maxPlug() ||
+		parent == averagePlug()
+	)
 	{
-		static_cast<FloatPlug *>( output )->setValue( 0.0f );
-		return;
-	}
-
-	// Loop over the ROI and compute the min, max and average channel values and then set our outputs.
-	Sampler s( inPlug(), channelName, area );
-
-	float min = Imath::limits<float>::max();
-	float max = Imath::limits<float>::min();
-	double sum = 0.;
-
-	for( int y = area.min.y; y < area.max.y; ++y )
-	{
-		for( int x = area.min.x; x < area.max.x; ++x )
+		IECore::ConstStringVectorDataPtr channelsData = channelsPlug()->getValue();
+		IECore::ConstStringVectorDataPtr channelNamesData = inPlug()->channelNamesPlug()->getValue();
+		const std::string channelName = ::channelName( output, channelsData->readable(), channelNamesData->readable() );
+		if( channelName.empty() )
 		{
-			float v = s.sample( x, y );
-			min = std::min( v, min );
-			max = std::max( v, max );
-			sum += v;
+			static_cast<FloatPlug *>( output )->setValue( 0.0f );
+			return;
 		}
+
+		int statIndex = ( parent == averagePlug() ) ? 2 : ( parent == maxPlug() );
+
+		ImagePlug::ChannelDataScope s( context );
+		s.setChannelName( &channelName );
+		Imath::V3d stats = boost::static_pointer_cast<const IECore::V3dData>( allStatsPlug()->getValue() )->readable();
+		static_cast<FloatPlug *>( output )->setValue( stats[ statIndex ] );
+		return;
 	}
 
-	if( output->parent<Plug>() == minPlug() )
+	Imath::Box2i boundsIntersection;
+	double areaMult;
+
 	{
-		static_cast<FloatPlug *>( output )->setValue( min );
+		ImagePlug::GlobalScope s( viewScope.context() );
+		const Imath::Box2i area = areaPlug()->getValue();
+		const Imath::Box2i dataWindow = flattenedInPlug()->dataWindowPlug()->getValue();
+		boundsIntersection = BufferAlgo::intersection( area, dataWindow );
+		areaMult = double(area.size().x) * area.size().y;
 	}
-	else if( output->parent<Plug>() == maxPlug() )
+
+	if( output == tileStatsPlug() )
 	{
-		static_cast<FloatPlug *>( output )->setValue( max );
-	}
-	else if( output->parent<Plug>() == averagePlug() )
-	{
-		static_cast<FloatPlug *>( output )->setValue(
-			sum / double( (area.size().x) * (area.size().y) )
+		Imath::V2i tileOrigin = context->get<Imath::V2i>( ImagePlug::tileOriginContextName );
+		const Imath::Box2i tileBound = BufferAlgo::intersection(
+			Imath::Box2i( boundsIntersection.min - tileOrigin, boundsIntersection.max - tileOrigin ),
+			Imath::Box2i( Imath::V2i( 0 ), Imath::V2i( ImagePlug::tileSize() ) )
 		);
+
+		IECore::ConstFloatVectorDataPtr channelData = flattenedInPlug()->channelDataPlug()->getValue();
+
+		float min = Imath::limits<float>::max();
+		float max = Imath::limits<float>::min();
+		double sum = 0.;
+
+		const std::vector<float> &channel = channelData->readable();
+		for( int y = tileBound.min.y; y < tileBound.max.y; ++y )
+		{
+			for( int x = tileBound.min.x; x < tileBound.max.x; ++x )
+			{
+				float v = channel[ x + y * ImagePlug::tileSize() ];
+				min = std::min( v, min );
+				max = std::max( v, max );
+				sum += v;
+			}
+		}
+
+		static_cast<ObjectPlug *>( output )->setValue( new IECore::V3dData( Imath::V3d( min, max, sum ) ) );
+	}
+	else if( output == allStatsPlug() )
+	{
+		if( BufferAlgo::empty( boundsIntersection ) )
+		{
+			static_cast<ObjectPlug *>( output )->setValue( new IECore::V3dData( Imath::V3d( 0 ) ) );
+			return;
+		}
+		float min = Imath::limits<float>::max();
+		float max = Imath::limits<float>::min();
+		double sum = 0.;
+
+		// We traverse in TopToBottom order because floating point precision means that changing
+		// the order to sum in could produce slightly non-deterministic results
+		ImageAlgo::parallelGatherTiles(
+			flattenedInPlug(),
+			// Tile
+			[this] ( const ImagePlug *imageP, const Imath::V2i &tileOrigin ) -> Imath::V3d
+			{
+				return boost::static_pointer_cast<const IECore::V3dData>( tileStatsPlug()->getValue() )->readable();
+			},
+			// Gather
+			[ &min, &max, &sum ] ( const ImagePlug *imageP, const Imath::V2i &tileOrigin, const Imath::V3d &v )
+			{
+				min = std::min( float(v[0]), min );
+				max = std::max( float(v[1]), max );
+				sum += v[2];
+			},
+			boundsIntersection,
+			ImageAlgo::TopToBottom
+		);
+		float average = sum / areaMult;
+		static_cast<ObjectPlug *>( output )->setValue( new IECore::V3dData( Imath::V3d( min, max, average ) ) );
 	}
 }
 
-std::string ImageStats::channelName( int colorIndex ) const
+ValuePlug::CachePolicy ImageStats::computeCachePolicy( const Gaffer::ValuePlug *output ) const
 {
-	IECore::ConstStringVectorDataPtr channelsData = channelsPlug()->getValue();
-	const vector<string> &channels = channelsData->readable();
-	if( channels.size() <= (size_t)colorIndex )
+	if( output == allStatsPlug() )
 	{
-		return "";
+		return ValuePlug::CachePolicy::TaskCollaboration;
 	}
 
-	IECore::ConstStringVectorDataPtr channelNamesData = inPlug()->channelNamesPlug()->getValue();
-	const vector<string> &channelNames = channelNamesData->readable();
-	if( find( channelNames.begin(), channelNames.end(), channels[colorIndex] ) != channelNames.end() )
+	return ComputeNode::computeCachePolicy( output );
+}
+
+ValuePlug::CachePolicy ImageStats::hashCachePolicy( const Gaffer::ValuePlug *output ) const
+{
+	if( output == allStatsPlug() )
 	{
-		return channels[colorIndex];
+		return ValuePlug::CachePolicy::TaskCollaboration;
 	}
 
-	return "";
+	return ComputeNode::hashCachePolicy( output );
 }

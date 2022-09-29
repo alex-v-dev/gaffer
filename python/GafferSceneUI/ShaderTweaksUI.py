@@ -35,6 +35,7 @@
 ##########################################################################
 
 import functools
+import six
 import imath
 
 import IECore
@@ -44,6 +45,8 @@ import Gaffer
 import GafferUI
 import GafferScene
 import GafferSceneUI
+
+from GafferUI.PlugValueWidget import sole
 
 Gaffer.Metadata.registerNode(
 
@@ -124,6 +127,8 @@ Gaffer.Metadata.registerNode(
 		"tweaks.*" : [
 
 			"noduleLayout:visible", False, # Can be shown individually using PlugAdder above
+			"tweakPlugValueWidget:allowCreate", True,
+			"tweakPlugValueWidget:allowRemove", True,
 
 		],
 
@@ -217,7 +222,7 @@ class _TweaksFooter( GafferUI.PlugValueWidget ) :
 
 				GafferUI.Spacer( imath.V2i( GafferUI.PlugWidget.labelWidth(), 1 ) )
 
-				GafferUI.MenuButton(
+				self.__button = GafferUI.MenuButton(
 					image = "plus.png",
 					hasFrame = False,
 					menu = GafferUI.Menu( Gaffer.WeakMethod( self.__menuDefinition ) )
@@ -225,25 +230,27 @@ class _TweaksFooter( GafferUI.PlugValueWidget ) :
 
 				GafferUI.Spacer( imath.V2i( 1 ), imath.V2i( 999999, 1 ), parenting = { "expand" : True } )
 
+		self._updateFromPlug()
+
 	def _updateFromPlug( self ) :
 
-		self.setEnabled( self._editable() )
+		self.__button.setEnabled( self._editable() )
 
 	def __menuDefinition( self ) :
 
 		result = IECore.MenuDefinition()
 
 		result.append(
-			"/From Affected",
+			"/From Affected...",
 			{
-				"subMenu" : Gaffer.WeakMethod( self.__addFromAffectedMenuDefinition )
+				"command" : Gaffer.WeakMethod( self.__browseAffectedShaders )
 			}
 		)
 
 		result.append(
-			"/From Selection",
+			"/From Selection...",
 			{
-				"subMenu" : Gaffer.WeakMethod( self.__addFromSelectedMenuDefinition )
+				"command" : Gaffer.WeakMethod( self.__browseSelectedShaders )
 			}
 		)
 
@@ -266,7 +273,7 @@ class _TweaksFooter( GafferUI.PlugValueWidget ) :
 			Gaffer.Color4fPlug
 		] :
 
-			if isinstance( item, basestring ) :
+			if isinstance( item, six.string_types ) :
 				result.append( "/" + item, { "divider" : True } )
 			else :
 				result.append(
@@ -278,73 +285,50 @@ class _TweaksFooter( GafferUI.PlugValueWidget ) :
 
 		return result
 
-	def __addFromAffectedMenuDefinition( self ) :
+	def __browseAffectedShaders( self ) :
 
-		return self.__addFromPathsMenuDefinition( _pathsFromAffected( self ) )
+		self.__browseShaders( _pathsFromAffected( self ), "Affected Shaders" )
 
-	def __addFromSelectedMenuDefinition( self ) :
+	def __browseSelectedShaders( self ) :
 
-		return self.__addFromPathsMenuDefinition( _pathsFromSelection( self ) )
+		self.__browseShaders( _pathsFromSelection( self ), "Selected Shaders" )
 
-	def __addFromPathsMenuDefinition( self, paths ) :
-
-		result = IECore.MenuDefinition()
+	def __browseShaders( self, paths, title ) :
 
 		shaderAttributes = _shaderAttributes( self, paths, affectedOnly = True )
-		if not len( shaderAttributes ) :
-			result.append(
-				"/No Shaders Found", { "active" : False }
-			)
-			return result
 
-		shaders = {}
-		for attributes in shaderAttributes.values() :
-			for attributeName, network in attributes.items() :
-				for shaderName, shader in network.shaders().items() :
-					if shaderName == network.getOutput().shader :
-						shaderName = ""
-					shaderParameters = shaders.setdefault( shaderName, {} )
-					for parameterName, parameterValue in shader.parameters.items() :
-						if parameterName.startswith( "__" ) :
-							continue
-						shaderParameters[parameterName] = parameterValue
+		uniqueNetworks = { n.hash(): n for a in shaderAttributes.values() for n in a.values() }
 
-		if not len( shaders ) :
-			result.append(
-				"/No Parameters Found", { "active" : False }
-			)
-			return result
+		browser = GafferSceneUI.ShaderUI._ShaderParameterDialogue( uniqueNetworks.values(), title )
 
-		for shaderName, shader in shaders.items() :
+		shaderTweaks = browser.waitForParameters( parentWindow = self.ancestor( GafferUI.ScriptWindow ) )
 
-			menuPrefix = "/"
-			tweakPrefix = ""
-			if len( shaders ) > 1 :
-				menuPrefix = "/Other/{0}/".format( shaderName ) if shaderName else "/Main/"
-				tweakPrefix = "{0}.".format( shaderName ) if shaderName else ""
+		if shaderTweaks is not None :
+			for shaderName, parameter in shaderTweaks :
+				tweaks = {}
+				for network in uniqueNetworks.values() :
+					if shaderName in network.shaders() and parameter in network.shaders()[shaderName].parameters :
+						tweakName = shaderName + "." + parameter if network.getOutput().shader != shaderName else parameter
+						if tweakName not in tweaks :
+							tweaks[tweakName] = network.shaders()[shaderName].parameters[parameter]
 
-			for parameterName in sorted( shader.keys() ) :
-				result.append(
-					menuPrefix + parameterName,
-					{
-						"command" :	functools.partial(
-							Gaffer.WeakMethod( self.__addTweak ),
-							tweakPrefix + parameterName, shader[parameterName]
-						)
-					}
-				)
-
-		return result
+				tweakName = sole( tweaks.keys() )
+				if tweakName is None :
+					self.__addTweak( shaderName + "." + parameter, list( tweaks.values() )[0] )
+				else :
+					self.__addTweak( tweakName, tweaks[tweakName] )
 
 	def __addTweak( self, name, plugTypeOrValue ) :
 
 		if isinstance( plugTypeOrValue, IECore.Data ) :
-			plug = GafferScene.TweakPlug( name, plugTypeOrValue )
+			plug = Gaffer.TweakPlug( name, plugTypeOrValue )
 		else :
-			plug = GafferScene.TweakPlug( name, plugTypeOrValue() )
+			plug = Gaffer.TweakPlug( name, plugTypeOrValue() )
 
 		if name :
-			plug.setName( name.replace( ".", "_" ) )
+			for i in ( ".", ":", ) :
+				name = name.replace( i, "_" )
+			plug.setName( name )
 
 		with Gaffer.UndoScope( self.getPlug().ancestor( Gaffer.ScriptNode ) ) :
 			self.getPlug().addChild( plug )
@@ -419,7 +403,7 @@ def __graphEditorPlugContextMenu( graphEditor, plug, menuDefinition ) :
 		return
 
 	tweakPlug = plug.parent()
-	if not isinstance( tweakPlug, GafferScene.TweakPlug ) :
+	if not isinstance( tweakPlug, Gaffer.TweakPlug ) :
 		return False
 
 	if tweakPlug.parent() != plug.node()["tweaks"] :

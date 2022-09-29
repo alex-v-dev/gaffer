@@ -60,15 +60,6 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 				drawModeWidget.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__drawModeChanged ), scoped = False )
 
 				GafferUI.Spacer( imath.V2i( 0 ), parenting = { "expand" : True } )
-
-				# TODO: Since we don't have a good way to register metadata on child plugs, we just write the
-				# metadata on this child plug right before constructing a widget for it.  There should probably
-				# be some way to do this genericly during initialization
-				Gaffer.Metadata.registerValue( plug['interpolation'],
-					"plugValueWidget:type", "GafferUI.PresetsPlugValueWidget", persistent=False )
-				for name, value in sorted( Gaffer.SplineDefinitionInterpolation.names.items() ):
-					Gaffer.Metadata.registerValue( plug['interpolation'], "preset:" + name, value, persistent=False )
-
 				GafferUI.PlugWidget( GafferUI.PlugValueWidget.create( plug["interpolation"] ) )
 
 			self.__splineWidget = GafferUI.SplineWidget()
@@ -80,23 +71,42 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 
 			self.__slider = GafferUI.Slider()
 			self.__slider.setMinimumSize( 2 )
-			self.__positionsChangedConnection = self.__slider.positionChangedSignal().connect( Gaffer.WeakMethod( self.__positionsChanged ), scoped = False )
+			self.__positionsChangedConnection = self.__slider.valueChangedSignal().connect( Gaffer.WeakMethod( self.__positionsChanged ), scoped = False )
 			self.__slider.indexRemovedSignal().connect( Gaffer.WeakMethod( self.__indexRemoved ), scoped = False )
 			self.__slider.selectedIndexChangedSignal().connect( Gaffer.WeakMethod( self.__selectedIndexChanged ), scoped = False )
 
 			self.__lastPositionChangedReason = None
 			self.__positionsMergeGroupId = 0
 
-			with GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Horizontal, spacing = 4 ) :
+			with GafferUI.ListContainer(
+				orientation = GafferUI.ListContainer.Orientation.Horizontal if isinstance( plug.pointYPlug( 0 ), Gaffer.FloatPlug ) else GafferUI.ListContainer.Orientation.Vertical,
+				spacing = 4
+			) :
 
-				self.__positionLabel = GafferUI.LabelPlugValueWidget( plug.pointXPlug( 0 ) )
-				self.__positionField = GafferUI.NumericPlugValueWidget( plug.pointXPlug( 0 ) )
+				self.__positionLabel = GafferUI.LabelPlugValueWidget(
+					plug.pointXPlug( 0 ),
+					parenting = { "verticalAlignment" : GafferUI.VerticalAlignment.Top }
+				)
+				self.__positionField = GafferUI.NumericPlugValueWidget(
+					plug.pointXPlug( 0 ),
+					parenting = { "verticalAlignment" : GafferUI.VerticalAlignment.Top }
+				)
 
-				self.__valueLabel = GafferUI.LabelPlugValueWidget( plug.pointYPlug( 0 ) )
+				self.__valueLabel = GafferUI.LabelPlugValueWidget(
+					plug.pointYPlug( 0 ),
+					parenting = { "verticalAlignment" : GafferUI.VerticalAlignment.Top }
+				)
 				if isinstance( plug.pointYPlug( 0 ), Gaffer.FloatPlug ):
-					self.__valueField = GafferUI.NumericPlugValueWidget( plug.pointYPlug( 0 ) )
+					self.__valueField = GafferUI.NumericPlugValueWidget(
+						plug.pointYPlug( 0 ),
+						parenting = { "verticalAlignment" : GafferUI.VerticalAlignment.Top }
+					)
 				else:
-					self.__valueField = GafferUI.ColorPlugValueWidget( plug.pointYPlug( 0 ) )
+					self.__valueField = GafferUI.ColorPlugValueWidget(
+						plug.pointYPlug( 0 ),
+						parenting = { "verticalAlignment" : GafferUI.VerticalAlignment.Top }
+					)
+					self.__valueField.setColorChooserVisible( True )
 
 		self.setPlug( plug )
 
@@ -139,8 +149,8 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 			for i in range( 0, plug.numPoints() ) :
 				positions.append( plug.pointXPlug( i ).getValue() )
 
-			with Gaffer.BlockedConnection( self.__positionsChangedConnection ) :
-				self.__slider.setPositions( positions )
+			with Gaffer.Signals.BlockedConnection( self.__positionsChangedConnection ) :
+				self.__slider.setValues( positions )
 
 	def __positionsChanged( self, slider, reason ) :
 
@@ -154,10 +164,10 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 			mergeGroup = "RampPlugValudWidget%d%d" % ( id( self, ), self.__positionsMergeGroupId )
 		) :
 
-			if len( slider.getPositions() ) == plug.numPoints() :
+			if len( slider.getValues() ) == plug.numPoints() :
 				rejected = False
 				# the user has moved an existing point on the slider
-				for index, position in enumerate( slider.getPositions() ) :
+				for index, position in enumerate( slider.getValues() ) :
 					if plug.pointXPlug( index ).getValue() != position :
 						curPlug = plug.pointXPlug( index )
 						if curPlug.settable() and not Gaffer.MetadataAlgo.readOnly( curPlug ):
@@ -171,9 +181,9 @@ class RampPlugValueWidget( GafferUI.PlugValueWidget ) :
 				# a new position was added on the end by the user clicking
 				# on an empty area of the slider.
 				numPoints = plug.numPoints()
-				assert( len( slider.getPositions() ) == numPoints + 1 )
+				assert( len( slider.getValues() ) == numPoints + 1 )
 				spline = plug.getValue().spline()
-				position = slider.getPositions()[numPoints]
+				position = slider.getValues()[numPoints]
 				plug.addPoint()
 				plug.pointXPlug( numPoints ).setValue( position )
 				plug.pointYPlug( numPoints ).setValue( spline( position ) )

@@ -37,7 +37,10 @@
 import unittest
 import imath
 
+import IECore
+
 import Gaffer
+import GafferTest
 import GafferUI
 import GafferUITest
 import GafferImage
@@ -95,11 +98,34 @@ class ImageGadgetTest( GafferUITest.TestCase ) :
 
 		w.setVisible( True )
 
-		self.waitForIdle( 1000 )
+		# If this computer doesn't support floating point textures, the ImageGadget will warn about
+		# this the first time it tries to render.  Don't fail because of this
+		with IECore.CapturingMessageHandler() as mh :
+			self.waitForIdle( 1000 )
+
+		if len( mh.messages ):
+			self.assertEqual(  len( mh.messages ), 1 )
+			self.assertEqual( mh.messages[0].context, "ImageGadget" )
+			self.assertEqual( mh.messages[0].message, "Could not find supported floating point texture format in OpenGL.  GPU image viewer path will be low quality, recommend switching to CPU display transform, or resolving graphics driver issue." )
 
 		del g, w
 		del s
 
+	def testStateChangedSignal( self ) :
+
+		image = GafferImage.Constant()
+		gadget = GafferImageUI.ImageGadget()
+		gadget.setImage( image["out"] )
+		self.assertNotEqual( gadget.state(), gadget.State.Paused )
+
+		cs = GafferTest.CapturingSlot( gadget.stateChangedSignal() )
+		gadget.setPaused( True )
+		self.assertEqual( len( cs ), 1 )
+		self.assertEqual( gadget.state(), gadget.State.Paused )
+
+		gadget.setPaused( False )
+		self.assertEqual( len( cs ), 2 )
+		self.assertNotEqual( gadget.state(), gadget.State.Paused )
+
 if __name__ == "__main__":
 	unittest.main()
-

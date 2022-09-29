@@ -219,7 +219,7 @@ class dispatch( Gaffer.Application ) :
 			import GafferDispatchUI
 
 			self.__dialogue = GafferDispatchUI.DispatchDialogue( tasks, dispatchers, nodesToShow )
-			self.__dialogueClosedConnection = self.__dialogue.closedSignal().connect( Gaffer.WeakMethod( self.__dialogueClosed ) )
+			self.__dialogueClosedConnection = self.__dialogue.closedSignal().connect( Gaffer.WeakMethod( self.__dialogueClosed ), scoped = True )
 			self.__dialogue.setVisible( True )
 
 			GafferUI.EventLoop.mainEventLoop().start()
@@ -292,6 +292,17 @@ class dispatch( Gaffer.Application ) :
 		if not plug.settable() :
 			IECore.msg( IECore.Msg.Level.Error, "gaffer dispatch", "\"%s\" cannot be set." % identifier )
 			return 1
+
+		if isinstance( plug, Gaffer.CompoundDataPlug ) :
+			try :
+				## \todo: this eval isn't ideal. we should have a way of parsing values
+				# and setting them onto plugs.
+				plug.addMembers( eval( value ) )
+			except Exception as exception :
+				IECore.msg( IECore.Msg.Level.Error, "gaffer dispatch : setting \"%s\"" % identifier, str( exception ) )
+				return 1
+
+			return 0
 
 		try :
 			## \todo: this eval isn't ideal. we should have a way of parsing values

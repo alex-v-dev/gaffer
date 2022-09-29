@@ -73,7 +73,6 @@ public:
 			{ openvdb::typeNameAsString<int32_t>(), []( GeometryCollector& collector, openvdb::GridBase::ConstPtr grid ) { collector.collectTyped<openvdb::Int32Grid>( grid ); } },
 			{ openvdb::typeNameAsString<int64_t>(), []( GeometryCollector& collector , openvdb::GridBase::ConstPtr grid) { collector.collectTyped<openvdb::Int64Grid>( grid ); } },
 			{ openvdb::typeNameAsString<openvdb::ValueMask>(), []( GeometryCollector& collector , openvdb::GridBase::ConstPtr grid) { collector.collectTyped<openvdb::MaskGrid>( grid ); } },
-			{ openvdb::typeNameAsString<std::string>(), []( GeometryCollector& collector , openvdb::GridBase::ConstPtr grid) { collector.collectTyped<openvdb::StringGrid>( grid ); } },
 			{ openvdb::typeNameAsString<openvdb::Vec3d>(), []( GeometryCollector& collector , openvdb::GridBase::ConstPtr grid) { collector.collectTyped<openvdb::Vec3DGrid>( grid ); } },
 			{ openvdb::typeNameAsString<openvdb::Vec3i>(), []( GeometryCollector& collector , openvdb::GridBase::ConstPtr grid) { collector.collectTyped<openvdb::Vec3IGrid>( grid ); } },
 			{ openvdb::typeNameAsString<openvdb::Vec3f>(), []( GeometryCollector& collector , openvdb::GridBase::ConstPtr grid) { collector.collectTyped<openvdb::Vec3SGrid>( grid ); } },
@@ -275,7 +274,7 @@ class VDBVisualiser : public ObjectVisualiser
 
 	public :
 
-		typedef VDBObject ObjectType;
+		using ObjectType = VDBObject;
 
 		VDBVisualiser()
 		{

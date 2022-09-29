@@ -36,6 +36,7 @@
 
 import os
 import unittest
+import inspect
 import imath
 
 import IECore
@@ -532,6 +533,100 @@ class SceneReaderTest( GafferSceneTest.SceneTestCase ) :
 		for i in range( 0, 20 ) :
 			sceneReader["refreshCount"].setValue( sceneReader["refreshCount"].getValue() + 1 )
 			GafferSceneTest.traverseScene( sceneReader["out"] )
+
+	def testGlobalHashesUseFileNameValue( self ) :
+
+		# This models a situation where a complex asset-managed reader uses a
+		# fileName expression which depends on the frame only in specific
+		# circumstances. In the cases that it doesn't actually use the frame in
+		# computing the filename, we want that to be reflected in the hash for
+		# global scene properties, so that we don't do unnecessary recomputation
+		# from frame to frame.
+
+		script = Gaffer.ScriptNode()
+		script["reader"] = GafferScene.SceneReader()
+
+		script["expression"] = Gaffer.Expression()
+		script["expression"].setExpression( inspect.cleandoc(
+			"""
+			frame = context.getFrame()
+			if False :
+				parent["reader"]["fileName"] = "test.{}.abc".format( int( frame ) )
+			else :
+				parent["reader"]["fileName"] = "test.abc"
+			"""
+		) )
+
+		with Gaffer.Context() as c :
+
+			c.setFrame( 1 )
+			globalsHash = script["reader"]["out"].globalsHash()
+			setNamesHash = script["reader"]["out"].setNamesHash()
+			setHash = script["reader"]["out"].setHash( "test" )
+
+			c.setFrame( 2 )
+			self.assertEqual(
+				script["reader"]["out"].globalsHash(),
+				globalsHash
+			)
+			self.assertEqual(
+				script["reader"]["out"].setNamesHash(),
+				setNamesHash
+			)
+			self.assertEqual(
+				script["reader"]["out"].setHash( "test" ),
+				setHash
+			)
+
+	def testNullAttributes( self ) :
+
+		s = GafferScene.SceneReader()
+		s["fileName"].setValue( "${GAFFER_ROOT}/python/GafferSceneTest/usdFiles/unsupportedAttribute.usda" )
+
+		# At the time of writing, `IECoreUSD` advertises custom attributes via
+		# `USDScene::attributeNames()` even if it can't load them, and then it
+		# returns `nullptr` from `USDScene::readAttribute()`. Make sure we are
+		# robust to this.
+
+		with IECore.CapturingMessageHandler() as mh :
+			attributes = s["out"].attributes( "/sphere" )
+
+		self.assertEqual( len( attributes ), 0 )
+		self.assertEqual( len( mh.messages ), 1 )
+		self.assertEqual( mh.messages[0].level, IECore.Msg.Level.Warning )
+		self.assertEqual( mh.messages[0].message, 'Failed to load attribute "test:double4" at location "/sphere"' )
+
+	def testImplicitUSDDefaultLights( self ) :
+
+		reader = GafferScene.SceneReader()
+		reader["fileName"].setValue( "${GAFFER_ROOT}/python/GafferSceneTest/usdFiles/sphereLight.usda" )
+
+		self.assertIn( "defaultLights", reader["out"].setNames() )
+		self.assertEqual( reader["out"].set( "defaultLights" ).value, IECore.PathMatcher( [ "/SpotLight23" ] ) )
+
+	def testExplicitUSDDefaultLights( self ) :
+
+		light1 = GafferSceneTest.TestLight()
+		light1["name"].setValue( "light1" )
+		light1["defaultLight"].setValue( False )
+
+		light2 = GafferSceneTest.TestLight()
+		light2["name"].setValue( "light2" )
+
+		group = GafferScene.Group()
+		group["in"][0].setInput( light1["out"] )
+		group["in"][1].setInput( light2["out"] )
+
+		writer = GafferScene.SceneWriter()
+		writer["in"].setInput( group["out"] )
+		writer["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.usda" ) )
+		writer["task"].execute()
+
+		reader = GafferScene.SceneReader()
+		reader["fileName"].setInput( writer["fileName"] )
+
+		self.assertIn( "defaultLights", reader["out"].setNames() )
+		self.assertEqual( reader["out"].set( "defaultLights" ).value, IECore.PathMatcher( [ "/group/light2" ] ) )
 
 if __name__ == "__main__":
 	unittest.main()

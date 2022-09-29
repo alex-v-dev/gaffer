@@ -119,7 +119,7 @@ class ApplicationRootTest( GafferTest.TestCase ) :
 			self.assertTrue( app.isSame( a ) )
 			d.append( app.getClipboardContents() )
 
-		c = a.clipboardContentsChangedSignal().connect( f )
+		c = a.clipboardContentsChangedSignal().connect( f, scoped = True )
 
 		self.assertEqual( len( d ), 0 )
 		self.assertEqual( a.getClipboardContents(), None )
@@ -135,6 +135,11 @@ class ApplicationRootTest( GafferTest.TestCase ) :
 		a.setClipboardContents( IECore.IntData( 20 ) )
 		self.assertEqual( len( d ), 2 )
 		self.assertEqual( a.getClipboardContents(), IECore.IntData( 20 ) )
+
+	def testScriptContainer( self ) :
+
+		a = Gaffer.ApplicationRoot()
+		self.assertIsInstance( a["scripts"], Gaffer.ScriptContainer )
 
 	def tearDown( self ) :
 

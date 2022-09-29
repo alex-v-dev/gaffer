@@ -51,6 +51,7 @@ class GraphEditor( GafferUI.Editor ) :
 		# with our keyboard shortcuts and aren't that useful in the graph
 		viewportGadget = GafferUI.ViewportGadget()
 		viewportGadget.setPreciseMotionAllowed( False )
+		viewportGadget.setMaxPlanarZoom( imath.V2f( 25 ) )
 
 		self.__gadgetWidget = GafferUI.GadgetWidget(
 			gadget = viewportGadget,
@@ -62,7 +63,7 @@ class GraphEditor( GafferUI.Editor ) :
 		GafferUI.Editor.__init__( self, self.__gadgetWidget, scriptNode, **kw )
 
 		graphGadget = GafferUI.GraphGadget( self.scriptNode() )
-		self.__rootChangedConnection = graphGadget.rootChangedSignal().connect( Gaffer.WeakMethod( self.__rootChanged ) )
+		graphGadget.rootChangedSignal().connect( Gaffer.WeakMethod( self.__rootChanged ), scoped = False )
 
 		self.__gadgetWidget.getViewportGadget().setPrimaryChild( graphGadget )
 		self.__gadgetWidget.getViewportGadget().setDragTracking( GafferUI.ViewportGadget.DragTracking.XDragTracking | GafferUI.ViewportGadget.DragTracking.YDragTracking )
@@ -71,11 +72,31 @@ class GraphEditor( GafferUI.Editor ) :
 		self.__gadgetWidget.buttonPressSignal().connect( Gaffer.WeakMethod( self.__buttonPress ), scoped = False )
 		self.__gadgetWidget.keyPressSignal().connect( Gaffer.WeakMethod( self.__keyPress ), scoped = False )
 		self.__gadgetWidget.buttonDoubleClickSignal().connect( Gaffer.WeakMethod( self.__buttonDoubleClick ), scoped = False )
-		self.__gadgetWidget.dragEnterSignal().connect( Gaffer.WeakMethod( self.__dragEnter ), scoped = False )
-		self.__gadgetWidget.dropSignal().connect( Gaffer.WeakMethod( self.__drop ), scoped = False )
+		self.dragEnterSignal().connect( Gaffer.WeakMethod( self.__dragEnter ), scoped = False )
+		self.dragLeaveSignal().connect( Gaffer.WeakMethod( self.__dragLeave ), scoped = False )
+		self.dropSignal().connect( Gaffer.WeakMethod( self.__drop ), scoped = False )
 		self.__gadgetWidget.getViewportGadget().preRenderSignal().connect( Gaffer.WeakMethod( self.__preRender ), scoped = False )
 
+		with GafferUI.ListContainer( borderWidth = 8, spacing = 0 ) as overlay :
+			with GafferUI.ListContainer(
+				GafferUI.ListContainer.Orientation.Horizontal,
+				parenting = {
+					"verticalAlignment" : GafferUI.VerticalAlignment.Top,
+				}
+			) :
+				GafferUI.Spacer( imath.V2i( 1 ) )
+				GafferUI.MenuButton(
+					image = "annotations.png", hasFrame = False,
+					menu = GafferUI.Menu(
+						Gaffer.WeakMethod( self.__annotationsMenu ),
+						title = "Annotations"
+					)
+				)
+
+		self.__gadgetWidget.addOverlay( overlay )
+
 		self.__nodeMenu = None
+		self.__readOnlyPopup = None
 
 	## Returns the internal GadgetWidget holding the GraphGadget.
 	def graphGadgetWidget( self ) :
@@ -111,7 +132,7 @@ class GraphEditor( GafferUI.Editor ) :
 
 		return result
 
-	__plugContextMenuSignal = Gaffer.Signal3()
+	__plugContextMenuSignal = Gaffer.Signals.Signal3()
 	## Returns a signal which is emitted to create a context menu for a
 	# plug in the graph. Slots may connect to this signal to edit the
 	# menu definition on the fly - the signature for the signal is
@@ -122,7 +143,7 @@ class GraphEditor( GafferUI.Editor ) :
 
 		return cls.__plugContextMenuSignal
 
-	__connectionContextMenuSignal = Gaffer.Signal3()
+	__connectionContextMenuSignal = Gaffer.Signals.Signal3()
 	## Returns a signal which is emitted to create a context menu for a
 	# connection in the graph. Slots may connect to this signal to edit the
 	# menu definition on the fly - the signature for the signal is
@@ -164,7 +185,7 @@ class GraphEditor( GafferUI.Editor ) :
 		__append( destinationPlug.getInput(), "Source Node" )
 		__append( destinationPlug, "Destination Node" )
 
-	__nodeContextMenuSignal = Gaffer.Signal3()
+	__nodeContextMenuSignal = Gaffer.Signals.Signal3()
 	## Returns a signal which is emitted to create a context menu for a
 	# node in the graph. Slots may connect to this signal to edit the
 	# menu definition on the fly - the signature for the signal is
@@ -240,6 +261,13 @@ class GraphEditor( GafferUI.Editor ) :
 	@classmethod
 	def appendContentsMenuDefinitions( cls, graphEditor, node, menuDefinition ) :
 
+		menuDefinition.append( "/FocusDivider", { "divider" : True } )
+		menuDefinition.append( "/Focus", {
+			"command" : functools.partial( graphEditor.scriptNode().setFocus, node ),
+			"active" : not node.isSame( graphEditor.scriptNode().getFocus() ),
+			"shortCut" : "Ctrl+`"
+		} )
+
 		if not GraphEditor.__childrenViewable( node ) :
 			return
 
@@ -282,6 +310,7 @@ class GraphEditor( GafferUI.Editor ) :
 
 		return "GafferUI.GraphEditor( scriptNode )"
 
+	## \todo Why is this exposed? Move it into `__popupNodeMenu()`.
 	def _nodeMenu( self ) :
 
 		if self.__nodeMenu is None :
@@ -289,6 +318,32 @@ class GraphEditor( GafferUI.Editor ) :
 			self.__nodeMenu.visibilityChangedSignal().connect( Gaffer.WeakMethod( self.__nodeMenuVisibilityChanged ), scoped = False )
 
 		return self.__nodeMenu
+
+	def __popupNodeMenu( self ) :
+
+		# When the node graph is editable, we show a regular Menu for node creation,
+		# but when it is read-only, we show a PopupWindow alerting the user to that
+		# fact.
+
+		readOnly = (
+			Gaffer.MetadataAlgo.getChildNodesAreReadOnly( self.graphGadget().getRoot() ) or
+			Gaffer.MetadataAlgo.readOnly( self.graphGadget().getRoot() )
+		)
+
+		if not readOnly :
+
+			self._nodeMenu().popup( self )
+
+		else :
+
+			if self.__readOnlyPopup is None :
+
+				with GafferUI.PopupWindow() as self.__readOnlyPopup :
+					with GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Horizontal, spacing = 4 ) :
+						GafferUI.Image( "warningSmall.png" )
+						GafferUI.Label( "Node Graph Not Editable" )
+
+			self.__readOnlyPopup.popup( center = self.bound().center() )
 
 	def __nodeMenuVisibilityChanged( self, widget ) :
 
@@ -335,12 +390,8 @@ class GraphEditor( GafferUI.Editor ) :
 					self._m.popup( self )
 					return True
 
-			if not (
-				Gaffer.MetadataAlgo.getChildNodesAreReadOnly( self.graphGadget().getRoot() ) or
-				Gaffer.MetadataAlgo.readOnly( self.graphGadget().getRoot() )
-			):
-				self._nodeMenu().popup( self )
-				return True
+			self.__popupNodeMenu()
+			return True
 
 		return False
 
@@ -355,13 +406,20 @@ class GraphEditor( GafferUI.Editor ) :
 		if event.key == "F" and not event.modifiers :
 			self.__frame( self.scriptNode().selection() )
 			return True
+		elif event.key == "QuoteLeft" and not event.modifiers :
+			self.__frame( [ self.scriptNode().getFocus() ] )
+			return True
+		elif event.key == "QuoteLeft" and event.modifiers == event.modifiers.Control :
+			selection = self.scriptNode().selection()
+			if len( selection ) > 0 :
+				self.scriptNode().setFocus( selection[0] )
 		elif event.key == "Down" :
 			selection = self.scriptNode().selection()
 			if selection.size() == 1 and selection[0].parent() == self.graphGadget().getRoot() :
 				needsModifiers = not GraphEditor.__childrenViewable( selection[0] )
 				if (
 					( needsModifiers and event.modifiers == event.modifiers.Shift | event.modifiers.Control ) or
-					( not needsModifiers and event.modifiers == event.modifiers.None )
+					( not needsModifiers and event.modifiers == event.modifiers.None_ )
 				) :
 					self.graphGadget().setRoot( selection[0] )
 					return True
@@ -371,16 +429,12 @@ class GraphEditor( GafferUI.Editor ) :
 				self.graphGadget().setRoot( root.parent() )
 				return True
 		elif event.key == "Tab" :
-			if not (
-				Gaffer.MetadataAlgo.getChildNodesAreReadOnly( self.graphGadget().getRoot() ) or
-				Gaffer.MetadataAlgo.readOnly( self.graphGadget().getRoot() )
-			):
-				self._nodeMenu().popup( self )
-				return True
+			self.__popupNodeMenu()
+			return True
 
 		return False
 
-	def __frame( self, nodes, extend = False ) :
+	def __frame( self, nodes, extend = False, at = None ) :
 
 		graphGadget = self.graphGadget()
 
@@ -429,6 +483,19 @@ class GraphEditor( GafferUI.Editor ) :
 
 		self.__gadgetWidget.getViewportGadget().frame( bound )
 
+		if at is not None :
+			# Offset the bound and reframe so that the centre of the bound moves
+			# to `at`, which is specified in raster space. We have to do this
+			# _after_ the initial call to `frame()` because
+			# `rasterToGadgetSpace()` is affected by the zoom calculated by
+			# `frame()`. Because we are not changing the size of the bound, the
+			# second call to `frame()` will use the same zoom.
+			viewport = self.graphGadgetWidget().getViewportGadget()
+			offset = viewport.rasterToGadgetSpace( imath.V2f( self.bound().size() / 2 ), graphGadget ).p0 - viewport.rasterToGadgetSpace( at, graphGadget ).p0
+			bound.setMin( bound.min() + offset )
+			bound.setMax( bound.max() + offset )
+			self.__gadgetWidget.getViewportGadget().frame( bound )
+
 	def __buttonDoubleClick( self, widget, event ) :
 
 		nodeGadget = self.__nodeGadgetAt( event.line.p1 )
@@ -441,9 +508,16 @@ class GraphEditor( GafferUI.Editor ) :
 			return False
 
 		if self.__dropNodes( event.data ) :
+			self.__dragEnterPointer = GafferUI.Pointer.getCurrent()
+			GafferUI.Pointer.setCurrent( "target" )
 			return True
 
 		return False
+
+	def __dragLeave( self, widget, event ) :
+
+		GafferUI.Pointer.setCurrent( self.__dragEnterPointer )
+		return True
 
 	def __drop( self, widget, event ) :
 
@@ -452,7 +526,8 @@ class GraphEditor( GafferUI.Editor ) :
 
 		dropNodes = self.__dropNodes( event.data )
 		if dropNodes :
-			self.__frame( dropNodes )
+			self.graphGadget().setRoot( dropNodes[0].parent() )
+			self.__frame( dropNodes, at = imath.V2f( event.line.p0.x, event.line.p0.y ) )
 			return True
 
 		return False
@@ -461,10 +536,11 @@ class GraphEditor( GafferUI.Editor ) :
 
 		if isinstance( dragData, Gaffer.Node ) :
 			return [ dragData ]
-		elif isinstance( dragData, Gaffer.Plug ) :
-			return [ dragData.node() ]
 		elif isinstance( dragData, Gaffer.Set ) :
-			return [ x for x in dragData if isinstance( x, Gaffer.Node ) ]
+			nodes = [ x for x in dragData if isinstance( x, Gaffer.Node ) ]
+			if len( set( n.parent() for n in nodes ) ) == 1 :
+				# Can only frame nodes if they all share the same parent.
+				return nodes
 
 		return []
 
@@ -485,9 +561,9 @@ class GraphEditor( GafferUI.Editor ) :
 		# save/restore the current framing so jumping in
 		# and out of Boxes isn't a confusing experience.
 
-		Gaffer.Metadata.registerValue( previousRoot, "ui:graphEditor:framing", self.__currentFrame(), persistent = False )
+		Gaffer.Metadata.registerValue( previousRoot, "ui:graphEditor{}:framing".format( id( self ) ), self.__currentFrame(), persistent = False )
 
-		frame = Gaffer.Metadata.value( self.graphGadget().getRoot(), "ui:graphEditor:framing" )
+		frame = Gaffer.Metadata.value( self.graphGadget().getRoot(), "ui:graphEditor{}:framing".format( id( self ) ) )
 		if frame is not None :
 			self.graphGadgetWidget().getViewportGadget().frame(
 				imath.Box3f( imath.V3f( frame.min().x, frame.min().y, 0 ), imath.V3f( frame.max().x, frame.max().y, 0 ) )
@@ -503,8 +579,8 @@ class GraphEditor( GafferUI.Editor ) :
 			# We have to track the root _and_ its ancestors
 			node = graphGadget.getRoot()
 			while node and not isinstance( node, Gaffer.ScriptNode ) :
-				self.__changeConnections.append( node.nameChangedSignal().connect( Gaffer.WeakMethod( self.__rootNameChanged ) ) )
-				self.__changeConnections.append( node.parentChangedSignal().connect( Gaffer.WeakMethod( self.__rootParentChanged ) ) )
+				self.__changeConnections.append( node.nameChangedSignal().connect( Gaffer.WeakMethod( self.__rootNameChanged ), scoped = True ) )
+				self.__changeConnections.append( node.parentChangedSignal().connect( Gaffer.WeakMethod( self.__rootParentChanged ), scoped = True ) )
 				node = node.parent()
 
 		self.titleChangedSignal()( self )
@@ -546,6 +622,86 @@ class GraphEditor( GafferUI.Editor ) :
 		# layout has gone off screen.
 
 		self.frame( nodes, extend = True )
+
+	def __annotationsMenu( self ) :
+
+		graphGadget = self.graphGadget()
+		annotationsGadget = graphGadget["__annotations"]
+
+		annotations = Gaffer.MetadataAlgo.annotationTemplates() + [ "user", annotationsGadget.untemplatedAnnotations ]
+		visiblePattern = annotationsGadget.getVisibleAnnotations()
+		visibleAnnotations = { a for a in annotations if IECore.StringAlgo.matchMultiple( a, visiblePattern ) }
+
+		result = IECore.MenuDefinition()
+
+		result.append(
+			"All",
+			{
+				"checkBox" : len( visibleAnnotations ) == len( annotations ),
+				"command" : functools.partial( Gaffer.WeakMethod( self.__setVisibleAnnotations ), annotations = { "*" } )
+			}
+		)
+
+		result.append(
+			"None",
+			{
+				"checkBox" : len( visibleAnnotations ) == 0,
+				"command" : functools.partial( Gaffer.WeakMethod( self.__setVisibleAnnotations ), annotations = set() )
+			}
+		)
+
+		result.append( "__annotationsDivider__", { "divider" : True } )
+
+		def appendMenuItem( annotation, label = None ) :
+
+			if label is None :
+				# Support snake_case and CamelCase for conversion of name to label,
+				# since not all extensions use the Gaffer convention.
+				labelParts = annotation.split( ":" )
+				label = "/".join(
+					( " ".join( x.title() for x in p.split( "_" ) ) )
+					if "_" in p
+					else IECore.CamelCase.toSpaced( p )
+					for p in labelParts
+				)
+
+			if annotation in visibleAnnotations :
+				toggled = visibleAnnotations - { annotation }
+			else :
+				toggled = visibleAnnotations | { annotation }
+
+			result.append(
+				"/" + label,
+				{
+					"checkBox" : annotation in visibleAnnotations,
+					"command" : functools.partial( Gaffer.WeakMethod( self.__setVisibleAnnotations ), annotations = toggled )
+				}
+			)
+
+		userAnnotations = set( Gaffer.MetadataAlgo.annotationTemplates( userOnly = True ) )
+		for annotation in sorted( userAnnotations ) :
+			appendMenuItem( annotation )
+
+		if len( userAnnotations ) :
+			result.append( "__userDivider__", { "divider" : True } )
+		appendMenuItem( "user" )
+
+		result.append( "__nonUserDivider__", { "divider" : True } )
+
+		for annotation in sorted( Gaffer.MetadataAlgo.annotationTemplates() ) :
+			if annotation not in userAnnotations :
+				appendMenuItem( annotation )
+
+		result.append( "__otherDivider__", { "divider" : True } )
+		appendMenuItem( annotationsGadget.untemplatedAnnotations, label = "Other" )
+
+		return result
+
+	def __setVisibleAnnotations( self, unused, annotations ) :
+
+		annotationsGadget = self.graphGadget()["__annotations"]
+		pattern = " ".join( a.replace( " ", r"\ " ) for a in annotations )
+		annotationsGadget.setVisibleAnnotations( pattern )
 
 	@classmethod
 	def __getNodeInputConnectionsVisible( cls, graphGadget, node ) :

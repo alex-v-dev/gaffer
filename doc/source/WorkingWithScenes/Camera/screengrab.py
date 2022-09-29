@@ -1,7 +1,21 @@
+# BuildTarget: images/exampleAnamorphicCameraSetup.png
+# BuildTarget: images/exampleSphericalCameraSetupArnoldTweaks.png
 # BuildTarget: images/interfaceCameraVisualizer.png
+# BuildTarget: images/renderDepthOfFieldBlur.png
+# BuildTarget: images/taskCameraApertureFocalLengthPlugs.png
+# BuildTarget: images/taskCameraCustomAperturePlugs.png
+# BuildTarget: images/taskCameraDepthOfFieldPlugs.png
+# BuildTarget: images/taskCameraFOVPlugs.png
+# BuildTarget: images/taskCameraRenderOverridePlugs.png
+# BuildTarget: images/taskCameraTweaksTweaks.png
+# BuildTarget: images/taskStandardOptionsDepthOfFieldPlug.png
 
 import os
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 import tempfile
 import time
 
@@ -28,7 +42,7 @@ __temporaryDirectory = tempfile.mkdtemp( prefix = "gafferDocs" )
 
 def __getTempFilePath( fileName, directory = __temporaryDirectory ) :
 	filePath = "/".join( ( directory, fileName ) )
-	
+
 	return filePath
 
 def __dispatchScript( script, tasks, settings ) :
@@ -38,10 +52,7 @@ def __dispatchScript( script, tasks, settings ) :
 		" ".join( settings ),
 		__temporaryDirectory
 		)
-	process = subprocess.Popen( command, shell=True, stderr = subprocess.PIPE )
-	process.wait()
-
-	return process
+	subprocess.check_call( command, shell=True )
 
 # Interface: a Camera node in the Graph Editor
 script["Camera"] = GafferScene.Camera()
@@ -51,6 +62,7 @@ graphEditor.frame( Gaffer.StandardSet( [ script["Camera"] ] ) )
 
 # Interface: the camera visualizer in the Viewer
 script.selection().add( script["Camera"] )
+script.setFocus( script["Camera"] )
 __delay( 0.1 )
 viewer.view()["grid"]["visible"].setValue( False )
 paths = IECore.PathMatcher( [ "/camera" ] )
@@ -206,9 +218,9 @@ GafferUI.WidgetAlgo.grab( widget = __nodeEditorWindow, imagePath = "images/taskC
 
 # Task: a CameraTweaks node with 2 tweaks in the Node Editor
 script["CameraTweaks"] = GafferScene.CameraTweaks()
-script["CameraTweaks"]["tweaks"].addChild( GafferScene.TweakPlug( "tweak_focalLength", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
+script["CameraTweaks"]["tweaks"].addChild( Gaffer.TweakPlug( "tweak_focalLength", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
 script["CameraTweaks"]["tweaks"]["tweak_focalLength"].addChild( Gaffer.FloatPlug( "value", defaultValue = 35.0, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
-script["CameraTweaks"]["tweaks"].addChild( GafferScene.TweakPlug( "tweak_resolution", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
+script["CameraTweaks"]["tweaks"].addChild( Gaffer.TweakPlug( "tweak_resolution", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
 script["CameraTweaks"]["tweaks"]["tweak_resolution"].addChild( Gaffer.V2iPlug( "value", defaultValue = imath.V2i( 1024, 1024 ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
 script["CameraTweaks"]["tweaks"]["tweak_focalLength"]["name"].setValue( 'focalLength' )
 script["CameraTweaks"]["tweaks"]["tweak_focalLength"]["value"].setValue( 85.0 )
@@ -251,11 +263,11 @@ __dispatchScript(
 # Since we can't assume the build environment has Arnold, we need to recreate the tweaks
 script.removeChild( script["CameraTweaks"] )
 script["CameraTweaks"] = GafferScene.CameraTweaks()
-script["CameraTweaks"]["tweaks"].addChild( GafferScene.TweakPlug( "tweak_projection", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
+script["CameraTweaks"]["tweaks"].addChild( Gaffer.TweakPlug( "tweak_projection", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
 script["CameraTweaks"]["tweaks"]["tweak_projection"].addChild( Gaffer.StringPlug( "value", defaultValue = 'perspective', flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
-script["CameraTweaks"]["tweaks"].addChild( GafferScene.TweakPlug( "tweak_aperture", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
+script["CameraTweaks"]["tweaks"].addChild( Gaffer.TweakPlug( "tweak_aperture", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
 script["CameraTweaks"]["tweaks"]["tweak_aperture"].addChild( Gaffer.V2fPlug( "value", defaultValue = imath.V2f( 36, 24 ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
-script["CameraTweaks"]["tweaks"].addChild( GafferScene.TweakPlug( "tweak_filmFit", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
+script["CameraTweaks"]["tweaks"].addChild( Gaffer.TweakPlug( "tweak_filmFit", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
 script["CameraTweaks"]["tweaks"]["tweak_filmFit"].addChild( Gaffer.IntPlug( "value", defaultValue = 0, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ) )
 script["CameraTweaks"]["tweaks"]["tweak_projection"]["name"].setValue( 'projection' )
 script["CameraTweaks"]["tweaks"]["tweak_projection"]["value"].setValue( 'spherical_camera' )

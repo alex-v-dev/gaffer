@@ -60,10 +60,6 @@ class GAFFERUI_API SpacerGadget : public Gadget
 		/// Rejects all children.
 		bool acceptsChild( const GraphComponent *potentialChild ) const override;
 
-	protected :
-
-		void doRenderLayer( Layer layer, const Style *style ) const override;
-
 	private :
 
 		Imath::Box3f m_bound;
@@ -71,9 +67,6 @@ class GAFFERUI_API SpacerGadget : public Gadget
 };
 
 IE_CORE_DECLAREPTR( SpacerGadget )
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<SpacerGadget> > SpacerGadgetIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<SpacerGadget> > RecursiveSpacerGadgetIterator;
 
 } // namespace GafferUI
 

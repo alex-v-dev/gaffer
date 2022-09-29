@@ -59,7 +59,7 @@ class GAFFERIMAGE_API LUT : public OpenColorIOTransform
 		LUT( const std::string &name=defaultName<LUT>() );
 		~LUT() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::LUT, LUTTypeId, OpenColorIOTransform );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::LUT, LUTTypeId, OpenColorIOTransform );
 
 		enum Interpolation
 		{
@@ -67,12 +67,6 @@ class GAFFERIMAGE_API LUT : public OpenColorIOTransform
 			Nearest,
 			Linear,
 			Tetrahedral
-		};
-
-		enum Direction
-		{
-			Forward = 0,
-			Inverse
 		};
 
 		Gaffer::StringPlug *fileNamePlug();
@@ -92,7 +86,7 @@ class GAFFERIMAGE_API LUT : public OpenColorIOTransform
 
 		bool affectsTransform( const Gaffer::Plug *input ) const override;
 		void hashTransform( const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
-		OpenColorIO::ConstTransformRcPtr transform() const override;
+		OCIO_NAMESPACE::ConstTransformRcPtr transform() const override;
 
 	private :
 

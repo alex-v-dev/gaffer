@@ -77,9 +77,6 @@ class GAFFERUI_API ScaleHandle : public Handle
 
 IE_CORE_DECLAREPTR( ScaleHandle )
 
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<ScaleHandle> > ScaleHandleIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<ScaleHandle> > RecursiveScaleHandleIterator;
-
 } // namespace GafferUI
 
 #endif // GAFFERUI_SCALEHANDLE_H

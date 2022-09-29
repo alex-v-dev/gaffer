@@ -132,17 +132,17 @@ class GadgetWrapper : public GafferBindings::GraphComponentWrapper<WrappedType>
 			return WrappedType::getToolTip( line );
 		}
 
-		void doRenderLayer( GafferUI::Gadget::Layer layer, const GafferUI::Style *style ) const override
+		void updateLayout() const override
 		{
 			if( this->isSubclassed() )
 			{
 				IECorePython::ScopedGILLock gilLock;
 				try
 				{
-					boost::python::object f = this->methodOverride( "doRenderLayer" );
+					boost::python::object f = this->methodOverride( "updateLayout" );
 					if( f )
 					{
-						f( layer, GafferUI::StylePtr( const_cast<GafferUI::Style *>( style ) ) );
+						f();
 						return;
 					}
 				}
@@ -151,7 +151,71 @@ class GadgetWrapper : public GafferBindings::GraphComponentWrapper<WrappedType>
 					IECorePython::ExceptionAlgo::translatePythonException();
 				}
 			}
-			WrappedType::doRenderLayer( layer, style );
+			WrappedType::updateLayout();
+		}
+
+		void renderLayer( GafferUI::Gadget::Layer layer, const GafferUI::Style *style, GafferUI::Gadget::RenderReason reason ) const override
+		{
+			if( this->isSubclassed() )
+			{
+				IECorePython::ScopedGILLock gilLock;
+				try
+				{
+					boost::python::object f = this->methodOverride( "renderLayer" );
+					if( f )
+					{
+						f( layer, GafferUI::StylePtr( const_cast<GafferUI::Style *>( style ) ), reason );
+						return;
+					}
+				}
+				catch( const boost::python::error_already_set &e )
+				{
+					IECorePython::ExceptionAlgo::translatePythonException();
+				}
+			}
+			WrappedType::renderLayer( layer, style, reason );
+		}
+
+		unsigned layerMask() const override
+		{
+			if( this->isSubclassed() )
+			{
+				IECorePython::ScopedGILLock gilLock;
+				try
+				{
+					boost::python::object f = this->methodOverride( "layerMask" );
+					if( f )
+					{
+						return boost::python::extract<unsigned>( f() );
+					}
+				}
+				catch( const boost::python::error_already_set &e )
+				{
+					IECorePython::ExceptionAlgo::translatePythonException();
+				}
+			}
+			return WrappedType::layerMask();
+		}
+
+		Imath::Box3f renderBound() const override
+		{
+			if( this->isSubclassed() )
+			{
+				IECorePython::ScopedGILLock gilLock;
+				try
+				{
+					boost::python::object f = this->methodOverride( "renderBound" );
+					if( f )
+					{
+						return boost::python::extract<Imath::Box3f>( f() );
+					}
+				}
+				catch( const boost::python::error_already_set &e )
+				{
+					IECorePython::ExceptionAlgo::translatePythonException();
+				}
+			}
+			return WrappedType::renderBound();
 		}
 
 };

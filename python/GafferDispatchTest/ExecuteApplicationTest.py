@@ -36,7 +36,11 @@
 ##########################################################################
 
 import os
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 import unittest
 import glob
 import inspect
@@ -67,6 +71,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute thisScriptDoesNotExist",
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -88,6 +93,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute " + self.__scriptFileName,
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -115,6 +121,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute " + self.__scriptFileName + " -frames " + str(frames),
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -142,6 +149,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute " + self.__scriptFileName + " -context -valueOne 1 -valueTwo 2",
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -166,6 +174,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute -script " + self.__scriptFileName + " -context -myArg 10 -noValue",
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -192,6 +201,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute -script " + self.__scriptFileName,
 			shell = True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -205,6 +215,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute -ignoreScriptLoadErrors -script " + self.__scriptFileName,
 			shell = True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -225,6 +236,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute -script " + self.__scriptFileName,
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -272,6 +284,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute -script " + self.__scriptFileName + " -nodes MyTextWriter",
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 
@@ -283,6 +296,7 @@ class ExecuteApplicationTest( GafferTest.TestCase ) :
 			"gaffer execute -script " + self.__scriptFileName + " -nodes MyErroringTaskNode",
 			shell=True,
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 

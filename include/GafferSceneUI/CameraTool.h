@@ -59,7 +59,7 @@ class GAFFERSCENEUI_API CameraTool : public GafferSceneUI::SelectionTool
 		CameraTool( SceneView *view, const std::string &name = defaultName<CameraTool>() );
 		~CameraTool() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferSceneUI::CameraTool, CameraToolTypeId, GafferSceneUI::SelectionTool );
+		GAFFER_NODE_DECLARE_TYPE( GafferSceneUI::CameraTool, CameraToolTypeId, GafferSceneUI::SelectionTool );
 
 	private :
 
@@ -70,7 +70,7 @@ class GAFFERSCENEUI_API CameraTool : public GafferSceneUI::SelectionTool
 		void connectToViewContext();
 		void contextChanged( const IECore::InternedString &name );
 
-		boost::signals::scoped_connection m_contextChangedConnection;
+		Gaffer::Signals::ScopedConnection m_contextChangedConnection;
 
 		void plugDirtied( const Gaffer::Plug *plug );
 		GafferScene::ScenePlug::ScenePath cameraPath() const;
@@ -91,12 +91,12 @@ class GAFFERSCENEUI_API CameraTool : public GafferSceneUI::SelectionTool
 
 		void viewportCameraChanged();
 
-		boost::signals::connection m_viewportCameraChangedConnection;
+		Gaffer::Signals::Connection m_viewportCameraChangedConnection;
 
 		void setCameraCenterOfInterest( const GafferScene::ScenePlug::ScenePath &camera, float centerOfInterest );
 		float getCameraCenterOfInterest( const GafferScene::ScenePlug::ScenePath &camera ) const;
 
-		typedef std::unordered_map<std::string, float> CameraCentersOfInterest;
+		using CameraCentersOfInterest = std::unordered_map<std::string, float>;
 		CameraCentersOfInterest m_cameraCentersOfInterest;
 
 		static ToolDescription<CameraTool, SceneView> g_toolDescription;

@@ -533,12 +533,14 @@ class OSLExpressionEngineTest( GafferOSLTest.OSLTestCase ) :
 		s["n"]["user"]["a"] = Gaffer.IntPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
 		s["n"]["user"]["ab"] = Gaffer.IntPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
 		s["n"]["user"]["abc"] = Gaffer.IntPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["n"]["user"]["abcd"] = Gaffer.V2iPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
 
 		expression = inspect.cleandoc(
 			"""
 			parent.n.user.ab = 1;
 			parent.n.user.a = 2;
 			parent.n.user.abc = 3;
+			parent.n.user.abcd.x = 4;
 			"""
 		)
 
@@ -550,6 +552,7 @@ class OSLExpressionEngineTest( GafferOSLTest.OSLTestCase ) :
 		self.assertEqual( s["n"]["user"]["ab"].getValue(), 1 )
 		self.assertEqual( s["n"]["user"]["a"].getValue(), 2 )
 		self.assertEqual( s["n"]["user"]["abc"].getValue(), 3 )
+		self.assertEqual( s["n"]["user"]["abcd"]["x"].getValue(), 4 )
 
 		s2 = Gaffer.ScriptNode()
 		s2.execute( s.serialise() )
@@ -559,6 +562,7 @@ class OSLExpressionEngineTest( GafferOSLTest.OSLTestCase ) :
 		self.assertEqual( s2["n"]["user"]["ab"].getValue(), 1 )
 		self.assertEqual( s2["n"]["user"]["a"].getValue(), 2 )
 		self.assertEqual( s2["n"]["user"]["abc"].getValue(), 3 )
+		self.assertEqual( s2["n"]["user"]["abcd"]["x"].getValue(), 4 )
 
 	def testStringComparison( self ) :
 
@@ -686,7 +690,7 @@ class OSLExpressionEngineTest( GafferOSLTest.OSLTestCase ) :
 		ssLines = ss.split( "\n" )
 		ssLinesEdited = []
 		for l in ssLines:
-			m = re.match( "^__children\[\"e\"\]\[\"__expression\"\].setValue\( '(.*)' \)$", l )
+			m = re.match( r"^__children\[\"e\"\]\[\"__expression\"\].setValue\( '(.*)' \)$", l )
 			if not m:
 				ssLinesEdited.append( l )
 			else:
@@ -701,6 +705,24 @@ class OSLExpressionEngineTest( GafferOSLTest.OSLTestCase ) :
 			self.assertAlmostEqual( s["dest%i"%i]["p"].getValue().x, 0.1 + 0.3 * i + 10 * i, places = 5 )
 			self.assertAlmostEqual( s["dest%i"%i]["p"].getValue().y, 0.2 + 0.3 * i + 10 * i, places = 5 )
 			self.assertAlmostEqual( s["dest%i"%i]["p"].getValue().z, 0.3 + 0.3 * i + 10 * i, places = 5 )
+
+	def testException( self ) :
+
+		s = Gaffer.ScriptNode()
+		s["n"] = Gaffer.Node()
+		s["n"]["user"]["g"] = Gaffer.FloatPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["n"]["user"]["f"] = Gaffer.FloatPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+
+		s["ePython"] = Gaffer.Expression()
+		s["ePython"].setExpression( "raise IECore.Exception( 'test string' ); parent['n']['user']['g'] = 4.0" )
+
+		s["e"] = Gaffer.Expression()
+		s["e"].setExpression( "parent.n.user.f = parent.n.user.g", "OSL" )
+
+		six.assertRaisesRegex( self,
+			Gaffer.ProcessException, "ePython.__execute : test string",
+			s["n"]["user"]["f"].getValue
+		)
 
 if __name__ == "__main__":
 	unittest.main()

@@ -46,6 +46,14 @@
 #include "IECoreImage/DisplayDriver.h"
 #include "IECoreImage/DisplayDriverServer.h"
 
+namespace GafferImageModule
+{
+
+// Forward declaration to enable friend declaration.
+void bindCatalogue();
+
+} // namespace GafferImageModule
+
 namespace GafferImage
 {
 
@@ -54,13 +62,13 @@ class GAFFERIMAGE_API Catalogue : public ImageNode
 
 	public :
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::Catalogue, CatalogueTypeId, ImageNode );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::Catalogue, CatalogueTypeId, ImageNode );
 
 		Catalogue( const std::string &name = defaultName<Catalogue>() );
 		~Catalogue() override;
 
 		/// Plug type used to represent an image in the catalogue.
-		class Image : public Gaffer::Plug
+		class GAFFERIMAGE_API Image : public Gaffer::Plug
 		{
 
 			public :
@@ -86,9 +94,19 @@ class GAFFERIMAGE_API Catalogue : public ImageNode
 
 				Gaffer::PlugPtr createCounterpart( const std::string &name, Direction direction ) const override;
 
-		};
+			private :
 
-		typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, Image> > ImageIterator;
+				// The Catalogue needs to know the name of each image
+				// so it can support the `catalogue:imageName` context
+				// variable. But computes can only depend on plugs,
+				// so we transfer the name into this private plug
+				// each time it changes.
+				void nameChanged();
+				Gaffer::StringPlug *namePlug();
+				const Gaffer::StringPlug *namePlug() const;
+				friend class Catalogue;
+
+		};
 
 		Gaffer::Plug *imagesPlug();
 		const Gaffer::Plug *imagesPlug() const;
@@ -121,9 +139,6 @@ class GAFFERIMAGE_API Catalogue : public ImageNode
 		Gaffer::IntPlug *internalImageIndexPlug();
 		const Gaffer::IntPlug *internalImageIndexPlug() const;
 
-		Gaffer::AtomicCompoundDataPlug *mappingPlug();
-		const Gaffer::AtomicCompoundDataPlug *mappingPlug() const;
-
 		Gaffer::Switch *imageSwitch();
 		const Gaffer::Switch *imageSwitch() const;
 
@@ -140,9 +155,11 @@ class GAFFERIMAGE_API Catalogue : public ImageNode
 		void hash( const Gaffer::ValuePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		void compute( Gaffer::ValuePlug *output, const Gaffer::Context *context ) const override;
 
-		void computeNameToIndexMapping();
-
 		static size_t g_firstPlugIndex;
+
+		// For bindings
+		friend void GafferImageModule::bindCatalogue();
+		static const std::type_info &internalImageTypeInfo();
 
 };
 

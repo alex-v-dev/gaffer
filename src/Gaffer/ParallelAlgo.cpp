@@ -40,8 +40,6 @@
 #include "Gaffer/Context.h"
 #include "Gaffer/Monitor.h"
 
-#include "boost/make_unique.hpp"
-
 #include <mutex>
 #include <stack>
 
@@ -65,15 +63,21 @@ std::unique_lock<std::mutex> lockUIThreadCallHandlers( UIThreadCallHandlers *&ha
 void ParallelAlgo::callOnUIThread( const UIThreadFunction &function )
 {
 	UIThreadCallHandlers *handlers = nullptr;
-	auto lock = lockUIThreadCallHandlers( handlers );
-	if( handlers->size() )
+	UIThreadCallHandler h;
+
 	{
-		handlers->top()( function );
+		auto lock = lockUIThreadCallHandlers( handlers );
+		if( handlers->size() )
+		{
+			h = handlers->top();
+		}
+		else
+		{
+			throw IECore::Exception( "No UIThreadCallHandler installed" );
+		}
 	}
-	else
-	{
-		throw IECore::Exception( "No UIThreadCallHandler installed" );
-	}
+
+	h( function );
 }
 
 void ParallelAlgo::pushUIThreadCallHandler( const UIThreadCallHandler &handler )
@@ -102,14 +106,14 @@ GAFFER_API std::unique_ptr<BackgroundTask> ParallelAlgo::callOnBackgroundThread(
 	ContextPtr backgroundContext = new Context( *Context::current() );
 	Monitor::MonitorSet backgroundMonitors = Monitor::current();
 
-	return boost::make_unique<BackgroundTask>(
+	return std::make_unique<BackgroundTask>(
 
 		subject,
 
 		[backgroundContext, backgroundMonitors, function] ( const IECore::Canceller &canceller ) {
 
-			ContextPtr c = new Context( *backgroundContext, canceller );
-			Context::Scope contextScope( c.get() );
+			Context::EditableScope contextScope( backgroundContext.get() );
+			contextScope.setCanceller( &canceller );
 			Monitor::Scope monitorScope( backgroundMonitors );
 
 			function();

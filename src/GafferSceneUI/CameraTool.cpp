@@ -44,15 +44,18 @@
 #include "Gaffer/StringPlug.h"
 #include "Gaffer/UndoScope.h"
 
+#include "Gaffer/Private/ScopedAssignment.h"
+
 #include "IECore/AngleConversion.h"
 
 #include "OpenEXR/ImathEuler.h"
 #include "OpenEXR/ImathMatrix.h"
 
 #include "boost/algorithm/string/predicate.hpp"
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace Gaffer;
@@ -87,7 +90,7 @@ void setValueOrAddKey( Gaffer::FloatPlug *plug, float time, float value )
 	if( Animation::isAnimated( plug ) )
 	{
 		Animation::CurvePlug *curve = Animation::acquire( plug );
-		curve->addKey( new Animation::Key( time, value ) );
+		curve->insertKey( time, value );
 	}
 	else
 	{
@@ -95,13 +98,15 @@ void setValueOrAddKey( Gaffer::FloatPlug *plug, float time, float value )
 	}
 }
 
+bool g_editingTransform = false;
+
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
 // CameraTool
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( CameraTool );
+GAFFER_NODE_DEFINE_TYPE( CameraTool );
 
 CameraTool::ToolDescription<CameraTool, SceneView> CameraTool::g_toolDescription;
 
@@ -118,12 +123,12 @@ CameraTool::CameraTool( SceneView *view, const std::string &name )
 	view->plugDirtiedSignal().connect( boost::bind( &CameraTool::plugDirtied, this, ::_1 ) );
 	plugDirtiedSignal().connect( boost::bind( &CameraTool::plugDirtied, this, ::_1 ) );
 
-	// Snoop on the signals used for interaction with the viewport. We connect with group 0
+	// Snoop on the signals used for interaction with the viewport. We connect at the front
 	// so that we are called before everything else.
-	view->viewportGadget()->dragBeginSignal().connect( 0, boost::bind( &CameraTool::viewportDragBegin, this, ::_2 ) );
-	view->viewportGadget()->wheelSignal().connect( 0, boost::bind( &CameraTool::viewportWheel, this, ::_2 ) );
-	view->viewportGadget()->keyPressSignal().connect( 0, boost::bind( &CameraTool::viewportKeyPress, this, ::_2 ) );
-	view->viewportGadget()->buttonPressSignal().connect( 0, boost::bind( &CameraTool::viewportButtonPress, this, ::_2 ) );
+	view->viewportGadget()->dragBeginSignal().connectFront( boost::bind( &CameraTool::viewportDragBegin, this, ::_2 ) );
+	view->viewportGadget()->wheelSignal().connectFront( boost::bind( &CameraTool::viewportWheel, this, ::_2 ) );
+	view->viewportGadget()->keyPressSignal().connectFront( boost::bind( &CameraTool::viewportKeyPress, this, ::_2 ) );
+	view->viewportGadget()->buttonPressSignal().connectFront( boost::bind( &CameraTool::viewportButtonPress, this, ::_2 ) );
 	// Connect to `cameraChangedSignal()` so we can turn the viewport interaction into
 	// camera edits in the node graph itself.
 	m_viewportCameraChangedConnection = view->viewportGadget()->cameraChangedSignal().connect(
@@ -132,7 +137,7 @@ CameraTool::CameraTool( SceneView *view, const std::string &name )
 
 	// Connect to the preRender signal so we can coordinate ourselves with the work
 	// that the SceneView::Camera class does to look through the camera we will be editing.
-	view->viewportGadget()->preRenderSignal().connect( 0, boost::bind( &CameraTool::preRenderBegin, this ) );
+	view->viewportGadget()->preRenderSignal().connectFront( boost::bind( &CameraTool::preRenderBegin, this ) );
 	view->viewportGadget()->preRenderSignal().connect( boost::bind( &CameraTool::preRenderEnd, this ) );
 }
 
@@ -181,7 +186,17 @@ void CameraTool::plugDirtied( const Gaffer::Plug *plug )
 		plug == view()->editScopePlug()
 	)
 	{
-		m_cameraSelectionDirty = true;
+		if( !g_editingTransform )
+		{
+			m_cameraSelectionDirty = true;
+		}
+		else
+		{
+			// If the scene is dirtied as a result of an edit we make,
+			// we do not expect it to invalidate our selection. Nor do we
+			// want the performance hit of selection updates during dragging,
+			// so we simply don't dirty the selection.
+		}
 		view()->viewportGadget()->renderRequestSignal()( view()->viewportGadget() );
 	}
 }
@@ -225,12 +240,20 @@ const TransformTool::Selection &CameraTool::cameraSelection()
 	ScenePlug::ScenePath cameraPath = this->cameraPath();
 	if( !cameraPath.empty() )
 	{
-		m_cameraSelection = TransformTool::Selection(
+		TransformTool::Selection candidateSelection(
 			scenePlug(),
 			cameraPath,
 			view()->getContext(),
 			view()->editScope()
 		);
+		// TransformTool::Selection will fall back to editing
+		// a parent path if it can't edit the `cameraPath`.
+		// Parent edits are not suitable for the camera tool, so
+		// we reject them.
+		if( candidateSelection.path() == cameraPath )
+		{
+			m_cameraSelection = candidateSelection;
+		}
 	}
 
 	m_cameraSelectionDirty = false;
@@ -244,7 +267,7 @@ void CameraTool::preRenderBegin()
 	// trying to reflect that update back into the graph.
 	/// \todo Should we have a more explicit synchronisation between
 	/// SceneView::Camera and CameraTool?
-	m_viewportCameraChangedConnection.block();
+	m_viewportCameraChangedConnection.setBlocked( true );
 }
 
 void CameraTool::preRenderEnd()
@@ -276,9 +299,12 @@ void CameraTool::preRenderEnd()
 		}
 	}
 
-	view()->viewportGadget()->setCameraEditable(
-		!lookThroughEnabledPlug()->getValue() ||
-		selectionEditable
+	const bool lookThroughEnabled = lookThroughEnabledPlug()->getValue();
+	view()->viewportGadget()->setCameraEditable( !lookThroughEnabled || selectionEditable );
+	// We can't "dolly" an orthographic camera because that modifies the aperture,
+	// and we can't currently reflect aperture edits into the node graph.
+	view()->viewportGadget()->setDollyingEnabled(
+		!lookThroughEnabled || view()->viewportGadget()->getCamera()->getProjection() == "perspective"
 	);
 
 	if( selectionEditable )
@@ -286,7 +312,7 @@ void CameraTool::preRenderEnd()
 		view()->viewportGadget()->setCenterOfInterest(
 			getCameraCenterOfInterest( selection.path() )
 		);
-		m_viewportCameraChangedConnection.unblock();
+		m_viewportCameraChangedConnection.setBlocked( false );
 	}
 }
 
@@ -335,6 +361,8 @@ void CameraTool::viewportCameraChanged()
 
 	// Figure out the offset from where the camera is in the scene
 	// to where the user has just moved the viewport camera.
+	// Note: The ViewportGadget will have removed any scale/shear from
+	// the matrix.
 
 	const M44f viewportCameraTransform = view()->viewportGadget()->getCameraTransform();
 	M44f cameraTransform;
@@ -360,6 +388,7 @@ void CameraTool::viewportCameraChanged()
 
 	// Now apply this offset to the current value on the transform plug.
 
+	Gaffer::Private::ScopedAssignment<bool> editingScope( g_editingTransform, true );
 	UndoScope undoScope( selection.editTarget()->ancestor<ScriptNode>(), UndoScope::Enabled, m_undoGroup );
 	auto edit = selection.acquireTransformEdit();
 

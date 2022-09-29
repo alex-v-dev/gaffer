@@ -93,7 +93,11 @@ class PythonExpressionEngine( Gaffer.Expression.Engine ) :
 			plugPathSplit = plugPath.split( "." )
 			for p in plugPathSplit[:-1] :
 				parentDict = parentDict[p]
-			result.append( parentDict.get( plugPathSplit[-1], IECore.NullObject.defaultNullObject() ) )
+			r = parentDict.get( plugPathSplit[-1], IECore.NullObject.defaultNullObject() )
+			try:
+				result.append( r )
+			except:
+				raise TypeError( "Unsupported type for result \"%s\" for expression output \"%s\"" % ( str( r ), plugPath ) )
 
 		return result
 
@@ -208,8 +212,8 @@ class PythonExpressionEngine( Gaffer.Expression.Engine ) :
 	def __plugRegex( self, node, plug ) :
 
 		identifier = self.identifier( node, plug )
-		regex = identifier.replace( "[", "\[" )
-		regex = regex.replace( "]", "\]" )
+		regex = identifier.replace( "[", r"\[" )
+		regex = regex.replace( "]", r"\]" )
 		regex = regex.replace( '"', "['\"']" )
 
 		return re.compile( regex )
@@ -353,6 +357,13 @@ def __boxPlugValueExtractor( plug, topLevelPlug, value ) :
 
 	return vector[index]
 
+def __compoundObjectPlugValueExtractor( plug, topLevelPlug, value ) :
+
+	if isinstance( value, IECore.CompoundData ) :
+		return IECore.CompoundObject( dict( value ) )
+	else :
+		return value
+
 def __defaultValueExtractor( plug, topLevelPlug, value ) :
 
 	with IECore.IgnoredExceptions( AttributeError ) :
@@ -394,6 +405,7 @@ _valueExtractors = {
 	Gaffer.Box2iPlug : __boxPlugValueExtractor,
 	Gaffer.Box3fPlug : __boxPlugValueExtractor,
 	Gaffer.Box3iPlug : __boxPlugValueExtractor,
+	Gaffer.CompoundObjectPlug : __compoundObjectPlugValueExtractor,
 }
 
 def _extractPlugValue( plug, topLevelPlug, value ) :
@@ -426,4 +438,3 @@ class _ContextProxy( object ) :
 			return getattr( self.__context, name )
 		else :
 			raise AttributeError( name )
-

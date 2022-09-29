@@ -37,14 +37,12 @@
 #ifndef GAFFER_METADATA_H
 #define GAFFER_METADATA_H
 
-#include "Gaffer/CatchingSignalCombiner.h"
 #include "Gaffer/Export.h"
+#include "Gaffer/Signals.h"
 
 #include "IECore/Data.h"
 #include "IECore/InternedString.h"
 #include "IECore/StringAlgo.h"
-
-#include "boost/signals.hpp"
 
 #include <functional>
 
@@ -64,20 +62,9 @@ class GAFFER_API Metadata
 
 	public :
 
-		/// Type for a singal emitted when new metadata is registered.
-		typedef boost::signal<void ( IECore::InternedString target, IECore::InternedString key ), CatchingSignalCombiner<void> > ValueChangedSignal;
-		/// Type for a signal emitted when new node metadata is registered. The
-		/// node argument will be null when generic (rather than per-instance)
-		/// metadata is registered.
-		typedef boost::signal<void ( IECore::TypeId nodeTypeId, IECore::InternedString key, Gaffer::Node *node ), CatchingSignalCombiner<void> > NodeValueChangedSignal;
-		/// Type for a signal emitted when new plug metadata is registered. The
-		/// plug argument will be null when generic (rather than per-instance)
-		/// metadata is registered.
-		typedef boost::signal<void ( IECore::TypeId typeId, const IECore::StringAlgo::MatchPattern &plugPath, IECore::InternedString key, Gaffer::Plug *plug ), CatchingSignalCombiner<void> > PlugValueChangedSignal;
-
-		typedef std::function<IECore::ConstDataPtr ()> ValueFunction;
-		typedef std::function<IECore::ConstDataPtr ( const GraphComponent *graphComponent )> GraphComponentValueFunction;
-		typedef std::function<IECore::ConstDataPtr ( const Plug *plug )> PlugValueFunction;
+		using ValueFunction = std::function<IECore::ConstDataPtr ()>;
+		using GraphComponentValueFunction = std::function<IECore::ConstDataPtr ( const GraphComponent * )>;
+		using PlugValueFunction = std::function<IECore::ConstDataPtr ( const Plug * )>;
 
 		/// Value registration
 		/// ==================
@@ -153,22 +140,54 @@ class GAFFER_API Metadata
 		/// with a GraphComponentValueFunction or PlugValueFunction then it is the
 		/// responsibility of the registrant to manually emit the signals
 		/// when necessary.
+
+		enum class ValueChangedReason
+		{
+			StaticRegistration,
+			StaticDeregistration,
+			InstanceRegistration,
+			InstanceDeregistration
+		};
+
+		using ValueChangedSignal = Signals::Signal<void ( IECore::InternedString target, IECore::InternedString key ), Signals::CatchingCombiner<void>>;
+		using NodeValueChangedSignal = Signals::Signal<void ( Node *node, IECore::InternedString key, ValueChangedReason reason ), Signals::CatchingCombiner<void>>;
+		using PlugValueChangedSignal = Signals::Signal<void ( Plug *plug, IECore::InternedString key, ValueChangedReason reason ), Signals::CatchingCombiner<void>>;
+
 		static ValueChangedSignal &valueChangedSignal();
-		static NodeValueChangedSignal &nodeValueChangedSignal();
-		static PlugValueChangedSignal &plugValueChangedSignal();
+		/// Returns a signal that will be emitted when metadata has changed for `node`.
+		static NodeValueChangedSignal &nodeValueChangedSignal( Node *node );
+		/// Returns a signal that will be emitted when metadata has changed for any plug on `node`.
+		static PlugValueChangedSignal &plugValueChangedSignal( Node *node );
+
+		/// Legacy signals
+		/// ==============
+		///
+		/// These signals are emitted when metadata is changed on _any_ node or
+		/// plug. Their usage leads to performance bottlenecks whereby all observers
+		/// are triggered by all edits. They will be removed in future.
+
+		using LegacyNodeValueChangedSignal = Signals::Signal<void ( IECore::TypeId nodeTypeId, IECore::InternedString key, Gaffer::Node *node ), Signals::CatchingCombiner<void>>;
+		using LegacyPlugValueChangedSignal = Signals::Signal<void ( IECore::TypeId typeId, const IECore::StringAlgo::MatchPattern &plugPath, IECore::InternedString key, Gaffer::Plug *plug ), Signals::CatchingCombiner<void>>;
+
+		/// Deprecated, but currently necessary for tracking inherited
+		/// changes to read-only metadata.
+		/// \deprecated
+		static LegacyNodeValueChangedSignal &nodeValueChangedSignal();
+		/// \deprecated
+		static LegacyPlugValueChangedSignal &plugValueChangedSignal();
 
 	private :
 
 		/// Per-instance Metadata is stored as a mapping from GraphComponent * to the
 		/// metadata values, and needs to be removed when the instance dies. Currently
 		/// there is no callback when a RefCounted object passes away, so we must rely
-		/// on the destructors for Node and Plug to call clearInstanceMetadata() for us.
+		/// on the destructors for Node and Plug to call instanceDestroyed() for us.
 		/// \todo This situation isn't particularly satisfactory - if we introduced
 		/// weak pointers and destruction callbacks for RefCounted objects then we could
 		/// tidy this up.
 		friend class Node;
 		friend class Plug;
-		static void clearInstanceMetadata( const GraphComponent *graphComponent );
+		static void instanceDestroyed( GraphComponent *graphComponent );
 
 		static IECore::ConstDataPtr valueInternal( IECore::InternedString target, IECore::InternedString key );
 		static IECore::ConstDataPtr valueInternal( const GraphComponent *target, IECore::InternedString key, bool instanceOnly );

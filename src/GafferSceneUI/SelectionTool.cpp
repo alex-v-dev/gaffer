@@ -44,8 +44,9 @@
 #include "GafferUI/Pointer.h"
 #include "GafferUI/Style.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace Gaffer;
@@ -80,7 +81,7 @@ class SelectionTool::DragOverlay : public GafferUI::Gadget
 				return;
 			}
 			m_startPosition = p;
-			requestRender();
+			dirty( DirtyType::Render );
 		}
 
 		const V3f &getStartPosition() const
@@ -95,7 +96,7 @@ class SelectionTool::DragOverlay : public GafferUI::Gadget
 				return;
 			}
 			m_endPosition = p;
-			requestRender();
+			dirty( DirtyType::Render );
 		}
 
 		const V3f &getEndPosition() const
@@ -105,14 +106,14 @@ class SelectionTool::DragOverlay : public GafferUI::Gadget
 
 	protected :
 
-		void doRenderLayer( Layer layer, const Style *style ) const override
+		void renderLayer( Layer layer, const Style *style, RenderReason reason ) const override
 		{
 			if( layer != Layer::Main )
 			{
-				return Gadget::doRenderLayer( layer, style );
+				return;
 			}
 
-			if( IECoreGL::Selector::currentSelector() )
+			if( isSelectionRender( reason ) )
 			{
 				return;
 			}
@@ -127,6 +128,19 @@ class SelectionTool::DragOverlay : public GafferUI::Gadget
 			style->renderSelectionBox( b );
 		}
 
+		unsigned layerMask() const override
+		{
+			return (unsigned)Layer::Main;
+		}
+
+		Imath::Box3f renderBound() const override
+		{
+			// we draw in raster space so don't have a sensible bound
+			Box3f b;
+			b.makeInfinite();
+			return b;
+		}
+
 	private :
 
 		Imath::V3f m_startPosition;
@@ -138,7 +152,7 @@ class SelectionTool::DragOverlay : public GafferUI::Gadget
 // SelectionTool implementation
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( SelectionTool );
+GAFFER_NODE_DEFINE_TYPE( SelectionTool );
 
 SelectionTool::ToolDescription<SelectionTool, SceneView> SelectionTool::g_toolDescription;
 static IECore::InternedString g_dragOverlayName( "__selectionToolDragOverlay" );

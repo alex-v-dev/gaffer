@@ -56,7 +56,7 @@ class GAFFERIMAGE_API Display : public ImageNode
 
 	public :
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::Display, DisplayTypeId, ImageNode );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::Display, DisplayTypeId, ImageNode );
 
 		Display( const std::string &name = defaultName<Display>() );
 		~Display() override;
@@ -70,7 +70,7 @@ class GAFFERIMAGE_API Display : public ImageNode
 		/// Emitted when a new driver has been created. This can
 		/// then be passed to `Display::setDriver()` to populate
 		/// a Display with an incoming image.
-		typedef boost::signal<void ( IECoreImage::DisplayDriver *driver, const IECore::CompoundData *parameters )> DriverCreatedSignal;
+		using DriverCreatedSignal = Gaffer::Signals::Signal<void ( IECoreImage::DisplayDriver *driver, const IECore::CompoundData *parameters )>;
 		static DriverCreatedSignal &driverCreatedSignal();
 
 		/// Emitted when a complete image has been received.
@@ -79,6 +79,9 @@ class GAFFERIMAGE_API Display : public ImageNode
 		void affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const override;
 
 	protected :
+
+		void hashViewNames( const GafferImage::ImagePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
+		IECore::ConstStringVectorDataPtr computeViewNames( const Gaffer::Context *context, const ImagePlug *parent ) const override;
 
 		void hashFormat( const GafferImage::ImagePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		GafferImage::Format computeFormat( const Gaffer::Context *context, const ImagePlug *parent ) const override;
@@ -122,9 +125,6 @@ class GAFFERIMAGE_API Display : public ImageNode
 };
 
 IE_CORE_DECLAREPTR( Display );
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<Display> > DisplayIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<Display> > RecursiveDisplayIterator;
 
 } // namespace GafferImage
 

@@ -154,7 +154,7 @@ class ExpressionTest( GafferTest.TestCase ) :
 
 		s["m1"] = GafferTest.MultiplyNode()
 
-		c = s["m1"].plugDirtiedSignal().connect( f )
+		s["m1"].plugDirtiedSignal().connect( f, scoped = False )
 
 		s["e"] = Gaffer.Expression()
 		s["e"].setExpression(
@@ -864,7 +864,7 @@ class ExpressionTest( GafferTest.TestCase ) :
 		s["e"] = Gaffer.Expression()
 		self.assertEqual( s["e"].getExpression(), ( "", "" ) )
 
-		c = s["e"].expressionChangedSignal().connect( f )
+		s["e"].expressionChangedSignal().connect( f, scoped = False )
 
 		with Gaffer.UndoScope( s ) :
 			s["e"].setExpression( 'parent["n"]["user"]["p"] = 10' )
@@ -1076,6 +1076,7 @@ class ExpressionTest( GafferTest.TestCase ) :
 		s["n"]["user"].addChild( Gaffer.V3fVectorDataPlug( defaultValue = IECore.V3fVectorData( [ imath.V3f( 1 ) ] ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 		s["n"]["user"].addChild( Gaffer.Color3fVectorDataPlug( defaultValue = IECore.Color3fVectorData( [ imath.Color3f( 1 ) ] ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 		s["n"]["user"].addChild( Gaffer.M44fVectorDataPlug( defaultValue = IECore.M44fVectorData( [ imath.M44f() ] ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
+		s["n"]["user"].addChild( Gaffer.M33fVectorDataPlug( defaultValue = IECore.M33fVectorData( [ imath.M33f() ] ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 		s["n"]["user"].addChild( Gaffer.V2iVectorDataPlug( defaultValue = IECore.V2iVectorData( [ imath.V2i() ] ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
 
 		s["e"] = Gaffer.Expression()
@@ -1437,7 +1438,7 @@ class ExpressionTest( GafferTest.TestCase ) :
 		ssLines = ss.split( "\n" )
 		ssLinesEdited = []
 		for l in ssLines:
-			m = re.match( "^__children\[\"e\"\]\[\"__expression\"\].setValue\( '(.*)' \)$", l )
+			m = re.match( r"^__children\[\"e\"\]\[\"__expression\"\].setValue\( '(.*)' \)$", l )
 			if not m:
 				ssLinesEdited.append( l )
 			else:
@@ -1452,6 +1453,89 @@ class ExpressionTest( GafferTest.TestCase ) :
 			self.assertAlmostEqual( s["dest%i"%i]["p"].getValue().x, 0.1 + 0.3 * i + 10 * i, places = 5 )
 			self.assertAlmostEqual( s["dest%i"%i]["p"].getValue().y, 0.2 + 0.3 * i + 10 * i, places = 5 )
 			self.assertAlmostEqual( s["dest%i"%i]["p"].getValue().z, 0.3 + 0.3 * i + 10 * i, places = 5 )
+
+	def testNoneOutput( self ) :
+
+		s = Gaffer.ScriptNode()
+		s["n"] = Gaffer.Node()
+		s["n"]["user"]["p"] = Gaffer.IntPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+
+		s["e"] = Gaffer.Expression()
+		s["e"].setExpression( "parent['n']['user']['p'] = None" )
+		six.assertRaisesRegex( self,
+			Gaffer.ProcessException,
+			".*TypeError: Unsupported type for result \"None\" for expression output \"n.user.p\"",
+			s["n"]["user"]["p"].getValue
+		)
+
+		s["e"].setExpression( "import math; parent['n']['user']['p'] = math" )
+		six.assertRaisesRegex( self,
+			Gaffer.ProcessException,
+			".*TypeError: Unsupported type for result \"<module 'math' from .*\" for expression output \"n.user.p\"",
+			s["n"]["user"]["p"].getValue
+		)
+
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testParallelPerformance( self ):
+		s = Gaffer.ScriptNode()
+		s["n"] = Gaffer.Node()
+		s["n"]["user"]["p"] = Gaffer.IntPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+
+		s["e"] = Gaffer.Expression()
+		s["e"].setExpression( inspect.cleandoc(
+			"""
+			q = 0
+			while q != 10000000:
+				q += 1
+			parent['n']['user']['p'] = 0
+			"""
+		) )
+
+		with GafferTest.TestRunner.PerformanceScope() :
+			GafferTest.parallelGetValue( s["n"]["user"]["p"], 100 )
+
+	def testRemoveDrivenSpreadsheetRow( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		# Expression drives column "b" from column "a"
+
+		s["spreadsheet"] = Gaffer.Spreadsheet()
+		s["spreadsheet"]["rows"].addColumn( Gaffer.FloatPlug( "a", defaultValue = 1 ) )
+		s["spreadsheet"]["rows"].addColumn( Gaffer.FloatPlug( "b" ) )
+		row = s["spreadsheet"]["rows"].addRow()
+
+		s["expression"] = Gaffer.Expression()
+		s["expression"].setExpression(
+			inspect.cleandoc(
+				"""
+				import imath
+				a = parent["spreadsheet"]["rows"]["row1"]["cells"]["a"]["value"]
+				parent["spreadsheet"]["rows"]["row1"]["cells"]["b"]["value"] = a * 2
+				"""
+			)
+		)
+
+		self.assertEqual( row["cells"]["b"]["value"].getValue(), 2 )
+
+		# Remove row that is connected to expression. The expression
+		# should be updated to show that the plugs have been disconnected.
+
+		s["spreadsheet"]["rows"].removeRow( row )
+
+		self.assertIsNone( row["cells"]["b"]["value"].getInput() )
+		self.assertEqual( row["cells"]["a"]["value"].outputs(), () )
+
+		self.assertEqual(
+			s["expression"].getExpression()[0],
+			inspect.cleandoc(
+				"""
+				import imath
+				a = 1.0
+				__disconnected = a * 2
+				"""
+			)
+		)
 
 if __name__ == "__main__":
 	unittest.main()

@@ -45,6 +45,7 @@ import GafferScene
 from . import _GafferSceneUI
 
 from . import ContextAlgo
+from . import SetUI
 
 ##########################################################################
 # HierarchyView
@@ -56,7 +57,7 @@ class HierarchyView( GafferUI.NodeSetEditor ) :
 
 		column = GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Vertical, borderWidth = 4, spacing = 4 )
 
-		GafferUI.NodeSetEditor.__init__( self, column, scriptNode, **kw )
+		GafferUI.NodeSetEditor.__init__( self, column, scriptNode, nodeSet = scriptNode.focusSet(), **kw )
 
 		searchFilter = _GafferSceneUI._HierarchyViewSearchFilter()
 		setFilter = _GafferSceneUI._HierarchyViewSetFilter()
@@ -74,38 +75,22 @@ class HierarchyView( GafferUI.NodeSetEditor ) :
 			self.__pathListing = GafferUI.PathListingWidget(
 				Gaffer.DictPath( {}, "/" ), # temp till we make a ScenePath
 				columns = [ GafferUI.PathListingWidget.defaultNameColumn ],
-				allowMultipleSelection = True,
+				selectionMode = GafferUI.PathListingWidget.SelectionMode.Rows,
 				displayMode = GafferUI.PathListingWidget.DisplayMode.Tree,
 			)
 			self.__pathListing.setDragPointer( "objects" )
 			self.__pathListing.setSortable( False )
 
-			# Work around insanely slow selection of a range containing many
-			# objects (using a shift-click). The default selection behaviour
-			# is SelectRows and this triggers some terrible performance problems
-			# in Qt. Since we only have a single column, there is no difference
-			# between SelectItems and SelectRows other than the speed.
-			#
-			# This workaround isn't going to be sufficient when we come to add
-			# additional columns to the HierarchyView. What _might_ work instead
-			# is to override `QTreeView.setSelection()` in PathListingWidget.py,
-			# so that we manually expand the selected region to include full rows,
-			# and then don't have to pass the `QItemSelectionModel::Rows` flag to
-			# the subsequent `QItemSelectionModel::select()` call. This would be
-			# essentially the same method we used to speed up
-			# `PathListingWidget.setSelection()`.
-			#
-			# Alternatively we could avoid QItemSelectionModel entirely by managing
-			# the selection ourself as a persistent PathMatcher.
-			self.__pathListing._qtWidget().setSelectionBehavior(
-				self.__pathListing._qtWidget().SelectionBehavior.SelectItems
-			)
+			self.__selectionChangedConnection = self.__pathListing.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__selectionChanged ), scoped = False )
+			self.__expansionChangedConnection = self.__pathListing.expansionChangedSignal().connect( Gaffer.WeakMethod( self.__expansionChanged ), scoped = False )
 
-			self.__selectionChangedConnection = self.__pathListing.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__selectionChanged ) )
-			self.__expansionChangedConnection = self.__pathListing.expansionChangedSignal().connect( Gaffer.WeakMethod( self.__expansionChanged ) )
+			self.__pathListing.contextMenuSignal().connect( Gaffer.WeakMethod( self.__contextMenuSignal ), scoped = False )
+			self.__pathListing.keyPressSignal().connect( Gaffer.WeakMethod( self.__keyPressSignal ), scoped = False )
 
 		self.__plug = None
 		self._updateFromSet()
+		self.__transferExpansionFromContext()
+		self.__transferSelectionFromContext()
 
 	def scene( self ) :
 
@@ -124,7 +109,9 @@ class HierarchyView( GafferUI.NodeSetEditor ) :
 		if node is not None :
 			self.__plug = next( GafferScene.ScenePlug.RecursiveOutputRange( node ), None )
 			if self.__plug is not None :
-				self.__plugParentChangedConnection = self.__plug.parentChangedSignal().connect( Gaffer.WeakMethod( self.__plugParentChanged ) )
+				self.__plugParentChangedConnection = self.__plug.parentChangedSignal().connect(
+					Gaffer.WeakMethod( self.__plugParentChanged ), scoped = True
+				)
 
 		# call base class update - this will trigger a call to _titleFormat(),
 		# hence the need for already figuring out the plug.
@@ -176,27 +163,62 @@ class HierarchyView( GafferUI.NodeSetEditor ) :
 			contextCopy = Gaffer.Context( self.getContext() )
 			for f in self.__filter.getFilters() :
 				f.setContext( contextCopy )
-			with Gaffer.BlockedConnection( self.__selectionChangedConnection ) :
+			with Gaffer.Signals.BlockedConnection( self.__selectionChangedConnection ) :
 				self.__pathListing.setPath( GafferScene.ScenePath( self.__plug, contextCopy, "/", filter = self.__filter ) )
-			self.__transferExpansionFromContext()
-			self.__transferSelectionFromContext()
 		else :
-			with Gaffer.BlockedConnection( self.__selectionChangedConnection ) :
+			with Gaffer.Signals.BlockedConnection( self.__selectionChangedConnection ) :
 				self.__pathListing.setPath( Gaffer.DictPath( {}, "/" ) )
 
 	def __expansionChanged( self, pathListing ) :
 
 		assert( pathListing is self.__pathListing )
 
-		with Gaffer.BlockedConnection( self._contextChangedConnection() ) :
+		with Gaffer.Signals.BlockedConnection( self._contextChangedConnection() ) :
 			ContextAlgo.setExpandedPaths( self.getContext(), pathListing.getExpansion() )
 
 	def __selectionChanged( self, pathListing ) :
 
 		assert( pathListing is self.__pathListing )
 
-		with Gaffer.BlockedConnection( self._contextChangedConnection() ) :
+		with Gaffer.Signals.BlockedConnection( self._contextChangedConnection() ) :
 			ContextAlgo.setSelectedPaths( self.getContext(), pathListing.getSelection() )
+
+	def __keyPressSignal( self, widget, event ) :
+
+		if event.key == "C" and event.modifiers == event.Modifiers.Control :
+			self.__copySelectedPaths()
+			return True
+
+		return False
+
+	def __contextMenuSignal( self, widget ) :
+
+		menuDefinition = IECore.MenuDefinition()
+
+		selection = self.__pathListing.getSelection()
+		menuDefinition.append(
+			"Copy Path%s" % ( "" if selection.size() == 1 else "s" ),
+			{
+				"command" : Gaffer.WeakMethod( self.__copySelectedPaths ),
+				"active" : not selection.isEmpty(),
+				"shortCut" : "Ctrl+C"
+			}
+		)
+
+		self.__contextMenu = GafferUI.Menu( menuDefinition )
+		self.__contextMenu.popup( widget )
+
+		return True
+
+	def __copySelectedPaths( self, *unused ) :
+
+		if self.__plug is None :
+			return
+
+		selection = self.__pathListing.getSelection()
+		if not selection.isEmpty() :
+			data = IECore.StringVectorData( selection.paths() )
+			self.__plug.ancestor( Gaffer.ApplicationRoot ).setClipboardContents( data )
 
 	@GafferUI.LazyMethod( deferUntilPlaybackStops = True )
 	def __transferExpansionFromContext( self ) :
@@ -205,14 +227,14 @@ class HierarchyView( GafferUI.NodeSetEditor ) :
 		if expandedPaths is None :
 			return
 
-		with Gaffer.BlockedConnection( self.__expansionChangedConnection ) :
+		with Gaffer.Signals.BlockedConnection( self.__expansionChangedConnection ) :
 			self.__pathListing.setExpansion( expandedPaths )
 
 	@GafferUI.LazyMethod( deferUntilPlaybackStops = True )
 	def __transferSelectionFromContext( self ) :
 
 		selection = ContextAlgo.getSelectedPaths( self.getContext() )
-		with Gaffer.BlockedConnection( self.__selectionChangedConnection ) :
+		with Gaffer.Signals.BlockedConnection( self.__selectionChangedConnection ) :
 			self.__pathListing.setSelection( selection, scrollToFirst=True, expandNonLeaf=False )
 
 GafferUI.Editor.registerType( "HierarchyView", HierarchyView )
@@ -293,10 +315,12 @@ class _SetFilterWidget( GafferUI.PathFilterWidget ) :
 		if len( availableSets - builtInSets ) :
 			m.append( "/BuiltInDivider", { "divider" : True } )
 
+		pathFn = SetUI.getMenuPathFunction()
+
 		for s in sorted( availableSets | selectedSets ) :
 			if s in builtInSets :
 				continue
-			m.append( "/" + str( s ), item( s ) )
+			m.append( "/" + pathFn( s ), item( s ) )
 
 		return m
 

@@ -1008,30 +1008,31 @@ class OSLObjectTest( GafferOSLTest.OSLTestCase ) :
 
 		cs = GafferTest.CapturingSlot( o.plugDirtiedSignal() )
 
-		s["transform"]["translate"]["x"].setValue( 1 )
-		def checkAffected( expected ):
-			self.assertEqual( [ i[0].getName() for i in cs if i[0].parent() == o["out"] ], expected )
+		def checkAffected( expected ) :
+
+			self.assertEqual(
+				{ i[0].getName() for i in cs if i[0].parent() == o["out"] },
+				set( expected )
+			)
 			del cs[:]
-		checkAffected( ["transform", "bound" ] )
+
+		s["transform"]["translate"]["x"].setValue( 1 )
+		checkAffected( [ "transform", "bound", "childBounds" ] )
 
 		o["useTransform"].setValue( True )
-
-		checkAffected( ["object", "bound" ] )
+		checkAffected( [ "object", "bound", "childBounds" ] )
 
 		s["transform"]["translate"]["x"].setValue( 2 )
-
-		checkAffected( ["transform", "object", "bound" ] )
+		checkAffected( [ "transform", "object", "bound", "childBounds" ] )
 
 		a["attributes"][0]["value"].setValue( 1 )
-		checkAffected( ["attributes" ] )
+		checkAffected( [ "attributes" ] )
 
 		o["useAttributes"].setValue( True )
-
-		checkAffected( ["object", "bound" ] )
+		checkAffected( [ "object", "bound", "childBounds" ] )
 
 		a["attributes"][0]["value"].setValue( 2 )
-
-		checkAffected( ["attributes", "object", "bound" ] )
+		checkAffected( [ "attributes", "object", "bound", "childBounds" ] )
 
 	def testBoundsUpdate( self ) :
 
@@ -1104,4 +1105,3 @@ class OSLObjectTest( GafferOSLTest.OSLTestCase ) :
 
 if __name__ == "__main__":
 	unittest.main()
-

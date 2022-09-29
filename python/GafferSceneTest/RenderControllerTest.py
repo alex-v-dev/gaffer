@@ -497,5 +497,403 @@ class RenderControllerTest( GafferSceneTest.SceneTestCase ) :
 
 		del capturedSphere
 
+	def testNullObjects( self ) :
+
+		camera = GafferScene.Camera()
+		sphere = GafferScene.Sphere()
+		light = GafferSceneTest.TestLight()
+
+		lightAttr = GafferScene.StandardAttributes()
+		lightAttr["in"].setInput( sphere["out"] )
+		lightAttr["attributes"]["linkedLights"]["enabled"].setValue( True )
+		lightAttr["attributes"]["linkedLights"]["value"].setValue( "defaultLights" )
+
+		group = GafferScene.Group()
+		group["in"][0].setInput( camera["out"] )
+		group["in"][1].setInput( sphere["out"] )
+		group["in"][2].setInput( light["out"] )
+
+		allFilter = GafferScene.PathFilter()
+		allFilter["paths"].setValue( IECore.StringVectorData( [ "..." ] ) )
+
+		attr = GafferScene.CustomAttributes()
+		unrenderableAttrPlug = Gaffer.NameValuePlug( "cr:unrenderable", IECore.BoolData( True ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		attr["attributes"].addChild( unrenderableAttrPlug )
+		attr["filter"].setInput( allFilter["out"] )
+		attr["in"].setInput( group["out"] )
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+		controller = GafferScene.RenderController( attr["out"], Gaffer.Context(), renderer )
+		controller.setMinimumExpansionDepth( 10 )
+		controller.update()
+
+	def testBlur( self ) :
+
+		sphere = GafferScene.Sphere()
+		sphere["type"].setValue( sphere.Type.Primitive )
+		sphereFilter = GafferScene.PathFilter()
+		sphereFilter["paths"].setValue( IECore.StringVectorData( [ "/sphere" ] ) )
+		sphereAttributes = GafferScene.StandardAttributes()
+		sphereAttributes["in"].setInput( sphere["out"] )
+		sphereAttributes["filter"].setInput( sphereFilter["out"] )
+
+		group = GafferScene.Group()
+		group["in"][0].setInput( sphereAttributes["out"] )
+		groupFilter = GafferScene.PathFilter()
+		groupFilter["paths"].setValue( IECore.StringVectorData( [ "/group" ] ) )
+		groupAttributes = GafferScene.StandardAttributes()
+		groupAttributes["in"].setInput( group["out"] )
+		groupAttributes["filter"].setInput( groupFilter["out"] )
+
+		options = GafferScene.StandardOptions()
+		options["in"].setInput( groupAttributes["out"] )
+
+		# Animated source for testing
+		frame = GafferTest.FrameNode()
+
+		# Source that isn't animated, but has an animated hash
+		dummyFrame = Gaffer.Node()
+		dummyFrame["output"] = Gaffer.FloatPlug()
+		dummyFrame["expression"] = Gaffer.Expression()
+		dummyFrame["expression"].setExpression( 'parent["output"] = context.getFrame() * 0 + 3' )
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+		controller = GafferScene.RenderController( options["out"], Gaffer.Context(), renderer )
+		controller.setMinimumExpansionDepth( 2 )
+		controller.update()
+
+		def assertMotionSamples( expectedSamples, deform ) :
+
+			capturedSphere = renderer.capturedObject( "/group/sphere" )
+			self.assertIsNotNone( capturedSphere )
+
+			if deform:
+				samples = [ i.radius() for i in capturedSphere.capturedSamples() ]
+				times = capturedSphere.capturedSampleTimes()
+			else:
+				samples = [ i.translation().x for i in capturedSphere.capturedTransforms() ]
+				times = capturedSphere.capturedTransformTimes()
+
+			self.assertEqual( len( samples ), len( expectedSamples ) )
+			for (i,j) in zip( samples, expectedSamples ):
+				self.assertAlmostEqual( i, j, places = 6 )
+
+			if len( expectedSamples ) > 1 :
+				self.assertEqual( len( times ), len( expectedSamples ) )
+				for (i,j) in zip( times, expectedSamples ):
+					self.assertAlmostEqual( i, j, places = 6 )
+			else :
+				self.assertEqual( times, [] )
+
+		# INITIAL TRANSFORM TESTS
+
+		assertMotionSamples( [ 0 ], False )
+		sphere["transform"]["translate"]["x"].setValue( 2 )
+		controller.update()
+		assertMotionSamples( [ 2 ], False )
+
+		# Hook up animated value, but blur not turned on yet
+		sphere["transform"]["translate"]["x"].setInput( frame["output"] )
+		controller.update()
+		assertMotionSamples( [ 1 ], False )
+
+		# Test blur.
+		options['options']['transformBlur']["enabled"].setValue( True )
+		options['options']['transformBlur']["value"].setValue( True )
+		controller.update()
+		assertMotionSamples( [ 0.75, 1.25 ], False )
+
+		# Test blur on but no movement
+		sphere["transform"]["translate"]["x"].setInput( None )
+		controller.update()
+		assertMotionSamples( [ 2 ], False )
+
+		# We get a single sample out even if the transform hash is changing but the transform isn't
+		sphere["transform"]["translate"]["x"].setInput( dummyFrame["output"] )
+		controller.update()
+		assertMotionSamples( [ 3 ], False )
+
+		# INITIAL DEFORMATION TESTS
+		# Test non-blurred updates.
+
+		assertMotionSamples( [ 1 ], True )
+		sphere["radius"].setValue( 2 )
+		controller.update()
+		assertMotionSamples( [ 2 ], True )
+
+		# Hook up animated value, but blur not turned on yet
+		sphere["radius"].setInput( frame["output"] )
+		controller.update()
+		assertMotionSamples( [ 1 ], True )
+
+		# Test deformation blur.
+		options['options']['deformationBlur']["enabled"].setValue( True )
+		options['options']['deformationBlur']["value"].setValue( True )
+		controller.update()
+		assertMotionSamples( [ 0.75, 1.25 ], True )
+
+		# Test deformation blur on but no deformation
+		sphere["radius"].setInput( None )
+		controller.update()
+		assertMotionSamples( [ 2 ], True )
+
+
+		# Test shutter
+		sphere["transform"]["translate"]["x"].setInput( frame["output"] )
+		sphere["radius"].setInput( frame["output"] )
+		options['options']['shutter']["enabled"].setValue( True )
+		options['options']['shutter']["value"].setValue( imath.V2f( -0.7, 0.4 ) )
+		controller.update()
+		assertMotionSamples( [ 0.3, 1.4 ], False )
+		assertMotionSamples( [ 0.3, 1.4 ], True )
+
+		# Test with camera shutter
+		camera = GafferScene.Camera()
+		group["in"][1].setInput( camera["out"] )
+		controller.update()
+		self.assertEqual( renderer.capturedObject( "/group/camera" ).capturedSamples()[0].getShutter(), imath.V2f( 0.3, 1.4 ) )
+
+		options['options']['renderCamera']["enabled"].setValue( True )
+		options['options']['renderCamera']["value"].setValue( "/group/camera" )
+		controller.update()
+		assertMotionSamples( [ 0.3, 1.4 ], False )
+		assertMotionSamples( [ 0.3, 1.4 ], True )
+		camera['renderSettingOverrides']['shutter']["enabled"].setValue( True )
+		camera['renderSettingOverrides']['shutter']["value"].setValue( imath.V2f( -0.5, 0.5 ) )
+		controller.update()
+		assertMotionSamples( [ 0.5, 1.5 ], False )
+		assertMotionSamples( [ 0.5, 1.5 ], True )
+		self.assertEqual( renderer.capturedObject( "/group/camera" ).capturedSamples()[0].getShutter(), imath.V2f( 0.5, 1.5 ) )
+
+		# Test attribute controls
+		camera['renderSettingOverrides']['shutter']["enabled"].setValue( False )
+		options['options']['shutter']["value"].setValue( imath.V2f( -0.4, 0.4 ) )
+		controller.update()
+		assertMotionSamples( [ 0.6, 1.4 ], False )
+		assertMotionSamples( [ 0.6, 1.4 ], True )
+
+		groupAttributes['attributes']['transformBlur']["enabled"].setValue( True )
+		groupAttributes['attributes']['transformBlur']["value"].setValue( False )
+		controller.update()
+		assertMotionSamples( [ 1 ], False )
+		sphereAttributes['attributes']['transformBlur']["enabled"].setValue( True )
+		controller.update()
+		assertMotionSamples( [ 0.6, 1.4 ], False )
+
+		groupAttributes['attributes']['deformationBlur']["enabled"].setValue( True )
+		groupAttributes['attributes']['deformationBlur']["value"].setValue( False )
+		controller.update()
+		assertMotionSamples( [ 1 ], True )
+		sphereAttributes['attributes']['deformationBlur']["enabled"].setValue( True )
+		controller.update()
+		assertMotionSamples( [ 0.6, 1.4 ], True )
+
+		groupAttributes['attributes']['transformBlurSegments']["enabled"].setValue( True )
+		groupAttributes['attributes']['transformBlurSegments']["value"].setValue( 4 )
+		groupAttributes['attributes']['deformationBlurSegments']["enabled"].setValue( True )
+		groupAttributes['attributes']['deformationBlurSegments']["value"].setValue( 2 )
+		controller.update()
+		assertMotionSamples( [ 0.6, 0.8, 1.0, 1.2, 1.4 ], False )
+		assertMotionSamples( [ 0.6, 1.0, 1.4 ], True )
+
+		sphereAttributes['attributes']['transformBlurSegments']["enabled"].setValue( True )
+		sphereAttributes['attributes']['transformBlurSegments']["value"].setValue( 2 )
+		sphereAttributes['attributes']['deformationBlurSegments']["enabled"].setValue( True )
+		sphereAttributes['attributes']['deformationBlurSegments']["value"].setValue( 4 )
+		controller.update()
+		assertMotionSamples( [ 0.6, 1.0, 1.4 ], False )
+		assertMotionSamples( [ 0.6, 0.8, 1.0, 1.2, 1.4 ], True )
+
+		groupAttributes['attributes']['transformBlur']["value"].setValue( True )
+		groupAttributes['attributes']['deformationBlur']["value"].setValue( True )
+		sphereAttributes['attributes']['transformBlur']["value"].setValue( False )
+		sphereAttributes['attributes']['deformationBlur']["value"].setValue( False )
+		controller.update()
+		assertMotionSamples( [ 1.0 ], False )
+		assertMotionSamples( [ 1.0 ], True )
+
+		# Apply transformation to group instead of sphere, giving the same results
+		sphere["transform"]["translate"]["x"].setInput( None )
+		sphere["transform"]["translate"]["x"].setValue( 0 )
+		group["transform"]["translate"]["x"].setInput( frame["output"] )
+
+		groupAttributes['attributes']['transformBlur']["value"].setValue( True )
+		sphereAttributes['attributes']['transformBlur']["value"].setValue( False )
+		sphereAttributes['attributes']['transformBlurSegments']["enabled"].setValue( False )
+		controller.update()
+		assertMotionSamples( [ 0.6, 0.8, 1.0, 1.2, 1.4 ], False )
+
+		# Override transform segments on sphere
+		sphereAttributes['attributes']['transformBlur']["value"].setValue( True )
+		sphereAttributes['attributes']['transformBlurSegments']["enabled"].setValue( True )
+		sphereAttributes['attributes']['transformBlurSegments']["value"].setValue( 1 )
+		controller.update()
+		# Very counter-intuitively, this does nothing, because the sphere is not moving
+		assertMotionSamples( [ 0.6, 0.8, 1.0, 1.2, 1.4 ], False )
+
+		# But then if the sphere moves, the sample count does take affect
+		sphere["transform"]["translate"]["y"].setInput( frame["output"] )
+		controller.update()
+		assertMotionSamples( [ 0.6, 1.4 ], False )
+
+	def testCoordinateSystem( self ) :
+
+		coordinateSystem = GafferScene.CoordinateSystem()
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+		controller = GafferScene.RenderController( coordinateSystem["out"], Gaffer.Context(), renderer )
+		controller.update()
+
+		capturedObject = renderer.capturedObject( "/coordinateSystem" )
+		self.assertEqual( capturedObject.capturedSamples(), [ coordinateSystem["out"].object( "/coordinateSystem" ) ] )
+
+	def testFailedAttributeEdit( self ) :
+
+		sphere = GafferScene.Sphere()
+
+		attributes = GafferScene.CustomAttributes()
+		attributes["in"].setInput( sphere["out"] )
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+		controller = GafferScene.RenderController( attributes["out"], Gaffer.Context(), renderer )
+		controller.update()
+		self.assertEqual( renderer.capturedObject( "/sphere" ).numAttributeEdits(), 1 )
+
+		# Successful edit should just update the object in place and
+		# increment `numAttributeEdits()`.
+
+		attributes["attributes"].addChild( Gaffer.NameValuePlug( "test", 10 ) )
+		controller.update()
+		self.assertEqual( renderer.capturedObject( "/sphere" ).numAttributeEdits(), 2 )
+		self.assertEqual( renderer.capturedObject( "/sphere" ).capturedAttributes().attributes()["test"], IECore.IntData( 10 ) )
+
+		# Failed edit should replace the object, so `numAttributeEdits()` should
+		# be reset to 1.
+
+		attributes["attributes"].addChild( Gaffer.NameValuePlug( "cr:uneditable", 10 ) )
+		with IECore.CapturingMessageHandler() as mh :
+			controller.update()
+
+		self.assertEqual( renderer.capturedObject( "/sphere" ).numAttributeEdits(), 1 )
+		self.assertEqual( renderer.capturedObject( "/sphere" ).capturedAttributes().attributes()["cr:uneditable"], IECore.IntData( 10 ) )
+
+		self.assertEqual( len( mh.messages ), 1 )
+		self.assertEqual( mh.messages[0].message, "1 attribute edit required geometry to be regenerated" )
+
+		# Adding `cr:unrenderable` should also cause an edit failure, because such
+		# objects can't be rendered. But this time the object should be removed
+		# and not replaced.
+
+		attributes["attributes"].addChild( Gaffer.NameValuePlug( "cr:unrenderable", True ) )
+		with IECore.CapturingMessageHandler() as mh :
+			controller.update()
+
+		self.assertIsNone( renderer.capturedObject( "/sphere" ) )
+
+	def testIDs( self ) :
+
+		cube = GafferScene.Cube()
+		sphere = GafferScene.Sphere()
+		plane = GafferScene.Plane()
+
+		group = GafferScene.Group()
+		group["in"][0].setInput( cube["out"] )
+		group["in"][1].setInput( sphere["out"] )
+		group["in"][2].setInput( plane["out"] )
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+		controller = GafferScene.RenderController( group["out"], Gaffer.Context(), renderer )
+		controller.setMinimumExpansionDepth( 2 )
+
+		paths = [ "/group/cube", "/group/sphere", "/group/plane" ]
+		for path in paths :
+			self.assertEqual(
+				controller.idForPath( path, createIfNecessary = False ), 0
+			)
+
+		controller.update()
+		for path in paths :
+			self.assertNotEqual(
+				controller.idForPath( path, createIfNecessary = False ), 0
+			)
+			self.assertEqual(
+				controller.pathForID( renderer.capturedObject( path ).id() ),
+				path
+			)
+			self.assertEqual(
+				controller.idForPath( path ),
+				renderer.capturedObject( path ).id()
+			)
+
+		self.assertIsNone( controller.pathForID( 0 ) )
+		self.assertIsNone( controller.pathForID( 4 ) )
+		self.assertEqual( 0, controller.idForPath( "/no/object/here" ) )
+		self.assertEqual( 0, controller.idForPath( "/no/object/here", createIfNecessary = False ) )
+		self.assertNotEqual( 0, controller.idForPath( "/might/exist/later/and/want/id/now", createIfNecessary = True ) )
+
+		self.assertEqual(
+			controller.pathsForIDs( [
+				renderer.capturedObject( p ).id() for p in paths
+			] ),
+			IECore.PathMatcher( paths )
+		)
+
+		self.assertEqual(
+			set( controller.idsForPaths( IECore.PathMatcher( paths ) ) ),
+			{ renderer.capturedObject( p ).id() for p in paths }
+		)
+
+	def testProgressCallback( self ) :
+
+		sphere = GafferScene.Sphere()
+		group = GafferScene.Group()
+		group["in"][0].setInput( sphere["out"] )
+		group["in"][1].setInput( sphere["out"] )
+		group["in"][2].setInput( sphere["out"] )
+
+		allFilter = GafferScene.PathFilter()
+		allFilter["paths"].setValue( IECore.StringVectorData( [ "/*", "/*/*" ] ) )
+
+		transform = GafferScene.Transform()
+		transform["in"].setInput( group["out"] )
+		transform["filter"].setInput( allFilter["out"] )
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+		controller = GafferScene.RenderController( transform["out"], Gaffer.Context(), renderer )
+		controller.setMinimumExpansionDepth( 2 )
+
+		statuses = []
+		def callback( status ) :
+
+			statuses.append( status )
+
+		# First update should yield one call per location (including the root),
+		# plus one for completion.
+		controller.update( callback )
+		Status = Gaffer.BackgroundTask.Status
+		self.assertEqual( statuses, [ Status.Running ] * 5 + [ Status.Completed ] )
+
+		# Next update should go straight to completion, because nothing has
+		# changed.
+		del statuses[:]
+		controller.update( callback )
+		self.assertEqual( statuses, [ Status.Completed ] )
+
+		# Move everything and do a partial update. We expect updates only to the
+		# path we requested, and it's ancestors (not including the root, because
+		# its transform hasn't changed).
+		del statuses[:]
+		transform["transform"]["translate"]["x"].setValue( 1 )
+		controller.updateMatchingPaths( IECore.PathMatcher( [ "/group/sphere" ] ), callback )
+		self.assertEqual( statuses, [ Status.Running ] * 2 + [ Status.Completed ] )
+
+		# Move everything again and do a background update with a priority path.
+		# We expect updates to all locations (except the root, because its transform
+		# hasn't changed).
+		del statuses[:]
+		transform["transform"]["translate"]["x"].setValue( 2 )
+		task = controller.updateInBackground( callback, priorityPaths = IECore.PathMatcher( [ "/group/sphere" ] ) )
+		task.wait()
+		self.assertEqual( statuses, [ Status.Running ] * 4 + [ Status.Completed ] )
+
 if __name__ == "__main__":
 	unittest.main()

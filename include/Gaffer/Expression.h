@@ -56,7 +56,7 @@ class GAFFER_API Expression : public ComputeNode
 		Expression( const std::string &name=defaultName<Expression>() );
 		~Expression() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( Gaffer::Expression, ExpressionTypeId, ComputeNode );
+		GAFFER_NODE_DECLARE_TYPE( Gaffer::Expression, ExpressionTypeId, ComputeNode );
 
 		/// Fills the vector with the names of all currently available languages.
 		static void languages( std::vector<std::string> &languages );
@@ -75,7 +75,7 @@ class GAFFER_API Expression : public ComputeNode
 		/// Returns the expression this node is currently set up to evaluate.
 		std::string getExpression( std::string &language ) const;
 
-		typedef boost::signal<void (Expression *)> ExpressionChangedSignal;
+		using ExpressionChangedSignal = Signals::Signal<void (Expression *)>;
 		/// Signal emitted whenever the expression has changed.
 		ExpressionChangedSignal &expressionChangedSignal();
 
@@ -90,7 +90,7 @@ class GAFFER_API Expression : public ComputeNode
 		/// for use in the Expression node. All methods
 		/// are protected as Engines are for the internal
 		/// use of the Expression node only.
-		class Engine : public IECore::RefCounted
+		class GAFFER_API Engine : public IECore::RefCounted
 		{
 
 			public :
@@ -120,6 +120,8 @@ class GAFFER_API Expression : public ComputeNode
 				/// to apply them to each of the individual output plugs.
 				/// \threading This function may be called concurrently.
 				virtual IECore::ConstObjectVectorPtr execute( const Context *context, const std::vector<const ValuePlug *> &proxyInputs ) const = 0;
+				/// What cache policy should be used for executing the expression.
+				virtual Gaffer::ValuePlug::CachePolicy executeCachePolicy() const = 0;
 				//@}
 
 				/// @name Language utilities
@@ -152,7 +154,7 @@ class GAFFER_API Expression : public ComputeNode
 				/// Creates an engine of the specified type.
 				static EnginePtr create( const std::string engineType );
 
-				typedef std::function<EnginePtr ()> Creator;
+				using Creator = std::function<EnginePtr ()>;
 				static void registerEngine( const std::string engineType, Creator creator );
 				static void registeredEngines( std::vector<std::string> &engineTypes );
 
@@ -167,7 +169,7 @@ class GAFFER_API Expression : public ComputeNode
 
 				friend class Expression;
 
-				typedef std::map<std::string, Creator> CreatorMap;
+				using CreatorMap = std::map<std::string, Creator>;
 				static CreatorMap &creators();
 
 		};
@@ -178,6 +180,8 @@ class GAFFER_API Expression : public ComputeNode
 
 		void hash( const ValuePlug *output, const Context *context, IECore::MurmurHash &h ) const override;
 		void compute( ValuePlug *output, const Context *context ) const override;
+
+		Gaffer::ValuePlug::CachePolicy computeCachePolicy( const Gaffer::ValuePlug *output ) const override;
 
 	private :
 

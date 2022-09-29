@@ -278,7 +278,7 @@ class PythonCommandTest( GafferTest.TestCase ) :
 		s["n"]["command"].setValue( "\n".join( commandLines ) )
 
 		d = self.__dispatcher( frameRange = "1-5" )
-		six.assertRaisesRegex( self, Exception, "Context has no entry named \"frame\"", d.dispatch, [ s[ "n" ] ] )
+		six.assertRaisesRegex( self, Exception, "Context has no variable named \"frame\"", d.dispatch, [ s[ "n" ] ] )
 
 		commandLines = inspect.cleandoc(
 			"""
@@ -395,7 +395,7 @@ class PythonCommandTest( GafferTest.TestCase ) :
 	def testContextGetNone( self ) :
 
 		command = GafferDispatch.PythonCommand()
-		command["command"].setValue( "print context.get( 'iAmNotHere' )" )
+		command["command"].setValue( "print( context.get( 'iAmNotHere' ) )" )
 
 		with Gaffer.Context() as c :
 			h = command["task"].hash()
@@ -405,7 +405,7 @@ class PythonCommandTest( GafferTest.TestCase ) :
 	def testAlternateMissingContextVariables( self ) :
 
 		command = GafferDispatch.PythonCommand()
-		command["command"].setValue( "print 'a : ', context.get( 'a' ), 'b : ', context.get( 'b' )" )
+		command["command"].setValue( "print( 'a : ', context.get( 'a' ), 'b : ', context.get( 'b' ) )" )
 
 		neitherHash = command["task"].hash()
 

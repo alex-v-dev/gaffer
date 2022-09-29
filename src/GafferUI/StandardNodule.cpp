@@ -50,14 +50,13 @@
 #include "Gaffer/ScriptNode.h"
 #include "Gaffer/UndoScope.h"
 
-#include "IECoreGL/Selector.h"
-
 #include "IECore/AngleConversion.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/bind/placeholders.hpp"
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace Gaffer;
 using namespace GafferUI;
@@ -83,7 +82,7 @@ StandardNodule::StandardNodule( Gaffer::PlugPtr plug )
 
 	dropSignal().connect( boost::bind( &StandardNodule::drop, this, ::_1, ::_2 ) );
 
-	Metadata::plugValueChangedSignal().connect( boost::bind( &StandardNodule::plugMetadataChanged, this, ::_1, ::_2, ::_3, ::_4 ) );
+	Metadata::plugValueChangedSignal( plug->node() ).connect( boost::bind( &StandardNodule::plugMetadataChanged, this, ::_1, ::_2 ) );
 
 	updateUserColor();
 }
@@ -99,7 +98,7 @@ void StandardNodule::setLabelVisible( bool labelVisible )
 		return;
 	}
 	m_labelVisible = labelVisible;
- 	requestRender();
+	dirty( DirtyType::Render );
 }
 
 bool StandardNodule::getLabelVisible() const
@@ -123,11 +122,11 @@ bool StandardNodule::canCreateConnection( const Gaffer::Plug *endpoint ) const
 
 	if( localPlug->direction() == Gaffer::Plug::Direction::In )
 	{
-		return localPlug->acceptsInput( endpoint );
+		return localPlug->acceptsInput( endpoint ) && !Gaffer::MetadataAlgo::readOnly( localPlug );
 	}
 	else
 	{
-		return endpoint->acceptsInput( localPlug );
+		return endpoint->acceptsInput( localPlug ) && !Gaffer::MetadataAlgo::readOnly( endpoint );
 	}
 }
 
@@ -136,7 +135,7 @@ void StandardNodule::updateDragEndPoint( const Imath::V3f position, const Imath:
 	m_dragPosition = position;
 	m_dragTangent = tangent;
 	m_draggingConnection = true;
- 	requestRender();
+	dirty( DirtyType::RenderBound );
 }
 
 void StandardNodule::createConnection( Gaffer::Plug *endpoint )
@@ -153,36 +152,14 @@ void StandardNodule::createConnection( Gaffer::Plug *endpoint )
 	}
 }
 
-bool StandardNodule::hasLayer( Layer layer ) const
-{
-	if( children().size() )
-	{
-		return true;
-	}
-
-	switch( layer )
-	{
-		case GraphLayer::Connections :
-			return m_draggingConnection;
-		case GraphLayer::Nodes :
-			return !getHighlighted();
-		case GraphLayer::Highlighting :
-			return getHighlighted();
-		case GraphLayer::Overlay :
-			return m_labelVisible && !IECoreGL::Selector::currentSelector();
-		default :
-			return false;
-	}
-}
-
-void StandardNodule::doRenderLayer( Layer layer, const Style *style ) const
+void StandardNodule::renderLayer( Layer layer, const Style *style, RenderReason reason ) const
 {
 	switch( layer )
 	{
 
 		case GraphLayer::Connections :
 
-			if( m_draggingConnection && !IECoreGL::Selector::currentSelector() )
+			if( m_draggingConnection && !isSelectionRender( reason ) )
 			{
 				V3f srcTangent( 0.0f, 1.0f, 0.0f );
 				if( const NodeGadget *nodeGadget = ancestor<NodeGadget>() )
@@ -197,7 +174,7 @@ void StandardNodule::doRenderLayer( Layer layer, const Style *style ) const
 
 			if( !getHighlighted() )
 			{
-				style->renderNodule( 0.5f, Style::NormalState, m_userColor.get_ptr() );
+				style->renderNodule( 0.5f, Style::NormalState, m_userColor ? &m_userColor.value() : nullptr );
 			}
 			break;
 
@@ -205,13 +182,13 @@ void StandardNodule::doRenderLayer( Layer layer, const Style *style ) const
 
 			if( getHighlighted() )
 			{
-				style->renderNodule( 1.0f, Style::HighlightedState, m_userColor.get_ptr() );
+				style->renderNodule( 1.0f, Style::HighlightedState, m_userColor ? &m_userColor.value() : nullptr );
 			}
 			break;
 
 		case GraphLayer::Overlay :
 
-			if( m_labelVisible && !IECoreGL::Selector::currentSelector() )
+			if( m_labelVisible && !isSelectionRender( reason ) )
 			{
 				renderLabel( style );
 			}
@@ -224,6 +201,27 @@ void StandardNodule::doRenderLayer( Layer layer, const Style *style ) const
 	}
 
 	// if the nodule isn't highlighted it will be drawn in the normal, non-overlayed manner
+}
+
+unsigned StandardNodule::layerMask() const
+{
+	return GraphLayer::Connections | GraphLayer::Nodes | GraphLayer::Highlighting | GraphLayer::Overlay;
+}
+
+Imath::Box3f StandardNodule::renderBound() const
+{
+	if( m_draggingConnection )
+	{
+		// When dragging a connection, we could drag it anywhere, and need to render it
+		Box3f b;
+		b.makeInfinite();
+		return b;
+	}
+	else
+	{
+		// Usual max size we render at ( when highlighted )
+		return Box3f( V3f( -1, -1, 0 ), V3f( 1, 1, 0 ) );
+	}
 }
 
 void StandardNodule::renderLabel( const Style *style ) const
@@ -311,7 +309,7 @@ bool StandardNodule::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 
 IECore::RunTimeTypedPtr StandardNodule::dragBegin( GadgetPtr gadget, const ButtonEvent &event )
 {
- 	requestRender();
+	dirty( DirtyType::Render );
 	if( event.buttons == ButtonEvent::Middle )
 	{
 		GafferUI::Pointer::setCurrent( "plug" );
@@ -374,7 +372,7 @@ bool StandardNodule::dragEnter( GadgetPtr gadget, const DragDropEvent &event )
 			setCompatibleLabelsVisible( event, true );
 		}
 
- 		requestRender();
+		dirty( DirtyType::Render );
 		return true;
 	}
 
@@ -384,7 +382,7 @@ bool StandardNodule::dragEnter( GadgetPtr gadget, const DragDropEvent &event )
 bool StandardNodule::dragMove( GadgetPtr gadget, const DragDropEvent &event )
 {
 	m_dragPosition = V3f( event.line.p0.x, event.line.p0.y, 0 );
- 	requestRender();
+	dirty( DirtyType::Render );
 	return true;
 }
 
@@ -413,13 +411,14 @@ bool StandardNodule::dragLeave( GadgetPtr gadget, const DragDropEvent &event )
 		{
 			setCompatibleLabelsVisible( event, false );
 		}
+		dirty( DirtyType::Render );
 	}
 	else if( !event.destinationGadget )
 	{
 		m_draggingConnection = false;
+		dirty( DirtyType::RenderBound );
 	}
 
- 	requestRender();
 	return true;
 }
 
@@ -427,6 +426,7 @@ bool StandardNodule::dragEnd( GadgetPtr gadget, const DragDropEvent &event )
 {
 	GafferUI::Pointer::setCurrent( "" );
 	m_draggingConnection = false;
+	dirty( DirtyType::RenderBound );
 	setHighlighted( false );
 	return true;
 }
@@ -465,7 +465,7 @@ void StandardNodule::setCompatibleLabelsVisible( const DragDropEvent &event, boo
 		return;
 	}
 
-	for( RecursiveStandardNoduleIterator it( nodeGadget ); !it.done(); ++it )
+	for( StandardNodule::RecursiveIterator it( nodeGadget ); !it.done(); ++it )
 	{
 		if( creator->canCreateConnection( it->get()->plug() ) )
 		{
@@ -474,9 +474,9 @@ void StandardNodule::setCompatibleLabelsVisible( const DragDropEvent &event, boo
 	}
 }
 
-void StandardNodule::plugMetadataChanged( IECore::TypeId nodeTypeId, const IECore::StringAlgo::MatchPattern &plugPath, IECore::InternedString key, const Gaffer::Plug *plug )
+void StandardNodule::plugMetadataChanged( const Gaffer::Plug *plug, IECore::InternedString key )
 {
-	if( !MetadataAlgo::affectedByChange( this->plug(), nodeTypeId, plugPath, plug ) )
+	if( plug != this->plug() )
 	{
 		return;
 	}
@@ -485,21 +485,21 @@ void StandardNodule::plugMetadataChanged( IECore::TypeId nodeTypeId, const IECor
 	{
 		if( updateUserColor() )
 		{
-			requestRender();
+			dirty( DirtyType::Render );
 		}
 	}
 	else if( key == g_labelKey )
 	{
 		if( m_labelVisible )
 		{
-			requestRender();
+			dirty( DirtyType::Render );
 		}
 	}
 }
 
 bool StandardNodule::updateUserColor()
 {
-	boost::optional<Color3f> c;
+	std::optional<Color3f> c;
 	if( IECore::ConstColor3fDataPtr d = Metadata::value<IECore::Color3fData>( plug(), g_colorKey ) )
 	{
 		c = d->readable();

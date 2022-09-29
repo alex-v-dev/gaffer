@@ -2,6 +2,7 @@
 #
 #  Copyright (c) 2011-2014, John Haddon. All rights reserved.
 #  Copyright (c) 2011-2014, Image Engine Design Inc. All rights reserved.
+#  Copyright 2019, Hypothetical Inc. All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions are
@@ -39,21 +40,27 @@ import os
 import re
 import sys
 import glob
-import shutil
-import fnmatch
-import functools
 import platform
-import py_compile
+import shutil
 import subprocess
+import distutils.dir_util
+
+if os.name == "nt":
+	import _locale
+	_locale._getdefaultlocale_backup = _locale._getdefaultlocale
+	_locale._getdefaultlocale = (lambda *args: (_locale._getdefaultlocale_backup()[0], 'utf8'))
+
+EnsureSConsVersion( 3, 0, 2 )  # Substfile is a default builder as of 3.0.2
 
 ###############################################################################################
 # Version
 ###############################################################################################
 
-gafferMilestoneVersion = 0 # for announcing major milestones - may contain all of the below
-gafferMajorVersion = 58 # backwards-incompatible changes
+gafferMilestoneVersion = 1 # for announcing major milestones - may contain all of the below
+gafferMajorVersion = 1 # backwards-incompatible changes
 gafferMinorVersion = 0 # new backwards-compatible features
 gafferPatchVersion = 0 # bug fixes
+gafferVersionSuffix = "" # used for alpha/beta releases : "a1", "b2", etc.
 
 # All of the following must be considered when determining
 # whether or not a change is backwards-compatible
@@ -80,13 +87,16 @@ options = Variables( optionsFile, ARGUMENTS )
 options.Add(
 	"CXX",
 	"The C++ compiler.",
-	"clang++" if sys.platform == "darwin" else "g++",
+	{"darwin" : "clang++", "win32" : "cl"}.get(sys.platform, "g++")
 )
 
 options.Add(
 	"CXXFLAGS",
 	"The extra flags to pass to the C++ compiler during compilation.",
-	[ "-pipe", "-Wall" ]
+	# We want `-Wextra` because some of its warnings are useful, and further useful
+	# warnings may be added in future. But it does introduce warnings we find unhelpful - see
+	# the compiler sections below where we turn them back off again.
+	[ "-pipe", "-Wall", "-Wextra" ] if Environment()["PLATFORM"] != "win32" else [],
 )
 
 options.Add(
@@ -100,8 +110,8 @@ options.Add(
 
 options.Add(
 	"CXXSTD",
-	"The C++ standard to build against. A minimum of C++11 is required.",
-	"c++11",
+	"The C++ standard to build against. A minimum of C++17 is required.",
+	"c++17",
 )
 
 options.Add(
@@ -121,7 +131,7 @@ options.Add(
 options.Add(
 	"BUILD_DIR",
 	"The destination directory in which the build will be made.",
-	"./build/gaffer-${GAFFER_MILESTONE_VERSION}.${GAFFER_MAJOR_VERSION}.${GAFFER_MINOR_VERSION}.${GAFFER_PATCH_VERSION}-${GAFFER_PLATFORM}",
+	os.path.join( ".", "build", "gaffer-${GAFFER_MILESTONE_VERSION}.${GAFFER_MAJOR_VERSION}.${GAFFER_MINOR_VERSION}.${GAFFER_PATCH_VERSION}${GAFFER_VERSION_SUFFIX}-${GAFFER_PLATFORM}" ),
 )
 
 options.Add(
@@ -135,13 +145,13 @@ options.Add(
 options.Add(
 	"INSTALL_DIR",
 	"The destination directory for the installation.",
-	"./install/gaffer-${GAFFER_MILESTONE_VERSION}.${GAFFER_MAJOR_VERSION}.${GAFFER_MINOR_VERSION}.${GAFFER_PATCH_VERSION}-${GAFFER_PLATFORM}",
+	os.path.join( ".", "install", "gaffer-${GAFFER_MILESTONE_VERSION}.${GAFFER_MAJOR_VERSION}.${GAFFER_MINOR_VERSION}.${GAFFER_PATCH_VERSION}${GAFFER_VERSION_SUFFIX}-${GAFFER_PLATFORM}" ),
 )
 
 options.Add(
 	"PACKAGE_FILE",
 	"The file in which the final gaffer file will be created by the package target.",
-	"${INSTALL_DIR}.tar.gz",
+	"${INSTALL_DIR}.tar.gz" if sys.platform != "win32" else "${INSTALL_DIR}.zip",
 )
 
 options.Add(
@@ -170,7 +180,13 @@ options.Add(
 options.Add(
 	"APPLESEED_ROOT",
 	"The directory in which Appleseed is installed. Used to build Gafferseed",
-	"$BUILD_DIR/appleseed",
+	os.path.join( "$BUILD_DIR", "appleseed" ),
+)
+
+options.Add(
+	"CYCLES_ROOT",
+	"The directory in which Cycles is installed. Used to build GafferCycles",
+	os.path.join( "$BUILD_DIR", "cycles" ),
 )
 
 options.Add(
@@ -234,6 +250,13 @@ options.Add(
 )
 
 options.Add(
+	"BOOST_PYTHON_LIB_SUFFIX",
+	"The suffix appended to the names of the python boost libraries. "
+	"You can modify this so that the correct python library name is used, "
+	"likely related to the specific python version.",
+)
+
+options.Add(
 	"GLEW_LIB_SUFFIX",
 	"The suffix used when locating the glew libraries.",
 	"",
@@ -275,6 +298,14 @@ options.Add(
 	"",
 )
 
+options.Add(
+	"USD_LIB_PREFIX",
+	"The prefix to prepend to the names of the USD libraries. You can modify this "
+	"to link against libraries installed with non-default names. "
+	"Should match the USD build option PXR_LIB_PREFIX",
+	"usd_"
+)
+
 # general variables
 
 options.Add(
@@ -283,6 +314,14 @@ options.Add(
 		"Builds and installs the GafferCortex modules. These are deprecated and will "
 		"be removed completely in a future version.",
 		False
+	)
+)
+
+options.Add(
+	BoolVariable(
+		"GAFFERUSD",
+		"Builds and installs the GafferUSD modules.",
+		True
 	)
 )
 
@@ -308,6 +347,12 @@ options.Add(
 )
 
 options.Add(
+	"PYBIND11",
+	"The directory in which pybind11 is installed."
+	"",
+)
+
+options.Add(
 	"INSTALL_POST_COMMAND",
 	"A command which is run following a successful install process. "
 	"This could be used to customise installation further for a "
@@ -315,35 +360,38 @@ options.Add(
 	"",
 )
 
+options.Add( "GAFFER_MILESTONE_VERSION", "Milestone version", str( gafferMilestoneVersion ) )
+options.Add( "GAFFER_MAJOR_VERSION", "Major version", str( gafferMajorVersion ) )
+options.Add( "GAFFER_MINOR_VERSION", "Minor version", str( gafferMinorVersion ) )
+options.Add( "GAFFER_PATCH_VERSION", "Patch version", str( gafferPatchVersion ) )
+options.Add( "GAFFER_VERSION_SUFFIX", "Version suffix", str( gafferVersionSuffix ) )
+
 ###############################################################################################
 # Basic environment object. All the other environments will be based on this.
 ###############################################################################################
+
+###########################################################################################
+# All platforms
+###########################################################################################
 
 env = Environment(
 
 	options = options,
 
-	GAFFER_MILESTONE_VERSION = str( gafferMilestoneVersion ),
-	GAFFER_MAJOR_VERSION = str( gafferMajorVersion ),
-	GAFFER_MINOR_VERSION = str( gafferMinorVersion ),
-	GAFFER_PATCH_VERSION = str( gafferPatchVersion ),
-
 	CPPDEFINES = [
-		( "GAFFER_MILESTONE_VERSION", "$GAFFER_MILESTONE_VERSION" ),
-		( "GAFFER_MAJOR_VERSION", "$GAFFER_MAJOR_VERSION" ),
-		( "GAFFER_MINOR_VERSION", "$GAFFER_MINOR_VERSION" ),
-		( "GAFFER_PATCH_VERSION", "$GAFFER_PATCH_VERSION" ),
+		( "BOOST_FILESYSTEM_VERSION", "3" ),
+		"BOOST_FILESYSTEM_NO_DEPRECATED",
+		# Boost has deprecated `boost/bind.hpp` in favour of
+		# `boost/bind/bind.hpp`, and we have updated our code accordingly. But
+		# `boost::python` and others are still using the deprecated header,
+		# so we define BOOST_BIND_GLOBAL_PLACEHOLDERS to silence the reams of
+		# warnings triggered by that.
+		"BOOST_BIND_GLOBAL_PLACEHOLDERS",
 	],
 
 	CPPPATH = [
 		"include",
 		"$LOCATE_DEPENDENCY_CPPPATH",
-	],
-
-	CPPFLAGS = [
-		"-DBOOST_FILESYSTEM_VERSION=3",
-		"-DBOOST_FILESYSTEM_NO_DEPRECATED",
-		"-DBOOST_SIGNALS_NO_DEPRECATION_WARNING",
 	],
 
 	LIBPATH = [
@@ -354,60 +402,76 @@ env = Environment(
 
 	FRAMEWORKPATH = "$BUILD_DIR/lib",
 
-
 )
+
 
 # include 3rd party headers with -isystem rather than -I.
 # this should turn off warnings from those headers, allowing us to
 # build with -Werror. there are so many warnings from boost
 # in particular that this would be otherwise impossible.
+
+systemIncludeArgument = "/external:I" if env[ "PLATFORM" ] == "win32" else "-isystem"
+
 for path in [
 		"$BUILD_DIR/include",
-		"$BUILD_DIR/include/python$PYTHON_VERSION",
 		"$BUILD_DIR/include/OpenEXR",
 		"$BUILD_DIR/include/GL",
 	] + env["LOCATE_DEPENDENCY_SYSTEMPATH"] :
 
 	env.Append(
-		CXXFLAGS = [ "-isystem", path ]
-	)
-
-if "clang++" in os.path.basename( env["CXX"] ):
-	env.Append(
-		CXXFLAGS = [ "-Wno-unused-local-typedef" ]
+		CXXFLAGS = [ systemIncludeArgument, path ]
 	)
 
 env["BUILD_DIR"] = os.path.abspath( env["BUILD_DIR"] )
 
-# DISPLAY and HOME are essential for running gaffer when generating
-# the documentation. TERM is needed to get coloured output from the
-# compiler.
-for e in env["ENV_VARS_TO_IMPORT"].split() + [ "DISPLAY", "HOME", "TERM" ] :
+for e in env["ENV_VARS_TO_IMPORT"].split() :
 	if e in os.environ :
 		env["ENV"][e] = os.environ[e]
 
-if env["PLATFORM"] == "darwin" :
+###########################################################################################
+# POSIX configuration
+###########################################################################################
 
-	env.Append( CXXFLAGS = [ "-D__USE_ISOC99" ] )
-	env["GAFFER_PLATFORM"] = "osx"
+if env["PLATFORM"] != "win32" :
 
-	osxVersion = [ int( v ) for v in platform.mac_ver()[0].split( "." ) ]
-	if osxVersion[0] == 10 and osxVersion[1] > 7 :
-		# Fix problems with Boost 1.55 and recent versions of Clang.
-		env.Append( CXXFLAGS = [ "-DBOOST_HAS_INT128", "-Wno-unused-local-typedef" ] )
+	# DISPLAY and HOME are essential for running gaffer when generating
+	# the documentation. TERM is needed to get coloured output from the
+	# compiler.
+	for e in [ "DISPLAY", "HOME", "TERM" ] :
+		if e in os.environ :
+			env["ENV"][e] = os.environ[e]
 
-elif env["PLATFORM"] == "posix" :
+	# Platform-specific config
 
-	if "g++" in os.path.basename( env["CXX"] ) :
+	if env["PLATFORM"] == "darwin" :
 
-		gccVersion = subprocess.check_output( [ env["CXX"], "-dumpversion" ], env=env["ENV"] ).decode().strip()
+		env.Append( CXXFLAGS = [ "-D__USE_ISOC99" ] )
+		env["GAFFER_PLATFORM"] = "macos"
+
+	else :
+
+		env["GAFFER_PLATFORM"] = "linux"
+
+	# Compiler-specific config
+
+	if "clang++" in os.path.basename( env["CXX"] ) :
+
+		env.Append(
+			CXXFLAGS = [ "-Wno-unused-local-typedef" ]
+		)
+
+		# Turn off the parts of `-Wextra` that we don't like.
+		env.Append( CXXFLAGS = [ "-Wno-unused-parameter" ] )
+
+	elif "g++" in os.path.basename( env["CXX"] ) :
+
+		# Get GCC version.
+		gccVersion = subprocess.check_output( [ env["CXX"], "-dumpversion" ], env=env["ENV"], universal_newlines=True ).strip()
+		if "." not in gccVersion :
+			# GCC 7 onwards requires `-dumpfullversion` to get minor/patch, but this
+			# flag does not exist on earlier GCCs, where minor/patch was provided by `-dumpversion`.
+			gccVersion = subprocess.check_output( [ env["CXX"], "-dumpfullversion" ], env=env["ENV"], universal_newlines=True ).strip()
 		gccVersion = [ int( v ) for v in gccVersion.split( "." ) ]
-
-		# GCC 4.1.2 in conjunction with boost::flat_map produces crashes when
-		# using the -fstrict-aliasing optimisation (which defaults to on with -O2),
-		# so we turn the optimisation off here, only for that specific GCC version.
-		if gccVersion == [ 4, 1, 2 ] :
-			env.Append( CXXFLAGS = [ "-fno-strict-aliasing" ] )
 
 		# GCC emits spurious "assuming signed overflow does not occur"
 		# warnings, typically triggered by the comparisons in Box3f::isEmpty().
@@ -415,25 +479,128 @@ elif env["PLATFORM"] == "posix" :
 		if gccVersion >= [ 4, 2 ] :
 			env.Append( CXXFLAGS = [ "-Wno-error=strict-overflow" ] )
 
-		if gccVersion >= [ 5, 1 ] :
+		if gccVersion >= [ 5, 1 ] and gccVersion < [ 11, 2 ] :
 			env.Append( CXXFLAGS = [ "-D_GLIBCXX_USE_CXX11_ABI=0" ] )
 
-	env["GAFFER_PLATFORM"] = "linux"
+		if gccVersion >= [ 9, 2 ] :
+			env.Append( CXXFLAGS = [ "-Wsuggest-override" ] )
 
-env.Append( CXXFLAGS = [ "-std=$CXXSTD", "-fvisibility=hidden" ] )
+		# Turn off the parts of `-Wextra` that we don't like.
+		env.Append( CXXFLAGS = [ "-Wno-cast-function-type", "-Wno-unused-parameter" ] )
 
-if env["BUILD_TYPE"] == "DEBUG" :
-	env.Append( CXXFLAGS = ["-g", "-O0", "-DTBB_USE_DEBUG=1"] )
-elif env["BUILD_TYPE"] == "RELEASE" :
-	env.Append( CXXFLAGS = ["-DNDEBUG", "-DBOOST_DISABLE_ASSERTS", "-O3"] )
-elif env["BUILD_TYPE"] == "RELWITHDEBINFO" :
-	env.Append( CXXFLAGS = ["-DNDEBUG", "-DBOOST_DISABLE_ASSERTS", "-O3", "-g", "-fno-omit-frame-pointer"] )
+		env.Append(
+			CXXFLAGS = [ "-pthread" ],
+			SHLINKFLAGS = [ "-pthread", "-Wl,--no-undefined" ],
+		)
 
-if env["WARNINGS_AS_ERRORS"] :
+	# Shared config
+
+	env.Append( CXXFLAGS = [ "-std=$CXXSTD", "-fvisibility=hidden" ] )
+
+	if env["BUILD_TYPE"] == "DEBUG" :
+		env.Append( CXXFLAGS = ["-g", "-O0", "-DTBB_USE_DEBUG=1"] )
+	elif env["BUILD_TYPE"] == "RELEASE" :
+		env.Append( CXXFLAGS = ["-DNDEBUG", "-DBOOST_DISABLE_ASSERTS", "-O3"] )
+	elif env["BUILD_TYPE"] == "RELWITHDEBINFO" :
+		env.Append( CXXFLAGS = ["-DNDEBUG", "-DBOOST_DISABLE_ASSERTS", "-O3", "-g", "-fno-omit-frame-pointer"] )
+
+	if env["WARNINGS_AS_ERRORS"] :
+		env.Append(
+			CXXFLAGS = [ "-Werror" ],
+			SHLINKFLAGS = [ "-Wl,-fatal_warnings" ],
+		)
+
+###########################################################################################
+# Windows configuration
+###########################################################################################
+
+else:
 	env.Append(
-		CXXFLAGS = [ "-Werror" ],
-		SHLINKFLAGS = [ "-Wl,-fatal_warnings" ],
+		CXXFLAGS = [
+			"/nologo",  # Suppress startup banner
+			"/DOPENEXR_DLL",  # Link to dynamic OpenEXR library
+			"/DNOMINMAX",  # Suppress compiler definition of `min` and `max`
+			"/D__PRETTY_FUNCTION__=__FUNCSIG__",
+			"/DBOOST_ALL_DYN_LINK",
+			"/W4",  # Warning level 4, one level less than all warnings
+			"/experimental:external",  # Allow use of /external:I
+			"/external:W0",  # Suppress warnings for headers included with /external:I
+			"/Zc:inline", # Remove unreferenced function or data if it is COMDAT or has internal linkage only
+			"/GR", # Enable RTTI
+			"/TP", # Treat all files as c++ (vs C)
+			"/FC", # Display full paths in diagnostics
+			"/EHsc", # Catch c++ exceptions only
+			"/MP",  # Enable multiprocessing of builds
+			"/permissive-", # Disable permissive mode, which also enables standard compliant two phase name lookup
+			"/D_USE_MATH_DEFINES",  # Required when permissive mode is off, for defining constants like M_PI used by OpenVDB
+			"/std:$CXXSTD",
+			"/DHAVE_SNPRINTF",  # Fix a legacy issue for MSVC versions < 2019
+		]
 	)
+
+	if env["WARNINGS_AS_ERRORS"] :
+		env.Append(
+			CXXFLAGS = [
+				"/WX",  # Treat warnings as errors
+				"/wd4100",  # Suppress warning about unused parameters
+				"/wd4706",	# Suppress warning about using assignment in conditionals
+				"/wd4267",  # Suppress warning about conversion from int to size_t
+				"/wd4244",  # Suppress warning about possible loss of data in type conversion
+				"/wd4305",  # Suppress warning about conversion from double to float
+				"/D_CRT_SECURE_NO_WARNINGS",  # Suppress warnings about getenv and similar
+			],
+		)
+
+	if env["BUILD_TYPE"] == "DEBUG" :
+		env.Append(
+			CXXFLAGS =
+			[
+				"/O0",
+				"/Zi",
+				"/MDd",
+				"/DBOOST_DISABLE_ASSERTS",
+				"/bigobj",
+			],
+			CCPDBFLAGS=
+			[
+				"/Zi",
+				"/Fd${TARGET}.pdb",
+			],
+		)
+	elif env["BUILD_TYPE"] == "RELEASE" :
+		env.Append(
+			CXXFLAGS =
+			[
+				"/DNDEBUG",
+				"/MD",	# create multithreaded DLL
+				"/DBOOST_DISABLE_ASSERTS",
+				"/O2",
+				# /Og optimization (included via /O2) generates lots of unreachable
+				# code warnings from boost::intrusive_ptr. Disabled in release build only.
+				"/wd4702"
+			]
+		)
+	elif env["BUILD_TYPE"] == "RELWITHDEBINFO" :
+		env.Append(
+			CXXFLAGS =
+			[
+				"/DNDEBUG",
+				"/MD",
+				"/bigobj",
+				"/DBOOST_DISABLE_ASSERTS",
+				"/Zi",
+			],
+			LINKFLAGS =
+			[
+				"/DEBUG",
+			],
+			CCPDBFLAGS=
+			[
+				"/Zi",
+				"/Fd${TARGET}.pdb",
+			],
+		)
+
 
 if env["BUILD_CACHEDIR"] != "" :
 	CacheDir( env["BUILD_CACHEDIR"] )
@@ -530,7 +697,7 @@ if env["ASAN"] :
 # An environment for running commands with access to the applications we've built
 ###############################################################################################
 
-def split( stringOrList, separator = ":" ) :
+def split( stringOrList, separator = os.path.pathsep ) :
 
 	if isinstance( stringOrList, list ) :
 		return stringOrList
@@ -538,14 +705,21 @@ def split( stringOrList, separator = ":" ) :
 		return stringOrList.split( separator )
 
 commandEnv = env.Clone()
-commandEnv["ENV"]["PATH"] = commandEnv.subst( "$BUILD_DIR/bin:" ) + commandEnv["ENV"]["PATH"]
+commandEnv["ENV"]["PATH"] = commandEnv.subst( "$BUILD_DIR/bin" + os.path.pathsep ) + commandEnv["ENV"]["PATH"]
+if env["PLATFORM"] == "win32" :
+	commandEnv["ENV"]["PATH"] = commandEnv.subst( "$BUILD_DIR/lib" + os.path.pathsep ) + commandEnv["ENV"]["PATH"]
 
 if commandEnv["PLATFORM"]=="darwin" :
-	commandEnv["ENV"]["DYLD_LIBRARY_PATH"] = commandEnv.subst( ":".join( [ "$BUILD_DIR/lib" ] + split( commandEnv["LOCATE_DEPENDENCY_LIBPATH"] ) ) )
-else :
+	commandEnv["ENV"]["DYLD_LIBRARY_PATH"] = commandEnv.subst( ":".join(
+		[ "/System/Library/Frameworks/ImageIO.framework/Resources", "$BUILD_DIR/lib" ] +
+		split( commandEnv["LOCATE_DEPENDENCY_LIBPATH"] )
+	) )
+elif commandEnv["PLATFORM"] == "win32" :
+	commandEnv["ENV"]["PATH"] = commandEnv.subst( ";".join( [ "$BUILD_DIR/lib" ] + split( commandEnv[ "LOCATE_DEPENDENCY_LIBPATH" ] ) + [ commandEnv["ENV"]["PATH"] ] ) )
+else:
 	commandEnv["ENV"]["LD_LIBRARY_PATH"] = commandEnv.subst( ":".join( [ "$BUILD_DIR/lib" ] + split( commandEnv["LOCATE_DEPENDENCY_LIBPATH"] ) ) )
 
-commandEnv["ENV"]["PYTHONPATH"] = commandEnv.subst( ":".join( split( commandEnv["LOCATE_DEPENDENCY_PYTHONPATH"] ) ) )
+commandEnv["ENV"]["PYTHONPATH"] = commandEnv.subst( os.path.pathsep.join( split( commandEnv["LOCATE_DEPENDENCY_PYTHONPATH"] ) ) )
 
 # SIP on MacOS prevents DYLD_LIBRARY_PATH being passed down so we make sure
 # we also pass through to gaffer the other base vars it uses to populate paths
@@ -557,16 +731,7 @@ def runCommand( command ) :
 
 	command = commandEnv.subst( command )
 	sys.stderr.write( command + "\n" )
-	subprocess.check_call( command, shell=True, env=commandEnv["ENV"] )
-
-###############################################################################################
-# Determine python version
-###############################################################################################
-
-pythonVersion = subprocess.Popen( [ "python", "--version" ], env=commandEnv["ENV"], stderr=subprocess.PIPE ).stderr.read().decode().strip()
-pythonVersion = pythonVersion.split()[1].rpartition( "." )[0]
-
-env["PYTHON_VERSION"] = pythonVersion
+	return subprocess.check_output( command, shell=True, env=commandEnv["ENV"], universal_newlines=True )
 
 ###############################################################################################
 # The basic environment for building libraries
@@ -577,7 +742,6 @@ baseLibEnv = env.Clone()
 baseLibEnv.Append(
 
 	LIBS = [
-		"boost_signals$BOOST_LIB_SUFFIX",
 		"boost_iostreams$BOOST_LIB_SUFFIX",
 		"boost_filesystem$BOOST_LIB_SUFFIX",
 		"boost_date_time$BOOST_LIB_SUFFIX",
@@ -594,22 +758,70 @@ baseLibEnv.Append(
 
 )
 
+# Determine boost version
+
+boostVersionHeader = baseLibEnv.FindFile(
+	"boost/version.hpp",
+	[ "$BUILD_DIR/include" ] +
+	baseLibEnv["LOCATE_DEPENDENCY_SYSTEMPATH"] +
+	baseLibEnv["LOCATE_DEPENDENCY_CPPPATH"]
+)
+
+if not boostVersionHeader :
+	sys.stderr.write( "ERROR : unable to find \"boost/version.hpp\".\n" )
+	Exit( 1 )
+
+with open( str( boostVersionHeader ) ) as f :
+	for line in f.readlines() :
+		m = re.match( "^#define BOOST_LIB_VERSION \"(.*)\"\s*$", line )
+		if m :
+			boostVersion = m.group( 1 )
+			m = re.match( "^([0-9]+)_([0-9]+)(?:_([0-9]+)|)$", boostVersion )
+			baseLibEnv["BOOST_MAJOR_VERSION"] = m.group( 1 )
+			baseLibEnv["BOOST_MINOR_VERSION"] = m.group( 2 )
+
+if "BOOST_MAJOR_VERSION" not in baseLibEnv :
+	sys.stderr.write( "ERROR : unable to determine boost version from \"{}\".\n".format(  boostVersionHeader ) )
+	Exit( 1 )
+
 ###############################################################################################
 # The basic environment for building python modules
 ###############################################################################################
 
 basePythonEnv = baseLibEnv.Clone()
 
+basePythonEnv["PYTHON_VERSION"] = subprocess.check_output(
+	[ "python", "-c", "import sys; print( '{}.{}'.format( *sys.version_info[:2] ) )" ],
+	env=commandEnv["ENV"], universal_newlines=True
+).strip()
+
+if basePythonEnv["PLATFORM"] == "win32" :
+	basePythonEnv["PYTHON_VERSION"] = basePythonEnv["PYTHON_VERSION"].replace( ".", "" )
+
+basePythonEnv["PYTHON_ABI_VERSION"] = basePythonEnv["PYTHON_VERSION"]
+basePythonEnv["PYTHON_ABI_VERSION"] += subprocess.check_output(
+	[ "python", "-c", "import sysconfig; print( sysconfig.get_config_var( 'abiflags' ) or '' )" ],
+	env=commandEnv["ENV"], universal_newlines=True
+).strip()
+
+# if BOOST_PYTHON_LIB_SUFFIX is provided, use it
+boostPythonLibSuffix = basePythonEnv.get( "BOOST_PYTHON_LIB_SUFFIX", None )
+if boostPythonLibSuffix is None :
+	basePythonEnv["BOOST_PYTHON_LIB_SUFFIX"] = basePythonEnv["BOOST_LIB_SUFFIX"]
+	if ( int( basePythonEnv["BOOST_MAJOR_VERSION"] ), int( basePythonEnv["BOOST_MINOR_VERSION"] ) ) >= ( 1, 67 ) :
+		basePythonEnv["BOOST_PYTHON_LIB_SUFFIX"] = basePythonEnv["PYTHON_VERSION"].replace( ".", "" ) + basePythonEnv["BOOST_PYTHON_LIB_SUFFIX"]
+
 basePythonEnv.Append(
 
-	CPPFLAGS = [
-		"-DBOOST_PYTHON_MAX_ARITY=20",
+	CPPDEFINES = [
+		( "BOOST_PYTHON_MAX_ARITY", "20" ),
 	],
 
 	LIBS = [
-		"boost_python$BOOST_LIB_SUFFIX",
+		"boost_python$BOOST_PYTHON_LIB_SUFFIX",
 		"IECorePython$CORTEX_PYTHON_LIB_SUFFIX",
 		"Gaffer",
+		"python$PYTHON_ABI_VERSION",
 	],
 
 )
@@ -618,39 +830,116 @@ if basePythonEnv["PLATFORM"]=="darwin" :
 
 	basePythonEnv.Append(
 		CPPPATH = [ "$BUILD_DIR/lib/Python.framework/Versions/$PYTHON_VERSION/include/python$PYTHON_VERSION" ],
-		LIBPATH = [ "$BUILD_DIR/lib/Python.framework/Versions/$PYTHON_VERSION/lib/python$PYTHON_VERSION/config" ],
 		LIBS = [ "python$PYTHON_VERSION" ],
 	)
+
+	if basePythonEnv["PYTHON_VERSION"].split( "." )[0] == "2" :
+		basePythonEnv.Append(
+			LIBPATH = [ "$BUILD_DIR/lib/Python.framework/Versions/$PYTHON_VERSION/lib/python$PYTHON_VERSION/config" ]
+		)
+	else :
+		basePythonEnv.Append(
+			LIBPATH = [ "$BUILD_DIR/lib/Python.framework/Versions/$PYTHON_VERSION/lib" ]
+		)
 
 else :
 
 	basePythonEnv.Append(
-		CPPPATH = [ "$BUILD_DIR/include/python$PYTHON_VERSION" ]
+		CPPPATH = [ "$BUILD_DIR/include/python$PYTHON_ABI_VERSION" ]
 	)
+
+	if basePythonEnv["PLATFORM"] == "win32" :
+
+		basePythonEnv.Append( LIBPATH = "$BUILD_DIR/libs" )
+
+###############################################################################################
+# Arnold configuration
+###############################################################################################
+
+arnoldInstallRoot = ""
+if env["ARNOLD_ROOT"] :
+
+	# Version
+
+	arnoldHeader = env.subst( "$ARNOLD_ROOT/include/ai_version.h" )
+	if not os.path.exists( arnoldHeader ) :
+		sys.stderr.write( "ERROR : unable to find \"{}\".\n".format( arnoldHeader ) )
+		Exit( 1 )
+
+	arnoldVersions = {}
+	for line in open( arnoldHeader ) :
+		m = re.match( "^#define AI_VERSION_(ARCH|MAJOR)_NUM\s*([0-9]+)", line )
+		if m :
+			arnoldVersions[m.group(1)] = m.group( 2 )
+
+	if set( arnoldVersions.keys() ) != { "ARCH", "MAJOR" } :
+		sys.stderr.write( "ERROR : unable to parse \"{}\".\n".format( arnoldHeader ) )
+		Exit( 1 )
+
+	# Install root
+
+	arnoldInstallRoot = "${{BUILD_DIR}}/arnold/{ARCH}.{MAJOR}".format( **arnoldVersions )
+
+	# Metadata. Our `arnoldPlugins/gaffer.mtd` contains metadata for all the Arnold
+	# nodes we know about, in all Arnold versions. We need to filter this down
+	# to only the nodes in _this_ Arnold version during installation. Arnold emits
+	# warnings if we attempt to register metadata for nodes that don't exist.
+
+	def filterMetadata( target, source, env ) :
+
+		# Get set of built-in nodes
+
+		kickEnv = env["ENV"].copy()
+		kickEnv["PATH"] = os.pathsep.join( [ os.path.join( env["ARNOLD_ROOT"], "bin" ), kickEnv["PATH"] ] )
+		kickOutput = subprocess.check_output(
+			"kick -nodes",
+			env = kickEnv,
+			universal_newlines = True,
+			shell = True
+		)
+
+		nodeDefRegex = re.compile( r"\s*([a-zA-Z0-9_]+)\s+(driver|color_manager|driver|filter|light|operator|options|override|shader|shape)" )
+		nodes = set()
+		for line in kickOutput.split( "\n" ) :
+			m = nodeDefRegex.match( line )
+			if m :
+				nodes.add( m.group( 1 ) )
+
+		# Filter the input metadata file so that we only include metadata
+		# for nodes that exist.
+
+		newNodeRegex = re.compile( r"^\[node ([a-zA-Z_0-9]+)\]" )
+		with open( str( source[0] ) ) as inFile :
+			with open( str( target[0] ), "w" ) as outFile :
+				omit = False
+				for line in inFile.readlines() :
+					m = newNodeRegex.match( line )
+					if m :
+						nodeName = m.group( 1 )
+						omit = nodeName not in nodes
+						if omit :
+							sys.stderr.write( "Omitting non-existent node {}\n".format( nodeName ) )
+					if not omit :
+						outFile.write( line )
+
+	metadataInstall = env.Command(
+		os.path.join( arnoldInstallRoot, "arnoldPlugins/gaffer.mtd" ),
+		"arnoldPlugins/gaffer.mtd",
+		filterMetadata
+	)
+	env.Alias( "build", metadataInstall )
 
 ###############################################################################################
 # Definitions for the libraries we wish to build
 ###############################################################################################
 
-vTuneRoot = env.subst("$VTUNE_ROOT")
-
-gafferLib = {}
-
-if os.path.exists( vTuneRoot ):
-	gafferLib = {
-		"envAppends" : {
-			"CXXFLAGS" : [ "-isystem", "$VTUNE_ROOT/include", "-DGAFFER_VTUNE"],
-			"LIBPATH" : [ "$VTUNE_ROOT/lib64" ],
-			"LIBS" : [ "ittnotify" ]
-		},
-		"pythonEnvAppends" : {
-			"CXXFLAGS" : [ "-DGAFFER_VTUNE"]
-		}
-	}
-
 libraries = {
 
-	"Gaffer" : gafferLib,
+	"Gaffer" : {
+		"envAppends" : {
+			"LIBS" : [ "Half" ],
+		}
+	},
 
 	"GafferTest" : {
 		"envAppends" : {
@@ -669,10 +958,10 @@ libraries = {
 		},
 		"pythonEnvAppends" : {
 			"LIBS" : [ "IECoreImage$CORTEX_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreGL$CORTEX_LIB_SUFFIX", "GafferUI", "GafferBindings" ],
-			 # Prevent Qt clashing with boost::signals - we can remove
-			 # this if we move to boost::signals2.
-			 "CXXFLAGS" : [ "-DQT_NO_KEYWORDS" ],
 		},
+		"mocSourceFiles" : [
+			"src/GafferUIModule/PathListingWidgetBinding.cpp",
+		],
 		"apps" : [ "browser", "gui", "screengrab", "view" ],
 	},
 
@@ -753,7 +1042,7 @@ libraries = {
 			"LIBS" : [ "Gaffer", "GafferUI", "GafferImage", "GafferImageUI", "GafferScene", "Iex$OPENEXR_LIB_SUFFIX", "IECoreGL$CORTEX_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX" ],
 		},
 		"pythonEnvAppends" : {
-			"LIBS" : [ "IECoreGL$CORTEX_LIB_SUFFIX", "GafferBindings", "GafferScene", "GafferUI", "GafferImageUI", "GafferSceneUI" ],
+			"LIBS" : [ "IECoreGL$CORTEX_LIB_SUFFIX", "GafferBindings", "GafferScene", "GafferUI", "GafferImageUI", "GafferSceneUI", "IECoreScene$CORTEX_LIB_SUFFIX" ],
 		},
 	},
 
@@ -762,7 +1051,7 @@ libraries = {
 	"GafferImage" : {
 		"envAppends" : {
 			"CPPPATH" : [ "$BUILD_DIR/include/freetype2" ],
-			"LIBS" : [ "Gaffer", "GafferDispatch", "Iex$OPENEXR_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "OpenColorIO$OCIO_LIB_SUFFIX", "freetype" ],
+			"LIBS" : [ "Gaffer", "GafferDispatch", "Iex$OPENEXR_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "OpenImageIO_Util$OIIO_LIB_SUFFIX", "OpenColorIO$OCIO_LIB_SUFFIX", "freetype" ],
 		},
 		"pythonEnvAppends" : {
 			"LIBS" : [ "GafferBindings", "GafferImage", "GafferDispatch", "IECoreImage$CORTEX_LIB_SUFFIX", ],
@@ -776,61 +1065,111 @@ libraries = {
 		"pythonEnvAppends" : {
 			"LIBS" : [ "GafferImage", "GafferImageTest" ],
 		},
-		"additionalFiles" : glob.glob( "python/GafferImageTest/scripts/*" ) + glob.glob( "python/GafferImageTest/images/*" ) + glob.glob( "python/GafferImageTest/openColorIO/luts/*" ) + glob.glob( "python/GafferImageTest/openColorIO/*" ),
+		"additionalFiles" :
+			glob.glob( "python/GafferImageTest/scripts/*" ) + glob.glob( "python/GafferImageTest/images/*" ) +
+			glob.glob( "python/GafferImageTest/openColorIO/luts/*" ) + glob.glob( "python/GafferImageTest/openColorIO/*.ocio" ) +
+			glob.glob( "python/GafferImageTest/openColorIO/looks/*" ),
 	},
 
 	"GafferImageUITest" : {},
 
 	"GafferImageUI" : {
 		"envAppends" : {
-			"LIBS" : [ "IECoreGL$CORTEX_LIB_SUFFIX", "Gaffer", "GafferImage", "GafferUI" ],
+			"LIBS" : [ "IECoreGL$CORTEX_LIB_SUFFIX", "Gaffer", "GafferImage", "GafferUI", "OpenColorIO$OCIO_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX", "Iex$OPENEXR_LIB_SUFFIX" ],
 		},
 		"pythonEnvAppends" : {
+			"CPPPATH" : [ "$PYBIND11/include" ],
 			"LIBS" : [ "GafferBindings", "GafferUI", "GafferImage", "GafferImageUI" ],
 		},
 	},
 
-	"GafferArnold" : {
+	"IECoreArnold" : {
 		"envAppends" : {
+			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ] if env["PLATFORM"] != "win32" else [ "$ARNOLD_ROOT/bin", "$ARNOLD_ROOT/lib" ],
+			## \todo Remove GafferScene. We need it at present to get access to `IECoreScenePreview::Renderer`,
+			# but IECoreArnold must never depend on Gaffer code; logically it is in the layer below Gaffer.
+			"LIBS" : [ "GafferScene", "ai", "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreVDB$CORTEX_LIB_SUFFIX", "openvdb$VDB_LIB_SUFFIX" ],
+			"CXXFLAGS" : [ "-DAI_ENABLE_DEPRECATION_WARNINGS" ],
 			"CPPPATH" : [ "$ARNOLD_ROOT/include" ],
-			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ],
-			"LIBS" : [ "Gaffer", "GafferScene", "GafferDispatch", "ai", "GafferVDB", "openvdb$VDB_LIB_SUFFIX",  "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreArnold$CORTEX_LIB_SUFFIX", "IECoreVDB$CORTEX_LIB_SUFFIX", "GafferOSL" ],
 		},
 		"pythonEnvAppends" : {
+			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ] if env["PLATFORM"] != "win32" else [ "$ARNOLD_ROOT/bin", "$ARNOLD_ROOT/lib" ],
+			"LIBS" : [ "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreArnold" ],
+			"CXXFLAGS" : [ "-DAI_ENABLE_DEPRECATION_WARNINGS" ],
 			"CPPPATH" : [ "$ARNOLD_ROOT/include" ],
-			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ],
-			"LIBS" : [ "Gaffer", "GafferScene", "GafferBindings", "GafferVDB", "GafferDispatch", "GafferArnold", "GafferOSL", "IECoreScene$CORTEX_LIB_SUFFIX" ],
 		},
 		"requiredOptions" : [ "ARNOLD_ROOT" ],
-		"additionalFiles" : [ "arnold/plugins/gaffer.mtd" ],
+		"installRoot" : arnoldInstallRoot,
+	},
+
+	"IECoreArnoldTest" : {
+		"additionalFiles" : glob.glob( "python/IECoreArnoldTest/metadata/*" ) + glob.glob( "python/IECoreArnoldTest/assFiles/*" ),
+		"requiredOptions" : [ "ARNOLD_ROOT" ],
+		"installRoot" : arnoldInstallRoot,
+	},
+
+	"GafferArnold" : {
+		"envAppends" : {
+			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ] if env["PLATFORM"] != "win32" else [ "$ARNOLD_ROOT/bin", "$ARNOLD_ROOT/lib" ],
+			"LIBS" : [ "Gaffer", "GafferScene", "GafferDispatch", "ai", "GafferVDB", "openvdb$VDB_LIB_SUFFIX",  "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreVDB$CORTEX_LIB_SUFFIX", "IECoreArnold", "GafferOSL" ],
+			"CXXFLAGS" : [ "-DAI_ENABLE_DEPRECATION_WARNINGS" ],
+			"CPPPATH" : [ "$ARNOLD_ROOT/include" ],
+		},
+		"pythonEnvAppends" : {
+			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ] if env["PLATFORM"] != "win32" else [ "$ARNOLD_ROOT/bin", "$ARNOLD_ROOT/lib" ],
+			"LIBS" : [ "Gaffer", "GafferScene", "GafferBindings", "GafferVDB", "GafferDispatch", "GafferArnold", "GafferOSL", "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreArnold" ],
+			"CXXFLAGS" : [ "-DAI_ENABLE_DEPRECATION_WARNINGS" ],
+			"CPPPATH" : [ "$ARNOLD_ROOT/include" ],
+		},
+		"requiredOptions" : [ "ARNOLD_ROOT" ],
+		"installRoot" : arnoldInstallRoot,
 	},
 
 	"GafferArnoldTest" : {
 		"additionalFiles" : glob.glob( "python/GafferArnoldTest/volumes/*" ) + glob.glob( "python/GafferArnoldTest/metadata/*" ) + glob.glob( "python/GafferArnoldTest/images/*" ),
 		"requiredOptions" : [ "ARNOLD_ROOT" ],
+		"installRoot" : arnoldInstallRoot,
 	},
 
 	"GafferArnoldUI" : {
 		"envAppends" : {
+			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ] if env["PLATFORM"] != "win32" else [ "$ARNOLD_ROOT/bin", "$ARNOLD_ROOT/lib" ],
+			"LIBS" : [ "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreGL$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "OpenImageIO_Util$OIIO_LIB_SUFFIX", "oslquery$OSL_LIB_SUFFIX", "Gaffer", "GafferScene", "GafferOSL", "GafferSceneUI", "ai" ],
+			"CXXFLAGS" : [ "-DAI_ENABLE_DEPRECATION_WARNINGS" ],
 			"CPPPATH" : [ "$ARNOLD_ROOT/include" ],
-			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ],
-			"LIBS" : [ "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreGL$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "oslquery$OSL_LIB_SUFFIX", "Gaffer", "GafferScene", "GafferOSL", "GafferSceneUI", "ai" ],
-			},
+		},
 		"pythonEnvAppends" : {
 			"LIBS" : [ "GafferArnoldUI", "GafferSceneUI", "IECoreScene$CORTEX_LIB_SUFFIX" ],
 		},
 		"requiredOptions" : [ "ARNOLD_ROOT" ],
+		"installRoot" : arnoldInstallRoot,
 	},
 
 	"GafferArnoldUITest" : {
 		"additionalFiles" : glob.glob( "python/GafferArnoldUITest/metadata/*" ),
 		"requiredOptions" : [ "ARNOLD_ROOT" ],
+		"installRoot" : arnoldInstallRoot,
+	},
+
+	"GafferArnoldPlugin" : {
+		"envAppends" : {
+			"LIBPATH" : [ "$ARNOLD_ROOT/bin" ] if env["PLATFORM"] != "win32" else [ "$ARNOLD_ROOT/bin", "$ARNOLD_ROOT/lib" ],
+			"LIBS" : [ "IECoreArnold", "ai", "IECoreImage$CORTEX_LIB_SUFFIX" ],
+			"CXXFLAGS" : [ "-DAI_ENABLE_DEPRECATION_WARNINGS" ],
+			"CPPPATH" : [ "$ARNOLD_ROOT/include" ],
+		},
+		"envReplacements" : {
+			"SHLIBPREFIX" : "",
+		},
+		"installName" : "arnoldPlugins/Gaffer",
+		"requiredOptions" : [ "ARNOLD_ROOT" ],
+		"installRoot" : arnoldInstallRoot,
 	},
 
 	"GafferOSL" : {
 		"envAppends" : {
 			"CPPPATH" : [ "$OSLHOME/include/OSL" ],
-			"LIBS" : [ "Gaffer", "GafferScene", "GafferImage", "OpenImageIO$OIIO_LIB_SUFFIX", "oslquery$OSL_LIB_SUFFIX", "oslexec$OSL_LIB_SUFFIX", "Iex$OPENEXR_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX" ],
+			"LIBS" : [ "Gaffer", "GafferScene", "GafferImage", "OpenImageIO$OIIO_LIB_SUFFIX", "OpenImageIO_Util$OIIO_LIB_SUFFIX", "oslquery$OSL_LIB_SUFFIX", "oslexec$OSL_LIB_SUFFIX", "Iex$OPENEXR_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX" ],
 		},
 		"pythonEnvAppends" : {
 			"CPPPATH" : [ "$OSLHOME/include/OSL" ],
@@ -876,14 +1215,16 @@ libraries = {
 
 	"GafferAppleseed" : {
 		"envAppends" : {
-			"CXXFLAGS" : [ "-isystem", "$APPLESEED_ROOT/include", "-DAPPLESEED_ENABLE_IMATH_INTEROP", "-DAPPLESEED_USE_SSE" ],
+			"CXXFLAGS" : [ systemIncludeArgument, "$APPLESEED_ROOT/include", "-DAPPLESEED_ENABLE_IMATH_INTEROP" ],
 			"LIBPATH" : [ "$APPLESEED_ROOT/lib" ],
-			"LIBS" : [ "Gaffer", "GafferDispatch", "GafferScene", "appleseed",  "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreAppleseed$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "oslquery$OSL_LIB_SUFFIX" ],
+			"LIBS" : [ "Gaffer", "GafferDispatch", "GafferScene", "appleseed",  "IECoreScene$CORTEX_LIB_SUFFIX", "IECoreAppleseed$CORTEX_LIB_SUFFIX", "OpenImageIO$OIIO_LIB_SUFFIX", "OpenImageIO_Util$OIIO_LIB_SUFFIX", "oslquery$OSL_LIB_SUFFIX" ],
+			"CPPDEFINES" : [ "APPLESEED_USE_SSE" ] if platform.machine() != "arm64" else [],
 		},
 		"pythonEnvAppends" : {
-			"CXXFLAGS" : [ "-isystem", "$APPLESEED_ROOT/include", "-DAPPLESEED_ENABLE_IMATH_INTEROP", "-DAPPLESEED_USE_SSE" ],
+			"CXXFLAGS" : [ systemIncludeArgument, "$APPLESEED_ROOT/include", "-DAPPLESEED_ENABLE_IMATH_INTEROP" ],
 			"LIBPATH" : [ "$APPLESEED_ROOT/lib" ],
 			"LIBS" : [ "Gaffer", "GafferDispatch", "GafferScene", "GafferBindings", "GafferAppleseed" ],
+			"CPPDEFINES" : [ "APPLESEED_USE_SSE" ] if platform.machine() != "arm64" else [],
 		},
 		"requiredOptions" : [ "APPLESEED_ROOT" ],
 	},
@@ -896,6 +1237,46 @@ libraries = {
 
 	"GafferAppleseedUITest" : {},
 
+	"GafferCycles" : {
+		"envAppends" : {
+			"LIBPATH" : [ "$CYCLES_ROOT/lib" ],
+			"LIBS" : [
+				"IECoreScene$CORTEX_LIB_SUFFIX", "IECoreImage$CORTEX_LIB_SUFFIX", "IECoreVDB$CORTEX_LIB_SUFFIX",
+				"Gaffer", "GafferScene", "GafferDispatch", "GafferOSL",
+				"cycles_session", "cycles_scene", "cycles_graph", "cycles_bvh", "cycles_device", "cycles_kernel", "cycles_kernel_osl",
+				"cycles_integrator", "cycles_util", "cycles_subd", "extern_sky",
+				"OpenImageIO$OIIO_LIB_SUFFIX", "OpenImageIO_Util$OIIO_LIB_SUFFIX", "oslexec$OSL_LIB_SUFFIX", "openvdb$VDB_LIB_SUFFIX",
+				"Alembic", "osdCPU", "OpenColorIO$OCIO_LIB_SUFFIX", "embree3",
+			],
+			"CXXFLAGS" : [ systemIncludeArgument, "$CYCLES_ROOT/include" ],
+			"CPPDEFINES" : [
+				( "CCL_NAMESPACE_BEGIN", "namespace ccl {" ),
+				( "CCL_NAMESPACE_END", "}" ),
+				( "WITH_OSL", "1" ),
+			],
+			"FRAMEWORKS" : [ "Foundation", "Metal" ],
+		},
+		"pythonEnvAppends" : {
+			"LIBPATH" : [ "$CYCLES_ROOT/lib" ],
+			"LIBS" : [
+				"Gaffer", "GafferScene", "GafferDispatch", "GafferBindings", "GafferCycles",
+				"OpenImageIO_Util$OIIO_LIB_SUFFIX",
+			],
+			"CXXFLAGS" : [ systemIncludeArgument, "$CYCLES_ROOT/include" ],
+			"CPPDEFINES" : [
+				( "CCL_NAMESPACE_BEGIN", "namespace ccl {" ),
+				( "CCL_NAMESPACE_END", "}" ),
+			],
+		},
+		"requiredOptions" : [ "CYCLES_ROOT" ],
+	},
+
+	"GafferCyclesTest" : { "requiredOptions" : [ "CYCLES_ROOT" ], },
+
+	"GafferCyclesUI" : { "requiredOptions" : [ "CYCLES_ROOT" ], },
+
+	"GafferCyclesUITest" : { "requiredOptions" : [ "CYCLES_ROOT" ], },
+
 	"GafferTractor" : {},
 
 	"GafferTractorTest" : {},
@@ -904,12 +1285,39 @@ libraries = {
 
 	"GafferTractorUITest" : {},
 
+	"GafferUSD" : {
+		"envAppends" : {
+			"LIBS" : [ "Gaffer", "GafferDispatch", "GafferScene", "IECoreScene$CORTEX_LIB_SUFFIX" ] + [ "${USD_LIB_PREFIX}" + x for x in [ "sdf", "arch", "tf", "vt" ] ],
+			# USD includes "at least one deprecated or antiquated header", so we
+			# have to drop our usual strict warning levels.
+			"CXXFLAGS" : [ "-Wno-deprecated" if env["PLATFORM"] != "win32" else "/wd4996" ],
+		},
+		"pythonEnvAppends" : {
+			"LIBS" : [ "GafferUSD", "GafferScene", "GafferDispatch", "GafferBindings" ],
+		},
+		# USD's Python bindings are intrusive to the main library.
+		"libraryDependsOnPython" : True,
+		"requiredOptions" : [ "GAFFERUSD" ],
+	},
+
+	"GafferUSDTest" : {
+		"requiredOptions" : [ "GAFFERUSD" ],
+	},
+
+	"GafferUSDUI" : {
+		"requiredOptions" : [ "GAFFERUSD" ],
+	},
+
+	"GafferUSDUITest" : {
+		"requiredOptions" : [ "GAFFERUSD" ],
+	},
+
 	"GafferVDB" : {
 		"envAppends" : {
 			"LIBS" : [ "Gaffer", "GafferScene", "Half", "openvdb$VDB_LIB_SUFFIX", "IECoreVDB$CORTEX_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX" ],
 		},
 		"pythonEnvAppends" : {
-			"LIBS" : [ "GafferScene", "GafferVDB", "openvdb$VDB_LIB_SUFFIX", "IECoreVDB$CORTEX_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX"],
+			"LIBS" : [ "GafferBindings", "GafferScene", "GafferVDB", "openvdb$VDB_LIB_SUFFIX", "IECoreVDB$CORTEX_LIB_SUFFIX", "IECoreScene$CORTEX_LIB_SUFFIX"],
 		}
 	},
 
@@ -954,43 +1362,126 @@ libraries = {
 
 	},
 
-	"IECoreScene" : {
-
-		"classStubs" : [
-
-			( "ReadProcedural", "procedurals/read" ),
-
-		],
-
-	},
-
 }
+
+if env["PLATFORM"] == "win32" :
+	libraries["scripts"]["additionalFiles"].append( "bin/gaffer.cmd" )
 
 # Add on OpenGL libraries to definitions - these vary from platform to platform
 for library in ( "GafferUI", "GafferScene", "GafferSceneUI", "GafferImageUI" ) :
 	if env["PLATFORM"] == "darwin" :
 		libraries[library]["envAppends"].setdefault( "FRAMEWORKS", [] ).append( "OpenGL" )
+	elif env["PLATFORM"] == "win32" :
+		libraries[library]["envAppends"]["LIBS"].append( "opengl32" )
 	else :
-		libraries[library]["envAppends"]["LIBS"].append( "GL" )
+		libraries[library]["envAppends"]["LIBS"].append( [ "GL", "GLX" ] )
+		libraries[library]["pythonEnvAppends"]["LIBS"].append( [ "GL", "GLX" ] )
 	libraries[library]["envAppends"]["LIBS"].append( "GLEW$GLEW_LIB_SUFFIX" )
 
 # Add on Qt libraries to definitions - these vary from platform to platform
 
-def addQtLibrary( library, qtLibrary ) :
+def addQtLibrary( library, qtLibrary, pythonOnly = True ) :
 
 	if env["PLATFORM"] == "darwin" :
 		libraries[library]["pythonEnvAppends"].setdefault( "FRAMEWORKS", [] ).append( "Qt" + qtLibrary )
+		if not pythonOnly:
+			libraries[library]["envAppends"].setdefault( "FRAMEWORKS", [] ).append( "Qt" + qtLibrary )
 	else :
 		prefix = "Qt" if int( env["QT_VERSION"] ) < 5 else "Qt${QT_VERSION}"
 		libraries[library]["pythonEnvAppends"]["LIBS"].append( prefix + qtLibrary )
+		if not pythonOnly:
+			libraries[library]["envAppends"]["LIBS"].append( prefix + qtLibrary )
 
 for library in ( "GafferUI", ) :
-	addQtLibrary( library, "Core" )
+	addQtLibrary( library, "Core", False )
 	addQtLibrary( library, "Gui" )
 	addQtLibrary( library, "OpenGL" )
+	addQtLibrary( library, "Test" )
 	if int( env["QT_VERSION"] ) > 4 :
 		addQtLibrary( library, "Widgets" )
 
+# Add required libraries for Windows
+
+if env["PLATFORM"] == "win32" :
+
+	for library in ( "Gaffer", ) :
+
+		libraries[library].setdefault( "envAppends", {} )
+		libraries[library]["envAppends"].setdefault( "LIBS", [] ).extend( [ "Advapi32" ] )
+
+# Optionally add vTune requirements
+
+if os.path.exists( env.subst("$VTUNE_ROOT") ):
+
+	for library in ( "Gaffer", ) :
+
+		libraries[library].setdefault( "envAppends", {} )
+		libraries[library]["envAppends"].setdefault( "CXXFLAGS", [] ).extend(
+			[ systemIncludeArgument, "$VTUNE_ROOT/include", "-DGAFFER_VTUNE" ]
+		)
+		libraries[library]["envAppends"].setdefault( "LIBPATH", [] ).extend( [ "$VTUNE_ROOT/lib64" ] )
+		libraries[library]["envAppends"].setdefault( "LIBS", [] ).extend( [ "ittnotify", "dl" ] )
+
+		libraries[library].setdefault( "pythonEnvAppends", {} )
+		libraries[library]["pythonEnvAppends"].setdefault( "CXXFLAGS", [] ).extend( [ "-DGAFFER_VTUNE" ] )
+
+#########################################################################################################
+# Repair Symlinks on Windows
+#########################################################################################################
+
+# Windows does not support symlinks except with special (non-default)
+# privileges. When cloning the repository, git will create symlink source files
+# as a text file with the symlink target as its content. We override the
+# `Install()` builder to detect such files and install the target instead.
+
+if env["PLATFORM"] == "win32" :
+
+	def customInstaller( dest, source, env ) :
+
+		if os.path.isdir( source ) or os.path.isdir( dest ) :
+			raise RuntimeError( "Cannot copy {} to {}. Source and destination cannot be directories.".format( source, dest ) )
+
+		fileInfo = runCommand( "git ls-files -s {}".format( source ) ).split()
+
+		if len( fileInfo ) == 4 or len( fileInfo ) == 5:
+
+			# ls-files output format: [<tag> ]<mode> <object> <stage> <file>
+			# The magic code for symlinks in git is file mode 120000
+
+			fileMode = fileInfo[1] if len( fileInfo ) == 5 else fileInfo[0]
+			filePath = fileInfo[4] if len( fileInfo ) == 5 else fileInfo[3]
+			filePath = filePath.replace( "/", "\\" )  # filePath comes in from git with /
+
+			if fileMode == "120000" and os.path.exists( filePath ):
+
+				with open( filePath, "r" ) as f :
+
+					sourceFile = f.readline().replace( "/", "\\" )
+
+					linkSource = os.path.abspath(
+						os.path.join(
+							os.getcwd(),
+							os.path.dirname(filePath ),
+							sourceFile
+						)
+					)
+
+					# If running with privileges that allow symlinks, the file content will
+					# already be correct (`linkSource` will likely be the first line of
+					# the license). Don't copy those files by checking if the linked file exists.
+					if os.path.isfile( linkSource ) :
+						source = os.path.abspath( os.path.join( os.path.dirname( linkSource ), sourceFile )  )
+
+						# Make the source relative to the current directory as SCons expects
+						source = source.replace( os.getcwd(), "" ).lstrip( os.path.sep )
+
+						shutil.copy2( source, dest )
+
+						return
+
+		shutil.copy2( source, dest )
+
+	env["INSTALL"] = customInstaller
 
 ###############################################################################################
 # The stuff that actually builds the libraries and python modules
@@ -1011,37 +1502,65 @@ for libraryName, libraryDef in libraries.items() :
 	# environment
 
 	libEnv = baseLibEnv.Clone()
+	if libraryDef.get( "libraryDependsOnPython" ) :
+		libEnv = basePythonEnv.Clone()
+
 	libEnv.Append( CXXFLAGS = "-D{0}_EXPORTS".format( libraryName ) )
 	libEnv.Append( **(libraryDef.get( "envAppends", {} )) )
+	libEnv.Replace( **(libraryDef.get( "envReplacements", {} )) )
+
+	installRoot = libraryDef.get( "installRoot", "$BUILD_DIR" )
 
 	# library
 
-	librarySource = sorted( glob.glob( "src/" + libraryName + "/*.cpp" ) + glob.glob( "src/" + libraryName + "/*/*.cpp" ) )
+	librarySource = sorted( glob.glob( "src/" + libraryName + "/*.cpp" ) + glob.glob( "src/" + libraryName + "/*/*.cpp" ) + glob.glob( "src/" + libraryName + "/*/*/*.cpp" ) )
 	if librarySource :
 
-		library = libEnv.SharedLibrary( "lib/" + libraryName, librarySource )
+		libraryInstallName = libraryDef.get( "installName", "lib/" + libraryName )
+		library = libEnv.SharedLibrary( libraryInstallName, librarySource )
 		libEnv.Default( library )
 
-		libraryInstall = libEnv.Install( "$BUILD_DIR/lib", library )
+		libraryInstall = libEnv.Install(
+			os.path.join( installRoot, os.path.dirname( libraryInstallName ) ),
+			library
+		)
 		libEnv.Alias( "build", libraryInstall )
 
 	# header install
 
-	sedSubstitutions = "s/!GAFFER_MILESTONE_VERSION!/$GAFFER_MILESTONE_VERSION/g"
-	sedSubstitutions += "; s/!GAFFER_MAJOR_VERSION!/$GAFFER_MAJOR_VERSION/g"
-	sedSubstitutions += "; s/!GAFFER_MINOR_VERSION!/$GAFFER_MINOR_VERSION/g"
-	sedSubstitutions += "; s/!GAFFER_PATCH_VERSION!/$GAFFER_PATCH_VERSION/g"
+	fileSubstitutions = {
+		"!GAFFER_MILESTONE_VERSION!" : libEnv.subst( "$GAFFER_MILESTONE_VERSION" ),
+		"!GAFFER_MAJOR_VERSION!" : libEnv.subst( "$GAFFER_MAJOR_VERSION" ),
+		"!GAFFER_MINOR_VERSION!" : libEnv.subst( "$GAFFER_MINOR_VERSION" ),
+		"!GAFFER_PATCH_VERSION!" : libEnv.subst( "$GAFFER_PATCH_VERSION" ),
+		"!GAFFER_VERSION_SUFFIX!" : libEnv.subst( "$GAFFER_VERSION_SUFFIX" ),
+	}
 
-	headers = (
-		glob.glob( "include/" + libraryName + "/*.h" ) +
-		glob.glob( "include/" + libraryName + "/*.inl" ) +
-		glob.glob( "include/" + libraryName + "/*/*.h" ) +
-		glob.glob( "include/" + libraryName + "/*/*.inl" )
-	)
+	def processHeaders( env, libraryName ) :
 
-	for header in headers :
-		headerInstall = env.Command( "$BUILD_DIR/" + header, header, "sed \"" + sedSubstitutions + "\" $SOURCE > $TARGET" )
-		libEnv.Alias( "build", headerInstall )
+		headers = (
+			glob.glob( "include/" + libraryName + "/*.h" ) +
+			glob.glob( "include/" + libraryName + "/*.inl" ) +
+			glob.glob( "include/" + libraryName + "/*/*.h" ) +
+			glob.glob( "include/" + libraryName + "/*/*.inl" )
+		)
+
+		for headerIn in glob.glob( "include/" + libraryName + "/*.h.in" ) :
+			header = env.Substfile(
+				os.path.splitext( headerIn )[0],
+				headerIn,
+				SUBST_DICT = fileSubstitutions
+			)
+			headers.append( str( header[0] ) )
+
+		for header in headers :
+			headerInstall = env.InstallAs(
+				os.path.join( installRoot, header ),
+				header
+			)
+			env.Alias( "build", headerInstall )
+
+	processHeaders( libEnv, libraryName )
 
 	# bindings library
 
@@ -1049,7 +1568,7 @@ for libraryName, libraryDef in libraries.items() :
 	pythonEnv.Append( **(libraryDef.get( "pythonEnvAppends", {} ))  )
 
 	bindingsEnv = pythonEnv.Clone()
-	bindingsEnv.Append( CXXFLAGS = "-D{0}BINDINGS_EXPORTS".format( libraryName ) )
+	bindingsEnv.Append( CXXFLAGS = "-D{0}Bindings_EXPORTS".format( libraryName ) )
 
 	bindingsSource = sorted( glob.glob( "src/" + libraryName + "Bindings/*.cpp" ) )
 	if bindingsSource :
@@ -1057,19 +1576,12 @@ for libraryName, libraryDef in libraries.items() :
 		bindingsLibrary = bindingsEnv.SharedLibrary( "lib/" + libraryName + "Bindings", bindingsSource )
 		bindingsEnv.Default( bindingsLibrary )
 
-		bindingsLibraryInstall = bindingsEnv.Install( "$BUILD_DIR/lib", bindingsLibrary )
+		bindingsLibraryInstall = bindingsEnv.Install( os.path.join( installRoot, "lib" ), bindingsLibrary )
 		env.Alias( "build", bindingsLibraryInstall )
 
 	# bindings header install
 
-	bindingsHeaders = (
-		glob.glob( "include/" + libraryName + "Bindings/*.h" ) +
-		glob.glob( "include/" + libraryName + "Bindings/*.inl" )
-	)
-
-	for header in bindingsHeaders :
-		headerInstall = env.Command( "$BUILD_DIR/" + header, header, "sed \"" + sedSubstitutions + "\" $SOURCE > $TARGET" )
-		bindingsEnv.Alias( "build", headerInstall )
+	processHeaders( bindingsEnv, libraryName + "Bindings" )
 
 	# python module binary component
 
@@ -1082,7 +1594,7 @@ for libraryName, libraryDef in libraries.items() :
 
 		pythonModuleEnv["SHLIBPREFIX"] = ""
 		if pythonModuleEnv["PLATFORM"] == "darwin" :
-			# On OSX, we must build Python modules with the ".so"
+			# On MacOS, we must build Python modules with the ".so"
 			# prefix rather than the ".dylib" you might expect.
 			# This is done by changing the SHLIBSUFFIX variable.
 			# But this causes a problem with SCons' automatic
@@ -1093,31 +1605,48 @@ for libraryName, libraryDef in libraries.items() :
 			# LIBSUFFIXES variable used by the library scanner.
 			pythonModuleEnv["LIBSUFFIXES"].append( pythonModuleEnv.subst( "$SHLIBSUFFIX" ) )
 			pythonModuleEnv["SHLIBSUFFIX"] = ".so"
+		elif pythonModuleEnv["PLATFORM"] == "win32" :
+			pythonModuleEnv["SHLIBSUFFIX"] = ".pyd"
 
 		pythonModule = pythonModuleEnv.SharedLibrary( "python/" + libraryName + "/_" + libraryName, pythonModuleSource )
 		pythonModuleEnv.Default( pythonModule )
 
-		moduleInstall = pythonModuleEnv.Install( "$BUILD_DIR/python/" + libraryName, pythonModule )
+		moduleInstall = pythonModuleEnv.Install( os.path.join( installRoot, "python", libraryName ), pythonModule )
 		pythonModuleEnv.Alias( "build", moduleInstall )
+
+	# Moc preprocessing, for QObject derived classes. SCons does include a "qt" tool that
+	# can scan files automatically for the Q_OBJECT macro, but it hasn't been updated for Qt 5.
+	# We don't need `moc` for many files, so we just list them manually and emit the `moc`
+	# command ourselves.
+
+	for sourceFile in libraryDef.get( "mocSourceFiles", [] ) :
+		mocOutput = commandEnv.Command( os.path.splitext( sourceFile )[0] + ".moc", sourceFile, "moc $SOURCE -o $TARGET" )
+		# Somehow the above leads to a circular dependency between `mocOutput` and itself.
+		# Tell SCons not to worry. The official SCons tool does the same.
+		env.Ignore( mocOutput, mocOutput )
 
 	# python component of python module
 
-	pythonFiles = glob.glob( "python/" + libraryName + "/*.py" ) + glob.glob( "python/" + libraryName + "/*/*.py" )
+	pythonFiles = glob.glob( "python/" + libraryName + "/*.py" ) + glob.glob( "python/" + libraryName + "/*/*.py" ) + glob.glob( "python/" + libraryName + "/*/*/*.py" )
 	for pythonFile in pythonFiles :
-		pythonFileInstall = env.Command( "$BUILD_DIR/" + pythonFile, pythonFile, "sed \"" + sedSubstitutions + "\" $SOURCE > $TARGET" )
+		pythonFileInstall = env.Substfile(
+			os.path.join( installRoot, pythonFile ),
+			pythonFile,
+			SUBST_DICT = fileSubstitutions
+		)
 		env.Alias( "build", pythonFileInstall )
 
 	# apps
 
 	for app in libraryDef.get( "apps", [] ) :
-		appInstall = env.InstallAs("$BUILD_DIR/apps/{app}/{app}-1.py".format( app=app ), "apps/{app}/{app}-1.py".format( app=app ) )
+		appInstall = env.InstallAs( os.path.join( installRoot, "apps", app, "{app}-1.py".format( app=app ) ), "apps/{app}/{app}-1.py".format( app=app ) )
 		env.Alias( "build", appInstall )
 
 	# startup files
 
 	for startupDir in libraryDef.get( "apps", [] ) + [ libraryName ] :
-		for startupFile in glob.glob( "startup/{startupDir}/*.py".format( startupDir=startupDir ) ) :
-			startupFileInstall = env.InstallAs( "$BUILD_DIR/" + startupFile, startupFile )
+		for startupFile in glob.glob( "startup/{startupDir}/*.py".format( startupDir=startupDir ) ) + glob.glob( "startup/{startupDir}/*.gfr".format( startupDir=startupDir ) ) :
+			startupFileInstall = env.InstallAs( os.path.join( installRoot, startupFile ), startupFile )
 			env.Alias( "build", startupFileInstall )
 
 	# additional files
@@ -1125,25 +1654,32 @@ for libraryName, libraryDef in libraries.items() :
 	for additionalFile in libraryDef.get( "additionalFiles", [] ) :
 		if additionalFile in pythonFiles :
 			continue
-		additionalFileInstall = env.InstallAs( "$BUILD_DIR/" + additionalFile, additionalFile )
+		additionalFileInstall = env.InstallAs( os.path.join( installRoot, additionalFile ), additionalFile )
 		env.Alias( "build", additionalFileInstall )
 
 	# osl headers
 
 	for oslHeader in libraryDef.get( "oslHeaders", [] ) :
-		oslHeaderInstall = env.InstallAs( "$BUILD_DIR/" + oslHeader, oslHeader )
+		oslHeaderInstall = env.InstallAs( os.path.join( installRoot, oslHeader ), oslHeader )
 		env.Alias( "oslHeaders", oslHeaderInstall )
 		env.Alias( "build", oslHeaderInstall )
 
 	# osl shaders
 
 	def buildOSL( target, source, env ) :
-
-		subprocess.check_call( [ "oslc", "-I./shaders", "-o", str( target[0] ), str( source[0] ) ], env = env["ENV"] )
+		subprocess.check_call(
+			[
+				shutil.which( "oslc", path = env["ENV"]["PATH"] ) if env["PLATFORM"] == "win32" else "oslc",
+				"-I./shaders",
+				"-o",
+				str( target[0] ), str( source[0] )
+			],
+			env = env["ENV"]
+		)
 
 	for oslShader in libraryDef.get( "oslShaders", [] ) :
 		env.Alias( "build", oslShader )
-		compiledFile = commandEnv.Command( "$BUILD_DIR/" + os.path.splitext( oslShader )[0] + ".oso", oslShader, buildOSL )
+		compiledFile = commandEnv.Command( os.path.join( installRoot, os.path.splitext( oslShader )[0] + ".oso" ), oslShader, buildOSL )
 		env.Depends( compiledFile, "oslHeaders" )
 		env.Alias( "build", compiledFile )
 
@@ -1162,7 +1698,7 @@ for libraryName, libraryDef in libraries.items() :
 		f.write( env.subst( "from $GAFFER_STUB_MODULE import $GAFFER_STUB_CLASS as %s" % classLoadableName ) )
 
 	for classStub in libraryDef.get( "classStubs", [] ) :
-		stubFileName = "$BUILD_DIR/" + classStub[1] + "/" + classStub[1].rpartition( "/" )[2] + "-1.py"
+		stubFileName = os.path.join( installRoot, classStub[1], classStub[1].rpartition( "/" )[2] + "-1.py" )
 		stubEnv = env.Clone(
 			GAFFER_STUB_MODULE = libraryName,
 			GAFFER_STUB_CLASS = classStub[0],
@@ -1182,27 +1718,23 @@ def buildImageCommand( source, target, env ) :
 	svgFilename = str( source[0] )
 	filename = str( target[0] )
 
-	substitutions = inkscapeArgs( env["buildImageOptions"], svgFilename )
+	substitutions = validateAndFlattenImageOptions( env["buildImageOptions"], svgFilename )
 
 	outputDirectory = os.path.dirname( filename )
 	if not os.path.isdir( outputDirectory ) :
 		os.makedirs( outputDirectory )
 
-	args = " ".join( [
-		"--export-png={filePath}",
-		"--export-id={id}",
-		"--export-width={width:d}",
-		"--export-height={height:d}",
+	args = [
+		"--export-png={}".format( os.path.abspath( filename ) ),
+		"--export-id={}".format( substitutions["id"] ),
+		"--export-width={:d}".format( substitutions["width"] ),
+		"--export-height={:d}".format( substitutions["height"] ),
 		"--export-background-opacity=0",
-		"{svgPath}"
-	] ).format(
-		filePath = os.path.abspath( filename ),
-		svgPath = os.path.abspath( svgFilename ),
-		**substitutions
-	)
-	subprocess.check_call( env["INKSCAPE"] + " " + args, shell = True )
+		os.path.abspath( svgFilename )
+	]
+	subprocess.check_call( [ env["INKSCAPE"] ] + args )
 
-def inkscapeArgs( imageOptions, svg ) :
+def validateAndFlattenImageOptions( imageOptions, svg ) :
 
 	id_ = imageOptions["id"]
 
@@ -1212,6 +1744,23 @@ def inkscapeArgs( imageOptions, svg ) :
 
 	width = int( round( svgObjectInfo["width"] ) )
 	height = int( round( svgObjectInfo["height"] ) )
+
+	# Ensure images are properly pixel aligned and optionally, a specific size.
+	# Transparent container objects should be used where the artwork is of a shape that precludes this.
+
+	if imageOptions.get( "validatePixelAlignment", True ):
+		if width != svgObjectInfo["width"] or height != svgObjectInfo["height"] :
+			raise RuntimeError(
+				"Object with id '%s' is not aligned to pixel boundaries w: %s h: %s" %
+					( id_, svgObjectInfo["width"], svgObjectInfo["height"] )
+			)
+
+	# Optional exact dimension validation
+
+	vw = imageOptions.get( "requiredWidth", None )
+	vh = imageOptions.get( "requiredHeight", None )
+	if ( vw and width != vw ) or ( vh and height != vh ) :
+		raise RuntimeError( "Object '%s' is %dx%d must be %dx%d" % ( id_, width, height, vw, vh ) )
 
 	return {
 		"id" : id_,
@@ -1233,8 +1782,7 @@ def svgQuery( svgFile, id_ ) :
 
 		objects = {}
 
-		queryCommand = env["INKSCAPE"] + " --query-all \"" + filepath + "\""
-		output = subprocess.check_output( queryCommand, shell=True ).decode()
+		output = subprocess.check_output( [ env["INKSCAPE"], "--query-all", filepath ], universal_newlines=True )
 		for line in output.split( "\n" ) :
 			tokens = line.split( "," )
 			# <id>,<x>,<y>,<width>,<height>
@@ -1256,12 +1804,25 @@ def imagesToBuild( definitionFile ) :
 
 	toBuild = []
 
-	for i in exports["ids"] :
-		imageOptions = {
-			"id" : i,
-			"filename" : i + ".png"
-		}
-		toBuild.append( imageOptions )
+	# For each image, we must, at the very least, define:
+	#   id  : The svg object id
+	#   filename : The target filename
+
+	def searchWalk( root, parentOptions ) :
+
+		rootOptions = parentOptions.copy()
+		rootOptions.update( root.get( "options", {} ) )
+
+		for i in root.get( "ids", [] ) :
+			imageOptions = rootOptions.copy()
+			imageOptions["id"] = i
+			imageOptions["filename"] = i + ".png"
+			toBuild.append( imageOptions )
+
+		for definition in root.get( "groups", {} ).values() :
+			searchWalk( definition, rootOptions )
+
+	searchWalk( exports, {} )
 
 	return toBuild
 
@@ -1281,7 +1842,22 @@ def imagesToBuild( definitionFile ) :
 # The definition file must be `eval`able to define a single `exports`
 # dictionary, structured as follows:
 #
-#	{ "ids" : [ <id str>, ... ], }
+#	{
+#		# Required (unless "groups" are provided)
+#			"ids" : [ <id str>, ... ],
+#		# Optional
+#			"options" = { ... },
+#			# Each entry in this dict follows the same structure as the outer dict
+#			# to allow different options to be set for groups of images. The keys are
+#			# purely for organisational purposes, and don't affect image generation.
+#			"groups" : { ... }
+#	}
+#
+# Options :
+#
+#	- requiredWidth [int] : If set error if images are not of the supplied width.
+#	- requiredHeight [int] : If set error if images are not of the supplied height.
+#	- validatePixelAlignment [bool] : If True (default), error if objects aren't aligned to the pixel grid.
 #
 def graphicsCommands( env, svg, outputDirectory ) :
 
@@ -1376,15 +1952,20 @@ def locateDocs( docRoot, env ) :
 					# specifier so we need the second line
 					if ext == ".sh" :
 						line = s.readline()
-					if line.startswith( "# BuildTarget:" ) :
-						targets = [ os.path.join( root, x ) for x in line.partition( "# BuildTarget:" )[-1].strip( " \n" ).split( " " ) ]
+					targets = []
+					while line.startswith( "# BuildTarget:" ) :
+						targets.extend( [ os.path.join( root, x ) for x in line.partition( "# BuildTarget:" )[-1].strip( " \n" ).split( " " ) ] )
+						line = s.readline()
+					if targets:
 						command = env.Command( targets, sourceFile, generateDocs )
-						docEnv.Depends( command, "build" )
+						env.Depends( command, "build" )
+						if line.startswith( "# UndeclaredBuildTargets" ) :
+							env.NoCache( command )
 						# Force the commands to run serially, in case the doc generation
 						# has been run in parallel. Otherwise we can get overlapping
 						# screengrabs from the commands that launch Gaffer UIs.
 						if commands :
-							docEnv.Depends( command, commands[-1] )
+							env.Depends( command, commands[-1] )
 						commands.append( command )
 						sources.extend( targets )
 
@@ -1396,7 +1977,6 @@ def buildDocs( target, source, env ) :
 
 	subprocess.check_call(
 		[
-			"gaffer", "env", "python",
 			findOnPath( env.subst( "$SPHINX" ), env["ENV"]["PATH"] ),
 			"-b", "html",
 			str( source[0] ), os.path.dirname( str( target[0] ) )
@@ -1406,49 +1986,49 @@ def buildDocs( target, source, env ) :
 
 if haveSphinx and haveInkscape :
 
-	docEnv = commandEnv.Clone()
+	# We build docs in the standard environment rather than commandEnv, so we can
+	# use host python to avoid needing a matrix of sphinx versions to match Gaffer's
+	# bundled python version.
+	docEnv = env.Clone()
+	docEnv["ENV"]["PYTHONPATH"] = ":".join( sys.path )
 
-	# This is a little bit tricky. We need Gaffer itself to build the
-	# docs, because we autogenerate the node reference from the node metadata.
-	# And we also need sphinx, but `sphinx_build` starts with `#!/usr/bin/python`,
-	# which may not be compatible with Gaffer's built-in python. So, we locate
-	# the modules sphinx needs upfront, and make sure they're on the PYTHONPATH,
-	# then we use `gaffer env python` to launch Gaffer's python, and generate
-	# all the docs in that environment.
-
-	for module in ( "sphinx", "markupsafe", "CommonMark", "pytz" ) :
-		if not findOnPath( module, docEnv["ENV"]["PYTHONPATH"] ) :
-			try :
-				m = __import__( module )
-				docEnv["ENV"]["PYTHONPATH"] = docEnv["ENV"]["PYTHONPATH"] + ":" + os.path.dirname( m.__path__[0] )
-			except ImportError :
-				pass
+	# Since we don't copy the docs reference scripts, the screengrab
+	# scripts must read them from the source, so we use the reference
+	# env var. We also extend startup paths to include any config
+	# we need for the docs to build correctly.
+	docCommandEnv = commandEnv.Clone()
+	docCommandEnv["ENV"]["GAFFER_REFERENCE_PATHS"] = os.path.abspath( "doc/references" )
+	docCommandEnv["ENV"]["GAFFER_STARTUP_PATHS"] = os.path.abspath( "doc/startup" )
 
 	# Ensure that Arnold, Appleseed and 3delight are available in the documentation
 	# environment.
 
 	libraryPathEnvVar = "DYLD_LIBRARY_PATH" if docEnv["PLATFORM"]=="darwin" else "LD_LIBRARY_PATH"
 
-	if docEnv.subst( "$ARNOLD_ROOT" ) :
-		docEnv["ENV"]["PATH"] += ":" + docEnv.subst( "$ARNOLD_ROOT/bin" )
-		docEnv["ENV"]["PYTHONPATH"] += ":" + docEnv.subst( "$ARNOLD_ROOT/python" )
-		docEnv["ENV"][libraryPathEnvVar] += ":" + docEnv.subst( "$ARNOLD_ROOT/bin" )
+	if docCommandEnv.subst( "$ARNOLD_ROOT" ) :
+		docCommandEnv["ENV"]["PATH"] += ":" + docCommandEnv.subst( "$ARNOLD_ROOT/bin" )
+		docCommandEnv["ENV"]["PYTHONPATH"] += ":" + docCommandEnv.subst( "$ARNOLD_ROOT/python" )
+		docCommandEnv["ENV"][libraryPathEnvVar] = docCommandEnv["ENV"].get( libraryPathEnvVar, "" ) + ":" + docCommandEnv.subst( "$ARNOLD_ROOT/bin" )
 
-	if docEnv.subst( "$APPLESEED_ROOT" ) and docEnv["APPLESEED_ROOT"] != "$BUILD_DIR/appleseed" :
-		docEnv["ENV"]["PATH"] += ":" + docEnv.subst( "$APPLESEED_ROOT/bin" )
-		docEnv["ENV"][libraryPathEnvVar] += ":" + docEnv.subst( "$APPLESEED_ROOT/lib" )
-		docEnv["ENV"]["OSLHOME"] = docEnv.subst( "$OSLHOME" )
-		docEnv["ENV"]["OSL_SHADER_PATHS"] = docEnv.subst( "$APPLESEED_ROOT/shaders/appleseed" )
-		docEnv["ENV"]["APPLESEED_SEARCHPATH"] = docEnv.subst( "$APPLESEED_ROOT/shaders/appleseed:$LOCATE_DEPENDENCY_APPLESEED_SEARCHPATH" )
+	if docCommandEnv.subst( "$APPLESEED_ROOT" ) and docCommandEnv["APPLESEED_ROOT"] != "$BUILD_DIR/appleseed" :
+		docCommandEnv["ENV"]["PATH"] += ":" + docCommandEnv.subst( "$APPLESEED_ROOT/bin" )
+		docCommandEnv["ENV"][libraryPathEnvVar] = docCommandEnv["ENV"].get( libraryPathEnvVar, "" ) + ":" + docCommandEnv.subst( "$APPLESEED_ROOT/lib" )
+		docCommandEnv["ENV"]["OSLHOME"] = docCommandEnv.subst( "$OSLHOME" )
+		docCommandEnv["ENV"]["OSL_SHADER_PATHS"] = docCommandEnv.subst( "$APPLESEED_ROOT/shaders/appleseed" )
+		docCommandEnv["ENV"]["APPLESEED_SEARCHPATH"] = docCommandEnv.subst( "$APPLESEED_ROOT/shaders/appleseed:$LOCATE_DEPENDENCY_APPLESEED_SEARCHPATH" )
 
 	#  Docs graphics generation
 	docGraphicsCommands = graphicsCommands( docEnv, "resources/docGraphics.svg", "$BUILD_DIR/doc/gaffer/graphics" )
 	docEnv.Alias( "docs", docGraphicsCommands )
-	docSource, docGenerationCommands = locateDocs( "doc/source", docEnv )
+	docSource, docGenerationCommands = locateDocs( "doc/source", docCommandEnv )
 	docs = docEnv.Command( "$BUILD_DIR/doc/gaffer/html/index.html", docSource, buildDocs )
+	# SCons doesn't know about the assorted outputs of sphinx, so only index.html ends up in the cache
+	docEnv.NoCache( docs )
 	docEnv.Depends( docGenerationCommands, docGraphicsCommands )
 	docEnv.Depends( docs, docGraphicsCommands )
 	docEnv.Depends( docs, "build" )
+	docVars = docCommandEnv.Command( "doc/source/gafferVars.json", "doc/source/gafferVars.py", generateDocs )
+	docEnv.Depends( docs, docVars )
 	if resources is not None :
 		docEnv.Depends( docs, resources )
 	docEnv.Alias( "docs", docs )
@@ -1481,7 +2061,7 @@ for f in exampleFiles :
 
 def installer( target, source, env ) :
 
-	shutil.copytree( str( source[0] ), str( target[0] ), symlinks=True )
+	distutils.dir_util.copy_tree( str( source[0] ), str( target[0] ), preserve_symlinks=True, update=True )
 
 if env.subst( "$PACKAGE_FILE" ).endswith( ".dmg" ) :
 
@@ -1523,6 +2103,8 @@ def packager( target, source, env ) :
 
 	if target.endswith( ".dmg" ) :
 		runCommand( "hdiutil create -volname '%s' -srcfolder '%s' -ov -format UDZO '%s'" % ( os.path.basename( target ), source, target ) )
+	elif target.endswith( ".zip" ) :
+		shutil.make_archive( os.path.splitext( target )[0], "zip", root_dir=d, base_dir=b )
 	else :
 		runCommand( "tar -czf %s -C %s %s" % ( target, d, b ) )
 

@@ -45,7 +45,6 @@
 
 #include "boost/filesystem.hpp"
 
-#include "tbb/concurrent_unordered_map.h"
 #include "tbb/mutex.h"
 
 using namespace std;
@@ -61,6 +60,14 @@ struct LocationWriter
 {
 	LocationWriter(SceneInterfacePtr output, ConstCompoundDataPtr sets, float time, tbb::mutex& mutex) : m_output( output ), m_sets(sets), m_time( time ), m_mutex( mutex )
 	{
+	}
+
+	~LocationWriter()
+	{
+		// Some implementations of SceneInterface may perform writing when we release the SceneInterface,
+		// so we need to hold the lock while freeing it
+		tbb::mutex::scoped_lock scopedLock( m_mutex );
+		m_output.reset();
 	}
 
 	/// first half of this function can be lock free reading data from ScenePlug
@@ -106,21 +113,13 @@ struct LocationWriter
 			}
 		}
 
+		ConstInternedStringVectorDataPtr childNames = scene->childNamesPlug()->getValue();
+
 		tbb::mutex::scoped_lock scopedLock( m_mutex );
 
 		if( !scenePath.empty() )
 		{
-			m_output = m_output->child( scenePath.back(), SceneInterface::CreateIfMissing );
-		}
-
-		for( CompoundObject::ObjectMap::const_iterator it = attributes->members().begin(), eIt = attributes->members().end(); it != eIt; it++ )
-		{
-			m_output->writeAttribute( it->first, it->second.get(), m_time );
-		}
-
-		if( globals && !globals->members().empty() )
-		{
-			m_output->writeAttribute( "gaffer:globals", globals.get(), m_time );
+			m_output = m_output->child( scenePath.back() );
 		}
 
 		if( object->typeId() != IECore::NullObjectTypeId && scenePath.size() > 0 )
@@ -135,9 +134,27 @@ struct LocationWriter
 			m_output->writeTransform( transformData.get(), m_time );
 		}
 
+		for( CompoundObject::ObjectMap::const_iterator it = attributes->members().begin(), eIt = attributes->members().end(); it != eIt; it++ )
+		{
+			m_output->writeAttribute( it->first, it->second.get(), m_time );
+		}
+
+		if( globals && !globals->members().empty() )
+		{
+			m_output->writeAttribute( "gaffer:globals", globals.get(), m_time );
+		}
+
 		if( !locationSets.empty() )
 		{
 			m_output->writeTags( locationSets );
+		}
+
+		for( const auto &childName : childNames->readable() )
+		{
+			// `SceneAlgo::parallelProcessLocations()` may visit children in any
+			// order. Pre-create SceneInterface children here so that they are
+			// created in the correct order.
+			m_output->child( childName, SceneInterface::CreateIfMissing );
 		}
 
 		return true;
@@ -151,7 +168,7 @@ struct LocationWriter
 
 }
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( SceneWriter );
+GAFFER_NODE_DEFINE_TYPE( SceneWriter );
 
 size_t SceneWriter::g_firstPlugIndex = 0;
 
@@ -201,7 +218,6 @@ const ScenePlug *SceneWriter::outPlug() const
 
 IECore::MurmurHash SceneWriter::hash( const Gaffer::Context *context ) const
 {
-	Context::Scope scope( context );
 	const ScenePlug *scenePlug = inPlug()->source<ScenePlug>();
 	if ( ( fileNamePlug()->getValue() == "" ) || ( scenePlug == inPlug() ) )
 	{
@@ -231,9 +247,7 @@ void SceneWriter::executeSequence( const std::vector<float> &frames ) const
 		throw IECore::Exception( "No input scene" );
 	}
 
-	const std::string fileName = fileNamePlug()->getValue();
-	createDirectories( fileName );
-	SceneInterfacePtr output = SceneInterface::create( fileName, IndexedIO::Write );
+	SceneInterfacePtr output;
 	tbb::mutex mutex;
 	ContextPtr context = new Context( *Context::current() );
 	Context::Scope scopedContext( context.get() );
@@ -241,6 +255,13 @@ void SceneWriter::executeSequence( const std::vector<float> &frames ) const
 	for( std::vector<float>::const_iterator it = frames.begin(); it != frames.end(); ++it )
 	{
 		context->setFrame( *it );
+
+		const std::string fileName = fileNamePlug()->getValue();
+		if( !output || output->fileName() != fileName )
+		{
+			createDirectories( fileName );
+			output = SceneInterface::create( fileName, IndexedIO::Write );
+		}
 
 		ConstCompoundDataPtr sets = SceneAlgo::sets( scene );
 		LocationWriter locationWriter( output, sets, context->getTime(), mutex );

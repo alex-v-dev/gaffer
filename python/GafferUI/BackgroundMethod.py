@@ -72,7 +72,7 @@ import GafferUI
 #		pass
 #
 #	@updateInBackground.postCall
-#	def __updateInBackgroundPreCall( self, result )
+#	def __updateInBackgroundPostCall( self, result )
 #
 #		# Called on the UI thread with the result
 #		# of the background call (or any exception it
@@ -114,6 +114,9 @@ class BackgroundMethod( object ) :
 				result = method( widget, *args, **kw )
 			except :
 				result = sys.exc_info()[1]
+				# Avoid circular references that would prevent this
+				# stack frame (and therefore `widget`) from dying.
+				result.__traceback__ = None
 
 			if not superceded.get() :
 				Gaffer.ParallelAlgo.callOnUIThread( functools.partial( foregroundFunction, widget, result, superceded ) )
@@ -151,7 +154,8 @@ class BackgroundMethod( object ) :
 					widget,
 					method.__name__ + "__VisibilityChangedConnection",
 					widget.visibilityChangedSignal().connect(
-						functools.partial( self.__visibilityChanged, method = method, foregroundFunction = foregroundFunction )
+						functools.partial( self.__visibilityChanged, method = method, foregroundFunction = foregroundFunction ),
+						scoped = True
 					)
 				)
 

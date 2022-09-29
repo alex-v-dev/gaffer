@@ -8,7 +8,7 @@ In this three-part tutorial, we will walk through the following example startup 
 2. [customBookmarks.py](../TutorialStartupConfig2/index.md): Adds file path bookmarks to the various file browsers in Gaffer's interface.
 3. [customNodes.py](../TutorialStartupConfig3/index.md): Adds a custom entry to the node menu.
 
-In this first config, we will add a global Context Variable called `${project:resources}` that points to the `/resources` directory in the Gaffer installation directory. This Context Variable will make it slightly easier to reach the directory from any string plug that load files. Since we'll add the Context Variable using a startup config, it will be automatically added to every node graph Gaffer opens or creates.
+In this first config, we will add a global [Context Variable](../../WorkingWithTheNodeGraph/Contexts/index.html#context-variables)) called `${project:resources}` that points to the `/resources` directory in the Gaffer installation directory. This Context Variable will make it slightly easier to reach the directory from any string plug that load files. Since we'll add the Context Variable using a startup config, it will be automatically added to every node graph Gaffer opens or creates.
 
 ![](images/tutorialVariableSubstitutionInStringPlug.png "A global Context Variable in a string plug")
 
@@ -40,30 +40,30 @@ One advantage of employing global Context Variables is that they are portable be
 With all that out of the way, onto the first startup config.
 
 
-## customVariables.py ## 
+## customVariables.py ##
 
 Copy this code to a new a `customVariables.py` file in `~/gaffer/startup/gui`:
 
-```eval_rst
+```{eval-rst}
 .. code-block:: python
     :linenos:
 
     import IECore
     import Gaffer
-    
+
     def __scriptAdded( container, script ) :
-    
+
     	variables = script["variables"]
-    
+
     	if "projectResources" not in variables :
     		projectResources = variables.addMember(
     			"project:resources",
     			IECore.StringData( "${GAFFER_ROOT}/resources/" ),
     			"projectResources"
     		)
-    
+
     	Gaffer.MetadataAlgo.setReadOnly( variables["projectResources"]["name"], True )
-    
+
     application.root()["scripts"].childAddedSignal().connect( __scriptAdded, scoped = False )
 ```
 
@@ -71,7 +71,7 @@ Let's break down what's going on here.
 
 After `import`ing the necessary modules, we declare a function that we will use to modify the current graph:
 
-```eval_rst
+```{eval-rst}
 .. code-block:: python
     :lineno-start: 4
 
@@ -82,12 +82,12 @@ Both the keyword arguments we pass are implicit, and particular to the signal th
 
 Inside the function, we grab the `variables` plug, which contains all of the graph's global Context Variables. Then, we add a new Context Variable using the `addMember()` method.
 
-```eval_rst
+```{eval-rst}
 .. code-block:: python
     :lineno-start: 6
 
     	variables = script["variables"]
-    
+
     	if "projectResources" not in variables :
     		projectResources = variables.addMember(
     			"project:resources",
@@ -112,7 +112,7 @@ Notice that in the value we provided, we used the `${GAFFER_ROOT}` substitution 
 
 We then finish the function by setting the variable's name to read-only, to protect it from accidentally being renamed by the user:
 
-```eval_rst
+```{eval-rst}
 .. code-block:: python
     :lineno-start: 15
 
@@ -121,7 +121,7 @@ We then finish the function by setting the variable's name to read-only, to prot
 
 We wrap up the config by adding our function to an event signal that fires when node graphs are opened and created in the main application:
 
-```eval_rst
+```{eval-rst}
 .. code-block:: python
     :lineno-start: 17
 

@@ -1,11 +1,14 @@
-# BuildTarget: images/tutorialSettingsWindowDefaultContextVariables.png
 # BuildTarget: images/tutorialSettingsWindowCustomContextVariable.png
+# BuildTarget: images/tutorialSettingsWindowDefaultContextVariables.png
 # BuildTarget: images/tutorialVariableSubstitutionInStringPlug.png
-# BuildTarget: images/tutorialVariableSubstitutionExpression.png
 # BuildTarget: images/tutorialVariableSubstitutionTest.png
 
 import os
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 import tempfile
 import time
 
@@ -31,7 +34,7 @@ __temporaryDirectory = tempfile.mkdtemp( prefix = "gafferDocs" )
 
 def __getTempFilePath( fileName, directory = __temporaryDirectory ) :
 	filePath = "/".join( ( directory, fileName ) )
-	
+
 	return filePath
 
 def __dispatchScript( script, tasks, settings ) :
@@ -41,10 +44,7 @@ def __dispatchScript( script, tasks, settings ) :
 		" ".join( settings ),
 		__temporaryDirectory
 		)
-	process = subprocess.Popen( command, shell=True, stderr = subprocess.PIPE )
-	process.wait()
-
-	return process
+	subprocess.check_call( command, shell=True )
 
 # Illustration: a `tree` command run on a custom startup config
 # TODO: Automate `images/illustrationStartupConfigDirectoryTree.png` when these tools become available:
@@ -74,6 +74,7 @@ __tempImagePath = __getTempFilePath( "{}.png".format( __imageName ) )
 script["SceneReader"] = GafferScene.SceneReader()
 script["SceneReader"]["fileName"].setValue( "${project:resources}/gafferBot/caches/gafferBot.scc" )
 script.selection().add( script["SceneReader"] )
+script.setFocus( script["SceneReader"] )
 with GafferUI.Window( "Node Editor : SceneReader" ) as __nodeEditorWindow :
 
 	nodeEditor = GafferUI.NodeEditor( script )
@@ -96,6 +97,7 @@ __nodeEditorWindow.setVisible( False )
 # Tutorial: testing the variable substitution in main window
 # TODO: Automate the right window pane to be wider
 script.selection().add( script["SceneReader"] )
+script.setFocus( script["SceneReader"] )
 __delay(1)
 with script.context():
 	viewer.view().viewportGadget().frame( script["SceneReader"]["out"].bound( "/" ) )

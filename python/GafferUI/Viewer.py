@@ -38,13 +38,14 @@
 import functools
 import collections
 
+import imath
+
 import IECore
 
 import Gaffer
 import GafferUI
 
-# import lazily to improve startup of apps which don't use GL functionality
-IECoreGL = Gaffer.lazyImport( "IECoreGL" )
+import IECoreGL
 
 ##########################################################################
 # Viewer implementation
@@ -69,7 +70,7 @@ class Viewer( GafferUI.NodeSetEditor ) :
 			),
 		)
 
-		GafferUI.NodeSetEditor.__init__( self, self.__gadgetWidget, scriptNode, **kw )
+		GafferUI.NodeSetEditor.__init__( self, self.__gadgetWidget, scriptNode, nodeSet = scriptNode.focusSet(), **kw )
 
 		self.__nodeToolbars = []
 		self.__viewToolbars = []
@@ -115,8 +116,8 @@ class Viewer( GafferUI.NodeSetEditor ) :
 			) :
 
 				self.__toolChooser = _ToolChooser()
-				self.__primaryToolChangedConnection = self.__toolChooser.primaryToolChangedSignal().connect(
-					Gaffer.WeakMethod( self.__primaryToolChanged )
+				self.__toolChooser.primaryToolChangedSignal().connect(
+					Gaffer.WeakMethod( self.__primaryToolChanged ), scoped = False
 				)
 
 				for toolbarContainer in [ self.__viewToolbars, self.__nodeToolbars, self.__toolToolbars ] :
@@ -139,15 +140,11 @@ class Viewer( GafferUI.NodeSetEditor ) :
 		self.__gadgetWidget.addOverlay( verticalToolbars )
 
 		self.__views = []
-		# Indexed by view instance. We would prefer to simply
-		# store tools as python attributes on the view instances
-		# themselves, but we can't because that would create
-		# circular references. Maybe it makes sense to be able to
-		# query tools from a view anyway?
 		self.__currentView = None
 
 		self.keyPressSignal().connect( Gaffer.WeakMethod( self.__keyPress ), scoped = False )
 		self.contextMenuSignal().connect( Gaffer.WeakMethod( self.__contextMenu ), scoped = False )
+		self.nodeSetChangedSignal().connect( Gaffer.WeakMethod( self.__updateViewportMessage ), scoped = False )
 
 		self._updateFromSet()
 
@@ -159,7 +156,7 @@ class Viewer( GafferUI.NodeSetEditor ) :
 
 		return self.__gadgetWidget
 
-	__viewContextMenuSignal = Gaffer.Signal3()
+	__viewContextMenuSignal = Gaffer.Signals.Signal3()
 
 	## Returns a signal emitted to generate a context menu for a view.
 	# The signature for connected slots is `slot( viewer, view, menuDefiniton )`.
@@ -214,7 +211,7 @@ class Viewer( GafferUI.NodeSetEditor ) :
 		if self.__currentView is not None :
 			self.__gadgetWidget.setViewportGadget( self.__currentView.viewportGadget() )
 		else :
-			self.__gadgetWidget.setViewportGadget( GafferUI.ViewportGadget() )
+			self.__updateViewportMessage()
 
 		self.__primaryToolChanged()
 
@@ -234,7 +231,13 @@ class Viewer( GafferUI.NodeSetEditor ) :
 
 		for t in self.__toolChooser.tools() :
 			if Gaffer.Metadata.value( t, "viewer:shortCut" ) == event.key :
-				t["active"].setValue( True )
+				if not t["active"].getValue():
+					t["active"].setValue( True )
+				else:
+					# If it's already active, and it's a non-exclusive tool, then pressing the key
+					# again should deactivate it
+					if Gaffer.Metadata.value( t, "tool:exclusive" ) == False:
+						t["active"].setValue( False )
 				return True
 
 		return False
@@ -255,6 +258,46 @@ class Viewer( GafferUI.NodeSetEditor ) :
 
 		return True
 
+	def __updateViewportMessage( self, unused = None ) :
+
+		if self.view() is not None :
+			return
+
+		text = None
+		icon = None
+		if self.getNodeSet() == self.scriptNode().focusSet() :
+			text = "Focus a node to view"
+			icon = "viewerFocusPrompt.png"
+		elif self.getNodeSet() == self.scriptNode().selection() :
+			text = "Select a node to view"
+			icon = "viewerSelectPrompt.png"
+		else :
+			self.__gadgetWidget.setViewportGadget( GafferUI.ViewportGadget() )
+			return
+
+		image = GafferUI.ImageGadget( icon )
+		image.setTransform( imath.M44f().setScale( imath.V3f( 3.0 ) / image.bound().size().y ) )
+
+		message = GafferUI.TextGadget( text )
+		messageStyle = GafferUI.StandardStyle()
+		messageStyle.setColor( GafferUI.StandardStyle.Color.ForegroundColor, imath.Color3f( 94 / 255.0 ) )
+		message.setStyle( messageStyle )
+
+		column = GafferUI.LinearContainer(
+			"column",
+			GafferUI.LinearContainer.Orientation.Y,
+			GafferUI.LinearContainer.Alignment.Centre,
+			spacing = 0.5
+		)
+		column.addChild( GafferUI.IndividualContainer( message ) )
+		column.addChild( GafferUI.IndividualContainer( image ) )
+		column.setPadding( imath.Box3f( imath.V3f( -10 ), imath.V3f( 10 ) ) )
+
+		viewport = GafferUI.ViewportGadget( column )
+		viewport.frame( column.bound() )
+		viewport.setCameraEditable( False )
+		self.__gadgetWidget.setViewportGadget( viewport )
+
 GafferUI.Editor.registerType( "Viewer", Viewer )
 
 # Internal widget to simplify the management of node toolbars.
@@ -262,7 +305,7 @@ class _Toolbar( GafferUI.Frame ) :
 
 	def __init__( self, edge, context, **kw ) :
 
-		GafferUI.Frame.__init__( self, borderWidth = 0, borderStyle = GafferUI.Frame.BorderStyle.None, **kw )
+		GafferUI.Frame.__init__( self, borderWidth = 0, borderStyle = GafferUI.Frame.BorderStyle.None_, **kw )
 
 		# We store the 5 most recently used toolbars in a cache,
 		# to avoid unnecessary reconstruction when switching back and
@@ -314,9 +357,6 @@ class _ToolChooser( GafferUI.Frame ) :
 			self.tools.sort( key = lambda v : Gaffer.Metadata.value( v, "order" ) if Gaffer.Metadata.value( v, "order" ) is not None else 999 )
 
 			for t in self.tools :
-				t.plugSetSignal().connect( Gaffer.WeakMethod( self.__toolPlugSet, fallbackResult = lambda plug : None ), scoped = False )
-
-			for t in self.tools :
 				t.plugDirtiedSignal().connect( Gaffer.WeakMethod( self.__toolPlugDirtied, fallbackResult = lambda plug : None ), scoped = False )
 
 			with GafferUI.ListContainer( spacing = 1 ) as self.widgets :
@@ -337,28 +377,12 @@ class _ToolChooser( GafferUI.Frame ) :
 			GafferUI.WidgetAlgo.joinEdges( self.widgets )
 
 			self.primaryTool = None
-			self.primaryToolChangedSignal = Gaffer.Signal0()
+			self.primaryToolChangedSignal = Gaffer.Signals.Signal0()
 
 			if len( self.tools ) :
 				autoActivate = Gaffer.Metadata.value( self.tools[0], "viewer:shouldAutoActivate" )
 				if autoActivate is None or autoActivate :
 					self.tools[0]["active"].setValue( True )
-
-		def __toolPlugSet( self, plug ) :
-
-			## \todo It feels like the View should probably own
-			# the tools and do this work itself.
-
-			tool = plug.node()
-			if plug != tool["active"] :
-				return
-
-			if not plug.getValue() or Gaffer.Metadata.value( tool, "tool:exclusive" ) == False :
-				return
-
-			for t in self.tools :
-				if not t.isSame( tool ) and Gaffer.Metadata.value( t, "tool:exclusive" ) != False :
-					t["active"].setValue( False )
 
 		def __toolPlugDirtied( self, plug ) :
 
@@ -378,7 +402,7 @@ class _ToolChooser( GafferUI.Frame ) :
 
 	def __init__( self, **kw ) :
 
-		GafferUI.Frame.__init__( self, borderWidth = 0, borderStyle = GafferUI.Frame.BorderStyle.None, **kw )
+		GafferUI.Frame.__init__( self, borderWidth = 0, borderStyle = GafferUI.Frame.BorderStyle.None_, **kw )
 
 		self.__view = None
 		self.__primaryToolChangedSignal = GafferUI.WidgetSignal()
@@ -419,7 +443,7 @@ class _ToolChooser( GafferUI.Frame ) :
 		self.__primaryToolChangedConnection = None
 		if viewTools is not None :
 			self.__primaryToolChangedConnection = viewTools.primaryToolChangedSignal.connect(
-				Gaffer.WeakMethod( self.__primaryToolChanged )
+				Gaffer.WeakMethod( self.__primaryToolChanged ), scoped = True
 			)
 
 		self.__view = view

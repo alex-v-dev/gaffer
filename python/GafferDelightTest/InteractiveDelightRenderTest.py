@@ -47,6 +47,8 @@ import GafferDelight
 @unittest.skipIf( GafferTest.inCI(), "No license available in cloud" )
 class InteractiveDelightRenderTest( GafferSceneTest.InteractiveRenderTest ) :
 
+	interactiveRenderNodeClass =  GafferDelight.InteractiveDelightRender
+
 	# Temporarily disable this test (which is implemented in the
 	# base class) because it fails. The issue is that we're automatically
 	# instancing the geometry for the two lights, and that appears to
@@ -63,6 +65,13 @@ class InteractiveDelightRenderTest( GafferSceneTest.InteractiveRenderTest ) :
 
 		pass
 
+	# Disable this test for now as we don't have light linking support in
+	# 3Delight, yet.
+	@unittest.skip( "No light linking support just yet" )
+	def testHideLinkedLight( self ) :
+
+		pass
+
 	# Disable this test for now as we don't have light filter support in
 	# 3Delight, yet.
 	@unittest.skip( "No light filter support just yet" )
@@ -70,9 +79,12 @@ class InteractiveDelightRenderTest( GafferSceneTest.InteractiveRenderTest ) :
 
 		pass
 
-	def _createInteractiveRender( self ) :
+	# Disable this test for now as we don't have light filter support in
+	# 3Delight, yet.
+	@unittest.skip( "No light filter support just yet" )
+	def testLightFiltersAndSetEdits( self ) :
 
-		return GafferDelight.InteractiveDelightRender()
+		pass
 
 	def _createConstantShader( self ) :
 

@@ -64,7 +64,10 @@ class GAFFERSCENE_API DeletePoints : public Deformer
 		Gaffer::BoolPlug *invertPlug();
 		const Gaffer::BoolPlug *invertPlug() const;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::DeletePoints, DeletePointsTypeId, Deformer );
+		Gaffer::BoolPlug *ignoreMissingVariablePlug();
+		const Gaffer::BoolPlug *ignoreMissingVariablePlug() const;
+
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::DeletePoints, DeletePointsTypeId, Deformer );
 
 	protected :
 
@@ -83,4 +86,3 @@ IE_CORE_DECLAREPTR( DeletePoints )
 } // namespace GafferScene
 
 #endif // GAFFERSCENE_DELETEPOINTS_H
-

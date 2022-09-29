@@ -37,7 +37,9 @@
 #ifndef GAFFER_PROCESS_H
 #define GAFFER_PROCESS_H
 
+#include "Gaffer/Context.h"
 #include "Gaffer/Export.h"
+#include "Gaffer/Plug.h"
 #include "Gaffer/ThreadState.h"
 
 #include "IECore/InternedString.h"
@@ -81,6 +83,10 @@ class GAFFER_API Process : private ThreadState::Scope
 		/// this thread, or null if there is no such process.
 		static const Process *current();
 
+		/// Check if we must force the monitored process to run, rather than using employing caches that
+		/// may allow skipping the execution ( obviously, this is much slower than using the caches )
+		inline static bool forceMonitoring( const ThreadState &s, const Plug *plug, const IECore::InternedString &processType );
+
 	protected :
 
 		/// Protected constructor for use by derived classes only.
@@ -97,6 +103,8 @@ class GAFFER_API Process : private ThreadState::Scope
 		void handleException();
 
 	private :
+
+		static bool forceMonitoringInternal( const ThreadState &s, const Plug *plug, const IECore::InternedString &processType );
 
 		void emitError( const std::string &error, const Plug *source = nullptr ) const;
 
@@ -142,5 +150,7 @@ class GAFFER_API ProcessException : public std::runtime_error
 };
 
 } // namespace Gaffer
+
+#include "Gaffer/Process.inl"
 
 #endif // GAFFER_PROCESS_H

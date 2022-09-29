@@ -88,14 +88,12 @@ std::ostream & operator<<( std::ostream &out, const Op &op )
 
 struct ExpressionAst
 {
-	typedef
-	boost::variant<
+	using type = boost::variant<
 		Nil,
 		std::string, // identifier
 		boost::recursive_wrapper<ExpressionAst>,
 		boost::recursive_wrapper<BinaryOp>
-		>
-	type;
+	>;
 
 	ExpressionAst()
 		: expr( Nil() ) {}
@@ -124,7 +122,7 @@ struct BinaryOp
 struct CreateBinaryOpImplementation
 {
 
-	typedef ExpressionAst & result_type;
+	using result_type = ExpressionAst &;
 
 	ExpressionAst & operator()( ExpressionAst &lhs, Op op, ExpressionAst &rhs ) const
 	{
@@ -145,7 +143,7 @@ boost::phoenix::function<CreateBinaryOpImplementation> createBinaryOp;
 // If one of the operands is an operation itself: op:&(A, op:|(B, C))
 struct AstPrinter
 {
-	typedef void result_type;
+	using result_type = void;
 
 	AstPrinter()
 		: stream( std::cout ) {}
@@ -193,7 +191,7 @@ std::ostream& operator<<( std::ostream& stream, const ExpressionAst& expr )
 // ------------------
 struct AstEvaluator
 {
-	typedef PathMatcher result_type;
+	using result_type = PathMatcher;
 
 	AstEvaluator( const ScenePlug *scene )
 		: m_scene( scene )
@@ -239,7 +237,7 @@ struct AstEvaluator
 					continue;
 				}
 
-				setScope.setSetName( setName );
+				setScope.setSetName( &setName );
 				ConstPathMatcherDataPtr setData = m_scene->setPlug()->getValue();
 				result.addPaths( setData->readable() );
 			}
@@ -316,7 +314,7 @@ struct AstEvaluator
 // ---------------
 struct AstHasher
 {
-	typedef void result_type;
+	using result_type = void;
 
 	AstHasher( const ScenePlug *scene, IECore::MurmurHash &h ) : m_scene( scene ), m_hash( h )
 	{
@@ -358,7 +356,7 @@ struct AstHasher
 					continue;
 				}
 
-				setScope.setSetName( setName );
+				setScope.setSetName( &setName );
 				m_hash.append( m_scene->setPlug()->hash() );
 			}
 		}
@@ -472,8 +470,8 @@ void expressionToAST( const std::string &setExpression, ExpressionAst &ast)
 		return;
 	}
 
-	typedef std::string::const_iterator iterator_type;
-	typedef ExpressionGrammar<iterator_type> ExpressionGrammar;
+	using iterator_type = std::string::const_iterator;
+	using ExpressionGrammar = ExpressionGrammar<iterator_type>;
 
 	ExpressionGrammar grammar;
 
@@ -546,13 +544,13 @@ IECore::MurmurHash setExpressionHash( const std::string &setExpression, const Sc
 
 bool affectsSetExpression( const Plug *scenePlugChild )
 {
-	const ScenePlug *parent = scenePlugChild->parent<ScenePlug>();
-
-	if( parent->setPlug() == scenePlugChild )
+	if( auto parent = scenePlugChild->parent<ScenePlug>() )
 	{
-		return true;
+		return
+			scenePlugChild == parent->setPlug() ||
+			scenePlugChild == parent->setNamesPlug()
+		;
 	}
-
 	return false;
 }
 

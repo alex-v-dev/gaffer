@@ -58,10 +58,13 @@ class GAFFERSCENE_API MapProjection : public ObjectProcessor
 		MapProjection( const std::string &name=defaultName<MapProjection>() );
 		~MapProjection() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::MapProjection, MapProjectionTypeId, ObjectProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::MapProjection, MapProjectionTypeId, ObjectProcessor );
 
 		Gaffer::StringPlug *cameraPlug();
 		const Gaffer::StringPlug *cameraPlug() const;
+
+		Gaffer::StringPlug *positionPlug();
+		const Gaffer::StringPlug *positionPlug() const;
 
 		Gaffer::StringPlug *uvSetPlug();
 		const Gaffer::StringPlug *uvSetPlug() const;

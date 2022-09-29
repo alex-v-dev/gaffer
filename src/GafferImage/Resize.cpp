@@ -45,7 +45,7 @@ using namespace Imath;
 using namespace Gaffer;
 using namespace GafferImage;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Resize );
+GAFFER_NODE_DEFINE_TYPE( Resize );
 
 size_t Resize::g_firstPlugIndex = 0;
 
@@ -75,6 +75,7 @@ Resize::Resize( const std::string &name )
 
 	resampledInPlug()->setInput( resample->outPlug() );
 
+	outPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 	outPlug()->metadataPlug()->setInput( inPlug()->metadataPlug() );
 	outPlug()->channelNamesPlug()->setInput( inPlug()->channelNamesPlug() );
 }
@@ -154,7 +155,9 @@ void Resize::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs
 
 	if(
 		input == inPlug()->dataWindowPlug() ||
-		input == resampledInPlug()->dataWindowPlug()
+		input == resampledInPlug()->dataWindowPlug() ||
+		input == inPlug()->formatPlug() ||
+		formatPlug()->isAncestorOf( input )
 	)
 	{
 		outputs.push_back( outPlug()->dataWindowPlug() );
@@ -162,7 +165,9 @@ void Resize::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs
 
 	if(
 		input == inPlug()->channelDataPlug() ||
-		input == resampledInPlug()->channelDataPlug()
+		input == resampledInPlug()->channelDataPlug() ||
+		input == inPlug()->formatPlug() ||
+		formatPlug()->isAncestorOf( input )
 	)
 	{
 		outputs.push_back( outPlug()->channelDataPlug() );

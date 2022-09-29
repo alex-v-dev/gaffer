@@ -67,7 +67,6 @@ from .ContainerWidgetTest import ContainerWidgetTest
 from .SelectionMenuTest import SelectionMenuTest
 from .StandardStyleTest import StandardStyleTest
 from .EditorTest import EditorTest
-from .NumericSliderTest import NumericSliderTest
 from .PlugValueWidgetTest import PlugValueWidgetTest
 from .PathListingWidgetTest import PathListingWidgetTest
 from .MultiLineTextWidgetTest import MultiLineTextWidgetTest
@@ -117,6 +116,17 @@ from .CompoundNumericNoduleTest import CompoundNumericNoduleTest
 from .DocumentationAlgoTest import DocumentationAlgoTest
 from .ExamplesTest import ExamplesTest
 from .NodeSetEditorTest import NodeSetEditorTest
+from .BackdropNodeGadgetTest import BackdropNodeGadgetTest
+from .StringPlugValueWidgetTest import StringPlugValueWidgetTest
+from .BoolPlugValueWidgetTest import BoolPlugValueWidgetTest
+from .NumericWidgetTest import NumericWidgetTest
+from .PresetsPlugValueWidgetTest import PresetsPlugValueWidgetTest
+from .SpreadsheetUITest import SpreadsheetUITest
+from .NodeUITest import NodeUITest
+from .AuxiliaryNodeGadgetTest import AuxiliaryNodeGadgetTest
+from .CodeWidgetTest import CodeWidgetTest
+from .PathColumnTest import PathColumnTest
+from .ToolTest import ToolTest
 
 if __name__ == "__main__":
 	unittest.main()

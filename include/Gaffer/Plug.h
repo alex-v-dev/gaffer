@@ -44,6 +44,8 @@
 
 #include "IECore/Object.h"
 
+#include <list>
+
 namespace Gaffer
 {
 
@@ -178,7 +180,7 @@ class GAFFER_API Plug : public GraphComponent
 		/// @name Connections
 		///////////////////////////////////////////////////////////////////////
 		//@{
-		typedef std::list<Plug *> OutputContainer;
+		using OutputContainer = std::list<Plug *>;
 		/// Plugs may accept or reject a potential input by
 		/// implementing this method to return true for
 		/// acceptance and false for rejection. Implementations
@@ -228,6 +230,7 @@ class GAFFER_API Plug : public GraphComponent
 
 		void parentChanging( Gaffer::GraphComponent *newParent ) override;
 		void parentChanged( Gaffer::GraphComponent *oldParent ) override;
+		void childrenReordered( const std::vector<size_t> &oldIndices ) override;
 
 		/// Initiates the propagation of dirtiness from the specified
 		/// plug to its outputs and affected plugs (as defined by
@@ -279,7 +282,7 @@ IE_CORE_DECLAREPTR( Plug );
 template<typename T, Plug::Direction D>
 struct Plug::TypePredicate
 {
-	typedef T ChildType;
+	using ChildType = T;
 
 	bool operator()( const GraphComponentPtr &g ) const
 	{
@@ -300,7 +303,7 @@ struct Plug::TypePredicate
 template<Plug::Direction D=Plug::Invalid, typename T=Plug>
 struct PlugPredicate
 {
-	typedef T ChildType;
+	using ChildType = T;
 
 	bool operator()( const GraphComponentPtr &g ) const
 	{
@@ -316,15 +319,6 @@ struct PlugPredicate
 		return D==p->direction();
 	}
 };
-
-/// \deprecated Use Plug::Iterator etc instead
-typedef FilteredChildIterator<PlugPredicate<> > PlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::In, Plug> > InputPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::Out, Plug> > OutputPlugIterator;
-
-typedef FilteredRecursiveChildIterator<PlugPredicate<>, PlugPredicate<> > RecursivePlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::In, Plug>, PlugPredicate<> > RecursiveInputPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Out, Plug>, PlugPredicate<> > RecursiveOutputPlugIterator;
 
 } // namespace Gaffer
 

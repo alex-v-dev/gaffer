@@ -38,6 +38,7 @@ import re
 import copy
 import functools
 import collections
+import six
 
 import IECore
 
@@ -120,7 +121,9 @@ class ChannelMaskPlugValueWidget( GafferUI.PlugValueWidget ) :
 				value = self.getPlug().getValue()
 			with IECore.IgnoredExceptions( Exception ) :
 				for imagePlug in self.__imagePlugs() :
-					availableChannels.extend( imagePlug["channelNames"].getValue() )
+					views = imagePlug.viewNames()
+					for v in views:
+						availableChannels.extend( imagePlug.channelNames( viewName = v ) )
 
 		value = _CanonicalValue( value )
 		matchPatterns = value.matchPatterns()
@@ -256,7 +259,7 @@ class _CanonicalValue( object ) :
 		self.layers = collections.defaultdict( self.Layer )
 
 		if value is not None :
-			if isinstance( value, basestring ) :
+			if isinstance( value, six.string_types ) :
 				value = value.split()
 			for v in value :
 				self.add( v )

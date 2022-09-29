@@ -248,22 +248,29 @@ void registerPlugValue( IECore::TypeId nodeTypeId, const char *plugPath, IECore:
 struct ValueChangedSlotCaller
 {
 
-	boost::signals::detail::unusable operator()( boost::python::object slot, IECore::InternedString target, IECore::InternedString key )
+	void operator()( boost::python::object slot, IECore::InternedString target, IECore::InternedString key )
 	{
 		slot( target.c_str(), key.c_str() );
-		return boost::signals::detail::unusable();
 	}
 
-	boost::signals::detail::unusable operator()( boost::python::object slot, IECore::TypeId nodeTypeId, IECore::InternedString key, Node *node )
+	void operator()( boost::python::object slot, Node *node, IECore::InternedString key, Metadata::ValueChangedReason reason )
+	{
+		slot( NodePtr( node ), key.c_str(), reason );
+	}
+
+	void operator()( boost::python::object slot, Plug *plug, IECore::InternedString key, Metadata::ValueChangedReason reason )
+	{
+		slot( PlugPtr( plug ), key.c_str(), reason );
+	}
+
+	void operator()( boost::python::object slot, IECore::TypeId nodeTypeId, IECore::InternedString key, Node *node )
 	{
 		slot( nodeTypeId, key.c_str(), NodePtr( node ) );
-		return boost::signals::detail::unusable();
 	}
 
-	boost::signals::detail::unusable operator()( boost::python::object slot, IECore::TypeId nodeTypeId, const StringAlgo::MatchPattern &plugPath, IECore::InternedString key, Plug *plug )
+	void operator()( boost::python::object slot, IECore::TypeId nodeTypeId, const StringAlgo::MatchPattern &plugPath, IECore::InternedString key, Plug *plug )
 	{
 		slot( nodeTypeId, plugPath.c_str(), key.c_str(), PlugPtr( plug ) );
-		return boost::signals::detail::unusable();
 	}
 
 };
@@ -386,10 +393,12 @@ void GafferModule::bindMetadata()
 		.def( "valueChangedSignal", &Metadata::valueChangedSignal, return_value_policy<reference_existing_object>() )
 		.staticmethod( "valueChangedSignal" )
 
-		.def( "nodeValueChangedSignal", &Metadata::nodeValueChangedSignal, return_value_policy<reference_existing_object>() )
+		.def( "nodeValueChangedSignal", (Metadata::LegacyNodeValueChangedSignal &(*)() )&Metadata::nodeValueChangedSignal, return_value_policy<reference_existing_object>() )
+		.def( "nodeValueChangedSignal", (Metadata::NodeValueChangedSignal &(*)( Gaffer::Node * ) )&Metadata::nodeValueChangedSignal, return_value_policy<reference_existing_object>() )
 		.staticmethod( "nodeValueChangedSignal" )
 
-		.def( "plugValueChangedSignal", &Metadata::plugValueChangedSignal, return_value_policy<reference_existing_object>() )
+		.def( "plugValueChangedSignal", (Metadata::LegacyPlugValueChangedSignal &(*)() )&Metadata::plugValueChangedSignal, return_value_policy<reference_existing_object>() )
+		.def( "plugValueChangedSignal", (Metadata::PlugValueChangedSignal &(*)( Gaffer::Node * ) )&Metadata::plugValueChangedSignal, return_value_policy<reference_existing_object>() )
 		.staticmethod( "plugValueChangedSignal" )
 
 		.def( "plugsWithMetadata", &plugsWithMetadata,
@@ -411,8 +420,17 @@ void GafferModule::bindMetadata()
 		.staticmethod( "nodesWithMetadata" )
 	;
 
+	enum_<Metadata::ValueChangedReason>( "ValueChangedReason" )
+		.value( "StaticRegistration", Metadata::ValueChangedReason::StaticRegistration )
+		.value( "StaticDeregistration", Metadata::ValueChangedReason::StaticDeregistration )
+		.value( "InstanceRegistration", Metadata::ValueChangedReason::InstanceRegistration )
+		.value( "InstanceDeregistration", Metadata::ValueChangedReason::InstanceDeregistration )
+	;
+
 	SignalClass<Metadata::ValueChangedSignal, DefaultSignalCaller<Metadata::ValueChangedSignal>, ValueChangedSlotCaller>( "ValueChangedSignal" );
 	SignalClass<Metadata::NodeValueChangedSignal, DefaultSignalCaller<Metadata::NodeValueChangedSignal>, ValueChangedSlotCaller>( "NodeValueChangedSignal" );
 	SignalClass<Metadata::PlugValueChangedSignal, DefaultSignalCaller<Metadata::PlugValueChangedSignal>, ValueChangedSlotCaller>( "PlugValueChangedSignal" );
+	SignalClass<Metadata::LegacyNodeValueChangedSignal, DefaultSignalCaller<Metadata::LegacyNodeValueChangedSignal>, ValueChangedSlotCaller>( "LegacyNodeValueChangedSignal" );
+	SignalClass<Metadata::LegacyPlugValueChangedSignal, DefaultSignalCaller<Metadata::LegacyPlugValueChangedSignal>, ValueChangedSlotCaller>( "LegacyPlugValueChangedSignal" );
 
 }

@@ -78,14 +78,6 @@ class GAFFERSCENE_API ShaderPlug : public Gaffer::Plug
 
 IE_CORE_DECLAREPTR( ShaderPlug );
 
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, ShaderPlug> > ShaderPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, ShaderPlug> > InputShaderPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, ShaderPlug> > OutputShaderPlugIterator;
-
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, ShaderPlug>, Gaffer::PlugPredicate<> > RecursiveShaderPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, ShaderPlug>, Gaffer::PlugPredicate<> > RecursiveInputShaderPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, ShaderPlug>, Gaffer::PlugPredicate<> > RecursiveOutputShaderPlugIterator;
-
 } // namespace GafferScene
 
 #endif // GAFFERSCENE_SHADERPLUG_H

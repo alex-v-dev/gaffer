@@ -52,10 +52,13 @@ class GAFFERIMAGE_API ImageMetadata : public MetadataProcessor
 		ImageMetadata( const std::string &name=defaultName<ImageMetadata>() );
 		~ImageMetadata() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::ImageMetadata, ImageMetadataTypeId, MetadataProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::ImageMetadata, ImageMetadataTypeId, MetadataProcessor );
 
 		Gaffer::CompoundDataPlug *metadataPlug();
 		const Gaffer::CompoundDataPlug *metadataPlug() const;
+
+		Gaffer::AtomicCompoundDataPlug *extraMetadataPlug();
+		const Gaffer::AtomicCompoundDataPlug *extraMetadataPlug() const;
 
 		void affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const override;
 

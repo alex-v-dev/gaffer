@@ -40,6 +40,8 @@
 #include "GafferScene/Private/IECoreGLPreview/LightVisualiser.h"
 #include "GafferScene/Private/IECoreGLPreview/LightFilterVisualiser.h"
 #include "GafferScene/Private/IECoreGLPreview/ObjectVisualiser.h"
+#include "GafferScene/Private/IECoreScenePreview/Placeholder.h"
+#include "GafferScene/ScenePlug.h"
 
 #include "IECoreGL/CachedConverter.h"
 #include "IECoreGL/Camera.h"
@@ -182,6 +184,20 @@ T *reportedCast( const IECore::RunTimeTyped *v, const char *type, const IECore::
 }
 
 template<typename T>
+T option( const IECore::Object *v, const IECore::InternedString &name, const T &defaultValue )
+{
+	if( !v )
+	{
+		return defaultValue;
+	}
+	if( auto d = reportedCast<const IECore::TypedData<T>>( v, "option", name ) )
+	{
+		return d->readable();
+	}
+	return defaultValue;
+}
+
+template<typename T>
 T parameter( const IECore::CompoundDataMap &parameters, const IECore::InternedString &name, const T &defaultValue )
 {
 	IECore::CompoundDataMap::const_iterator it = parameters.find( name );
@@ -190,7 +206,7 @@ T parameter( const IECore::CompoundDataMap &parameters, const IECore::InternedSt
 		return defaultValue;
 	}
 
-	typedef IECore::TypedData<T> DataType;
+	using DataType = IECore::TypedData<T>;
 	if( const DataType *d = reportedCast<const DataType>( it->second.get(), "parameter", name ) )
 	{
 		return d->readable();
@@ -366,8 +382,8 @@ IE_CORE_DECLAREPTR( OpenGLAttributes )
 namespace
 {
 
-typedef std::function<void ()> Edit;
-typedef tbb::concurrent_queue<Edit> EditQueue;
+using Edit = std::function<void ()>;
+using EditQueue = tbb::concurrent_queue<Edit>;
 
 class OpenGLObject : public IECoreScenePreview::Renderer::ObjectInterface
 {
@@ -427,6 +443,16 @@ class OpenGLObject : public IECoreScenePreview::Renderer::ObjectInterface
 
 		void link( const IECore::InternedString &type, const IECoreScenePreview::Renderer::ConstObjectSetPtr &objects ) override
 		{
+		}
+
+		void assignID( uint32_t id ) override
+		{
+			// The GL renderer provides a more lightweight ID mechanism where
+			// IDs are just the index in the object list, and don't need
+			// assigning. This is exposed via the `gl:querySelection` command.
+			// So we don't implement `assignID()` for now.
+			/// \todo Evaluate overhead of the more general ID mechanism, and
+			/// consider dropping the custom OpenGL one.
 		}
 
 		Box3f transformedBound() const
@@ -699,8 +725,9 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 	public :
 
-		OpenGLRenderer( RenderType renderType, const std::string &fileName )
-			:	m_renderType( renderType ), m_baseStateOptions( new CompoundObject )
+		OpenGLRenderer( RenderType renderType, const std::string &fileName, const IECore::MessageHandlerPtr &messageHandler )
+			:	m_renderType( renderType ), m_baseStateOptions( new CompoundObject ),
+				m_renderObjects( true ), m_messageHandler( messageHandler )
 		{
 			if( renderType == SceneDescription )
 			{
@@ -719,35 +746,19 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		void option( const IECore::InternedString &name, const IECore::Object *value ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			if( name == "camera" )
 			{
-				if( value == nullptr )
-				{
-					m_camera = "";
-				}
-				else if( const IECore::StringData *d = reportedCast<const IECore::StringData>( value, "option", name ) )
-				{
-					m_camera = d->readable();
-
-				}
-				return;
+				m_camera = ::option<string>( value, name, "" );
 			}
 			else if( name == "frame" || name == "sampleMotion" )
 			{
 				// We know what these mean, we just have no use for them.
-				return;
 			}
 			else if( name == "gl:selection" )
 			{
-				if( value == nullptr )
-				{
-					m_selection.clear();
-				}
-				else if( auto d = reportedCast<const IECore::PathMatcherData>( value, "option", name ) )
-				{
-					m_selection = d->readable();
-				}
-				return;
+				m_selection = ::option<IECore::PathMatcher>( value, name, IECore::PathMatcher() );
 			}
 			else if(
 				boost::starts_with( name.string(), "gl:primitive:" ) ||
@@ -765,15 +776,24 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 					m_baseStateOptions->members().erase( name );
 				}
 				m_baseState = nullptr; // We'll update it lazily in `baseState()`
-				return;
+			}
+			/// \todo We can't support this being modified after the scene has
+			/// already been generated, because we've thrown away the source
+			/// objects already. This is similar to `ai:ignore_subdivision`.
+			/// Perhaps `option()` should have a return value to indicate to the
+			/// RenderController that it needs to resend objects?
+			else if( name == "gl:renderObjects" )
+			{
+				m_renderObjects = ::option<bool>( value, name, true );
 			}
 			else if( boost::contains( name.string(), ":" ) && !boost::starts_with( name.string(), "gl:" ) )
 			{
 				// Ignore options prefixed for some other renderer.
-				return;
 			}
-
-			IECore::msg( IECore::Msg::Warning, "IECoreGL::Renderer::option", boost::format( "Unknown option \"%s\"." ) % name.c_str() );
+			else
+			{
+				IECore::msg( IECore::Msg::Warning, "IECoreGL::Renderer::option", boost::format( "Unknown option \"%s\"." ) % name.c_str() );
+			}
 		}
 
 		void output( const IECore::InternedString &name, const Output *output ) override
@@ -790,6 +810,8 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		Renderer::AttributesInterfacePtr attributes( const IECore::CompoundObject *attributes ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			OpenGLAttributesPtr result = new OpenGLAttributes( attributes );
 			m_editQueue.push( [ this, result ]() { m_attributes.push_back( result ); } );
 			return result;
@@ -797,6 +819,8 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		ObjectInterfacePtr camera( const std::string &name, const IECoreScene::Camera *camera, const AttributesInterface *attributes ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			OpenGLCameraPtr result = new OpenGLCamera( name, camera, static_cast<const OpenGLAttributes *>( attributes ), m_editQueue );
 			m_editQueue.push( [this, result, name]() {
 				m_objects.push_back( result );
@@ -807,6 +831,8 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		ObjectInterfacePtr light( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			OpenGLLightPtr result = new OpenGLLight( name, object, static_cast<const OpenGLAttributes *>( attributes ), m_editQueue );
 			m_editQueue.push( [this, result]() { m_objects.push_back( result ); } );
 			return result;
@@ -814,6 +840,8 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		ObjectInterfacePtr lightFilter( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			OpenGLLightFilterPtr result = new OpenGLLightFilter( name, object, static_cast<const OpenGLAttributes *>( attributes ), m_editQueue );
 			m_editQueue.push( [this, result]() { m_objects.push_back( result ); } );
 			return result;
@@ -821,6 +849,13 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		Renderer::ObjectInterfacePtr object( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) override
 		{
+			if( !m_renderObjects && !runTimeCast<const IECoreScenePreview::Placeholder>( object ) )
+			{
+				return nullptr;
+			}
+
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			OpenGLObjectPtr result = new OpenGLObject( name, object, static_cast<const OpenGLAttributes *>( attributes ), m_editQueue );
 			m_editQueue.push( [this, result]() { m_objects.push_back( result ); } );
 			return result;
@@ -833,9 +868,16 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		void render() override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			if( m_renderType == Interactive )
 			{
-				renderInteractive();
+				// We currently don't have any use for interactively rendering
+				// to outputs defined by the `output()` function. To facilitate
+				// interactive use in a CompoundRenderer (where the other
+				// renderer _is_ rendering to the outputs), we instead define a
+				// separate `gl:renderToCurrentContext` command which renders
+				// into a framebuffer managed by the client.
 			}
 			else
 			{
@@ -845,6 +887,8 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		void pause() override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			if( m_renderType != Interactive )
 			{
 				IECore::msg( IECore::Msg::Warning, "IECoreGL::Renderer::pause", "Cannot pause non-interactive renders" );
@@ -853,6 +897,8 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		IECore::DataPtr command( const IECore::InternedString name, const IECore::CompoundDataMap &parameters ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			if( name == "gl:queryBound" )
 			{
 				return queryBound( parameters );
@@ -861,13 +907,22 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 			{
 				return querySelectedObjects( parameters );
 			}
+			else if( name == "gl:renderToCurrentContext" )
+			{
+				renderToCurrentContext();
+				return nullptr;
+			}
+			else if( boost::starts_with( name.string(), "gl:" ) || name.string().find( ":" ) == string::npos )
+			{
+				IECore::msg( IECore::Msg::Warning, "IECoreGL::Renderer::command", boost::format( "Unknown command \"%s\"." ) % name.c_str() );
+			}
 
-			throw IECore::Exception( "Unknown command" );
+			return nullptr;
 		}
 
 	private :
 
-		void renderInteractive()
+		void renderToCurrentContext()
 		{
 			processQueue();
 			removeDeletedObjects();
@@ -892,6 +947,10 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 					/// \todo Change IECoreGL::Selector so it provides a partial state object
 					/// containing only the things it needs to change.
 					IECoreGL::StatePtr shapeState = new IECoreGL::State( /* complete = */ false );
+					shapeState->add( state->get<IECoreGL::Primitive::DrawWireframe>() );
+					shapeState->add( state->get<IECoreGL::Primitive::DrawSolid>() );
+					shapeState->add( state->get<IECoreGL::Primitive::DrawOutline>() );
+					shapeState->add( state->get<IECoreGL::Primitive::DrawPoints>() );
 					shapeState->add( state->get<IECoreGL::PointsPrimitive::UseGLPoints>() );
 					shapeState->add( state->get<IECoreGL::PointsPrimitive::GLPointWidth>() );
 					shapeState->add( state->get<IECoreGL::CurvesPrimitive::UseGLLines>() );
@@ -1039,6 +1098,8 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 
 		void writeOutputs( const FrameBuffer *frameBuffer )
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			for( const auto &namedOutput : m_outputs )
 			{
 				IECoreImage::ImagePrimitivePtr image = nullptr;
@@ -1079,16 +1140,23 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 		{
 			const bool selected = parameter<bool>( parameters, "selection", false );
 
+			const PathMatcher omitted = parameter<PathMatcher>( parameters, "omitted", PathMatcher() );
+			const bool omittedEmpty = omitted.isEmpty();
+
 			processQueue();
 			removeDeletedObjects();
 
 			Box3f result;
 			for( const auto &o : m_objects )
 			{
-				if( selected && !o->selected( m_selection ) )
+				if(
+					( selected && !o->selected( m_selection ) ) ||
+					( !omittedEmpty && ( omitted.match( o->name() ) & ( PathMatcher::AncestorMatch | PathMatcher::ExactMatch ) ) )
+				)
 				{
 					continue;
 				}
+
 				result.extendBy( o->transformedBound() );
 			}
 			return new Box3fData( result );
@@ -1164,6 +1232,9 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 		IECore::PathMatcher m_selection;
 		IECore::CompoundObjectPtr m_baseStateOptions;
 		IECoreGL::StatePtr m_baseState;
+		bool m_renderObjects;
+
+		IECore::MessageHandlerPtr m_messageHandler;
 
 		// Queue used to pass edits from background threads to the render thread.
 		EditQueue m_editQueue;
@@ -1172,13 +1243,13 @@ class OpenGLRenderer final : public IECoreScenePreview::Renderer
 		// from m_editQueue.
 
 		unordered_map<InternedString, ConstOutputPtr> m_outputs;
-		typedef std::unordered_map<string, OpenGLCameraPtr> CameraMap;
+		using CameraMap = std::unordered_map<string, OpenGLCameraPtr>;
 		CameraMap m_cameras;
 
-		typedef std::vector<OpenGLObjectPtr> OpenGLObjectVector;
+		using OpenGLObjectVector = std::vector<OpenGLObjectPtr>;
 		OpenGLObjectVector m_objects;
 
-		typedef std::vector<OpenGLAttributesPtr> OpenGLAttributesVector;
+		using OpenGLAttributesVector = std::vector<OpenGLAttributesPtr>;
 		OpenGLAttributesVector m_attributes;
 
 		// Registration with factory

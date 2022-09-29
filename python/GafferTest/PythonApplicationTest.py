@@ -35,7 +35,11 @@
 ##########################################################################
 
 import os
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 import unittest
 
 import GafferTest
@@ -51,6 +55,7 @@ class PythonApplicationTest( GafferTest.TestCase ) :
 		p = subprocess.Popen(
 			[ "gaffer", "python", os.path.dirname( __file__ ) + "/pythonScripts/exception.py" ],
 			stderr = subprocess.PIPE,
+			universal_newlines = True,
 		)
 		p.wait()
 

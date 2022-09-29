@@ -213,7 +213,7 @@ class OSLCodeTest( GafferOSLTest.OSLTestCase ) :
 		oslCode["out"]["o"] = Gaffer.Color3fPlug( direction = Gaffer.Plug.Direction.Out, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
 		oslCode["code"].setValue( "o = color( 0, 1, 0 );" )
 
-		info = subprocess.check_output( [ "oslinfo", self.__osoFileName( oslCode ) ] )
+		info = subprocess.check_output( [ "oslinfo", self.__osoFileName( oslCode ) ], universal_newlines = True )
 		self.assertTrue(
 			info.startswith( "shader \"{0}\"".format( os.path.basename( self.__osoFileName( oslCode ) ) ) )
 		)
@@ -349,6 +349,24 @@ class OSLCodeTest( GafferOSLTest.OSLTestCase ) :
 		s2.execute( ss )
 
 		self.assertTrue( self.__osoFileName( s2["o"] ).startswith( os.environ["GAFFEROSL_CODE_DIRECTORY"] ) )
+
+	def testRenameRemovedParameter( self ) :
+
+		parameter = Gaffer.Color3fPlug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+
+		oslCode = GafferOSL.OSLCode()
+		oslCode["parameters"]["c"] = parameter
+
+		cs = GafferTest.CapturingSlot( oslCode.shaderCompiledSignal() )
+		oslCode["parameters"].removeChild( parameter )
+		self.assertEqual( len( cs ), 1 )
+
+		# Changing name is irrelevant now we've removed the parameter,
+		# and shouldn't trigger a recompile.
+
+		del cs[:]
+		parameter.setName( "d" )
+		self.assertEqual( len( cs ), 0 )
 
 	def __osoFileName( self, oslCode ) :
 

@@ -49,7 +49,7 @@ class IECORE_EXPORT ContextVariables : public ContextProcessor
 
 	public :
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( Gaffer::ContextVariables, ContextVariablesTypeId, ContextProcessor );
+		GAFFER_NODE_DECLARE_TYPE( Gaffer::ContextVariables, ContextVariablesTypeId, ContextProcessor );
 
 		ContextVariables( const std::string &name=GraphComponent::defaultName<ContextVariables>() );
 		~ContextVariables() override;
@@ -60,12 +60,21 @@ class IECORE_EXPORT ContextVariables : public ContextProcessor
 		AtomicCompoundDataPlug *extraVariablesPlug();
 		const AtomicCompoundDataPlug *extraVariablesPlug() const;
 
+		void affects( const Plug *input, DependencyNode::AffectedPlugsContainer &outputs ) const override;
+
 	protected :
 
+		/// Implemented to compute combinedVariablesPlug
+		void hash( const ValuePlug *output, const Context *context, IECore::MurmurHash &h ) const override;
+		void compute( ValuePlug *output, const Context *context ) const override;
+
 		bool affectsContext( const Plug *input ) const override;
-		void processContext( Context::EditableScope &context ) const override;
+		void processContext( Context::EditableScope &context, IECore::ConstRefCountedPtr &storage ) const override;
 
 	private :
+
+		AtomicCompoundDataPlug *combinedVariablesPlug();
+		const AtomicCompoundDataPlug *combinedVariablesPlug() const;
 
 		static size_t g_firstPlugIndex;
 

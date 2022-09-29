@@ -42,6 +42,8 @@
 #include "GafferScene/Shader.h"
 #include "GafferScene/ShaderPlug.h"
 
+#include "GafferImageUI/ImageGadget.h"
+
 #include "GafferImage/Display.h"
 
 #include "Gaffer/Context.h"
@@ -53,10 +55,11 @@
 
 #include "boost/algorithm/string/predicate.hpp"
 #include "boost/asio.hpp"
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/container/flat_map.hpp"
 #include "boost/lexical_cast.hpp"
 
+using namespace boost::placeholders;
 using namespace Gaffer;
 using namespace GafferImage;
 using namespace GafferScene;
@@ -69,7 +72,7 @@ using namespace GafferSceneUI;
 namespace
 {
 
-typedef boost::container::flat_map<IECore::InternedString, ShaderView::RendererCreator> Renderers;
+using Renderers = boost::container::flat_map<IECore::InternedString, ShaderView::RendererCreator>;
 Renderers &renderers()
 {
 	// See comment in `sceneCreators()`.
@@ -77,8 +80,8 @@ Renderers &renderers()
 	return *r;
 }
 
-typedef std::pair<std::string, std::string> PrefixAndName;
-typedef boost::container::flat_map<PrefixAndName, ShaderView::SceneCreator> SceneCreators;
+using PrefixAndName = std::pair<std::string, std::string>;
+using SceneCreators = boost::container::flat_map<PrefixAndName, ShaderView::SceneCreator>;
 
 SceneCreators &sceneCreators()
 {
@@ -91,10 +94,17 @@ SceneCreators &sceneCreators()
 	return *sc;
 }
 
-typedef boost::signal<void ( const PrefixAndName & )> SceneRegistrationChangedSignal;
+using SceneRegistrationChangedSignal = Signals::Signal<void ( const PrefixAndName & )>;
 SceneRegistrationChangedSignal &sceneRegistrationChangedSignal()
 {
 	static SceneRegistrationChangedSignal s;
+	return s;
+}
+
+using RendererRegistrationChangedSignal = Gaffer::Signals::Signal<void ()>;
+RendererRegistrationChangedSignal &rendererRegistrationChangedSignal()
+{
+	static RendererRegistrationChangedSignal s;
 	return s;
 }
 
@@ -111,7 +121,7 @@ IECoreImage::DisplayDriverServer *displayDriverServer()
 //////////////////////////////////////////////////////////////////////////
 
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( ShaderView );
+GAFFER_NODE_DEFINE_TYPE( ShaderView );
 
 ShaderView::ViewDescription<ShaderView> ShaderView::g_viewDescription( GafferScene::Shader::staticTypeId(), "out" );
 
@@ -160,8 +170,9 @@ ShaderView::ShaderView( const std::string &name )
 	plugSetSignal().connect( boost::bind( &ShaderView::plugSet, this, ::_1 ) );
 	plugDirtiedSignal().connect( boost::bind( &ShaderView::plugDirtied, this, ::_1 ) );
 	sceneRegistrationChangedSignal().connect( boost::bind( &ShaderView::sceneRegistrationChanged, this, ::_1 ) );
+	rendererRegistrationChangedSignal().connect( boost::bind( &ShaderView::rendererRegistrationChanged, this ) );
 	Display::driverCreatedSignal().connect( boost::bind( &ShaderView::driverCreated, this, ::_1, ::_2 ) );
-
+	imageGadget()->stateChangedSignal().connect( boost::bind( &ShaderView::imageGadgetStateChanged, this ) );
 }
 
 ShaderView::~ShaderView()
@@ -273,6 +284,12 @@ void ShaderView::sceneRegistrationChanged( const PrefixAndName &prefixAndName )
 	}
 }
 
+void ShaderView::rendererRegistrationChanged()
+{
+	m_rendererShaderPrefix = "";
+	plugDirtied( inPlug() );
+}
+
 void ShaderView::idleUpdate()
 {
 	// We only need to run once.
@@ -336,7 +353,7 @@ void ShaderView::updateRendererState()
 	}
 
 	m_renderer->statePlug()->setValue(
-		viewportGadget()->visible() ? InteractiveRender::Running : InteractiveRender::Stopped
+		( viewportGadget()->visible() && imageGadget()->state() != GafferImageUI::ImageGadget::Paused ) ? InteractiveRender::Running : InteractiveRender::Stopped
 	);
 }
 
@@ -425,9 +442,21 @@ void ShaderView::preRender()
 	m_framed = true;
 }
 
+void ShaderView::imageGadgetStateChanged()
+{
+	updateRendererState();
+}
+
 void ShaderView::registerRenderer( const std::string &shaderPrefix, RendererCreator rendererCreator )
 {
 	renderers()[shaderPrefix] = rendererCreator;
+	rendererRegistrationChangedSignal()();
+}
+
+void ShaderView::deregisterRenderer( const std::string &shaderPrefix )
+{
+	renderers().erase(shaderPrefix);
+	rendererRegistrationChangedSignal()();
 }
 
 void ShaderView::registerScene( const std::string &shaderPrefix, const std::string &name, const std::string &fileName )
@@ -465,4 +494,3 @@ void ShaderView::driverCreated( IECoreImage::DisplayDriver *driver, const IECore
 		}
 	}
 }
-

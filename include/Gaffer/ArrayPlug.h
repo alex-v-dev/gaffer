@@ -64,7 +64,7 @@ class GAFFER_API ArrayPlug : public Plug
 			Direction direction = In,
 			PlugPtr element = nullptr,
 			size_t minSize = 1,
-			size_t maxSize = Imath::limits<size_t>::max(),
+			size_t maxSize = std::numeric_limits<size_t>::max(),
 			unsigned flags = Default,
 			bool resizeWhenInputsChange = true
 		);
@@ -99,19 +99,11 @@ class GAFFER_API ArrayPlug : public Plug
 		size_t m_maxSize;
 		bool m_resizeWhenInputsChange;
 
-		boost::signals::scoped_connection m_inputChangedConnection;
+		Signals::ScopedConnection m_inputChangedConnection;
 
 };
 
 IE_CORE_DECLAREPTR( ArrayPlug );
-
-typedef FilteredChildIterator<PlugPredicate<Plug::Invalid, ArrayPlug> > ArrayPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::In, ArrayPlug> > InputArrayPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::Out, ArrayPlug> > OutputArrayPlugIterator;
-
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Invalid, ArrayPlug>, PlugPredicate<> > RecursiveArrayPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::In, ArrayPlug>, PlugPredicate<> > RecursiveInputArrayPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Out, ArrayPlug>, PlugPredicate<> > RecursiveOutputArrayPlugIterator;
 
 } // namespace Gaffer
 

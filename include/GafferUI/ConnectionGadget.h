@@ -100,7 +100,7 @@ class GAFFERUI_API ConnectionGadget : public ConnectionCreator
 		/// specified Nodules.
 		static ConnectionGadgetPtr create( NodulePtr srcNodule, NodulePtr dstNodule );
 
-		typedef std::function<ConnectionGadgetPtr ( NodulePtr, NodulePtr )> ConnectionGadgetCreator;
+		using ConnectionGadgetCreator = std::function<ConnectionGadgetPtr ( NodulePtr, NodulePtr )>;
 		/// Registers a function which will return a ConnectionGadget instance for a
 		/// destination plug of a specific type.
 		static void registerConnectionGadget( IECore::TypeId dstPlugType, ConnectionGadgetCreator creator );
@@ -121,6 +121,12 @@ class GAFFERUI_API ConnectionGadget : public ConnectionCreator
 			static ConnectionGadgetPtr creator( NodulePtr srcNodule, NodulePtr dstNodule ) { return new T( srcNodule, dstNodule ); };
 		};
 
+		virtual void activeForFocusNode( bool active );
+
+		friend class GraphGadget;
+
+		bool m_active;
+
 	private :
 
 		NodulePtr m_srcNodule;
@@ -128,19 +134,16 @@ class GAFFERUI_API ConnectionGadget : public ConnectionCreator
 
 		bool m_minimised;
 
-		typedef std::map<IECore::TypeId, ConnectionGadgetCreator> CreatorMap;
+		using CreatorMap = std::map<IECore::TypeId, ConnectionGadgetCreator>;
 		static CreatorMap &creators();
 
-		typedef std::pair<boost::regex, ConnectionGadgetCreator> RegexAndCreator;
-		typedef std::vector<RegexAndCreator> RegexAndCreatorVector;
-		typedef std::map<IECore::TypeId, RegexAndCreatorVector> NamedCreatorMap;
+		using RegexAndCreator = std::pair<boost::regex, ConnectionGadgetCreator>;
+		using RegexAndCreatorVector = std::vector<RegexAndCreator>;
+		using NamedCreatorMap = std::map<IECore::TypeId, RegexAndCreatorVector>;
 		static NamedCreatorMap &namedCreators();
 
 
 };
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<ConnectionGadget> > ConnectionGadgetIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<ConnectionGadget> > RecursiveConnectionGadgetIterator;
 
 } // namespace GafferUI
 

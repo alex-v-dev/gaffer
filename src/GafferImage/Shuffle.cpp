@@ -102,7 +102,7 @@ PlugPtr Shuffle::ChannelPlug::createCounterpart( const std::string &name, Direct
 
 size_t Shuffle::g_firstPlugIndex = 0;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Shuffle );
+GAFFER_NODE_DEFINE_TYPE( Shuffle );
 
 Shuffle::Shuffle( const std::string &name )
 	:	ImageProcessor( name )
@@ -111,6 +111,7 @@ Shuffle::Shuffle( const std::string &name )
 	addChild( new ValuePlug( "channels" ) );
 
 	// Pass-through the things we don't want to modify.
+	outPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 	outPlug()->formatPlug()->setInput( inPlug()->formatPlug() );
 	outPlug()->dataWindowPlug()->setInput( inPlug()->dataWindowPlug() );
 	outPlug()->metadataPlug()->setInput( inPlug()->metadataPlug() );
@@ -155,7 +156,7 @@ void Shuffle::hashChannelNames( const GafferImage::ImagePlug *parent, const Gaff
 {
 	ImageProcessor::hashChannelNames( parent, context, h );
 	inPlug()->channelNamesPlug()->hash( h );
-	for( ChannelPlugIterator it( channelsPlug() ); !it.done(); ++it )
+	for( ChannelPlug::Iterator it( channelsPlug() ); !it.done(); ++it )
 	{
 		(*it)->outPlug()->hash( h );
 	}
@@ -165,7 +166,7 @@ IECore::ConstStringVectorDataPtr Shuffle::computeChannelNames( const Gaffer::Con
 {
 	StringVectorDataPtr resultData = inPlug()->channelNamesPlug()->getValue()->copy();
 	vector<string> &result = resultData->writable();
-	for( ChannelPlugIterator it( channelsPlug() ); !it.done(); ++it )
+	for( ChannelPlug::Iterator it( channelsPlug() ); !it.done(); ++it )
 	{
 		string channelName = (*it)->outPlug()->getValue();
 		if( channelName != "" && find( result.begin(), result.end(), channelName ) == result.end() )
@@ -197,7 +198,7 @@ void Shuffle::hashChannelData( const GafferImage::ImagePlug *parent, const Gaffe
 		}
 		else
 		{
-			channelDataScope.setTileOrigin( tileOrigin );
+			channelDataScope.setTileOrigin( &tileOrigin );
 			inPlug()->sampleOffsetsPlug()->hash( h );
 			h.append( c == "__white" );
 		}
@@ -205,7 +206,7 @@ void Shuffle::hashChannelData( const GafferImage::ImagePlug *parent, const Gaffe
 	else
 	{
 		ImagePlug::ChannelDataScope channelDataScope( context );
-		channelDataScope.setChannelName( c );
+		channelDataScope.setChannelName( &c );
 		h = inPlug()->channelDataPlug()->hash();
 	}
 }
@@ -227,7 +228,7 @@ IECore::ConstFloatVectorDataPtr Shuffle::computeChannelData( const std::string &
 		}
 		else
 		{
-			channelDataScope.setTileOrigin( tileOrigin );
+			channelDataScope.setTileOrigin( &tileOrigin );
 			ConstIntVectorDataPtr sampleOffsets = inPlug()->sampleOffsetsPlug()->getValue();
 
 			FloatVectorDataPtr result = new FloatVectorData();
@@ -242,7 +243,7 @@ IECore::ConstFloatVectorDataPtr Shuffle::computeChannelData( const std::string &
 	else
 	{
 		ImagePlug::ChannelDataScope channelDataScope( context );
-		channelDataScope.setChannelName( c );
+		channelDataScope.setChannelName( &c );
 		return inPlug()->channelDataPlug()->getValue();
 	}
 }
@@ -250,7 +251,7 @@ IECore::ConstFloatVectorDataPtr Shuffle::computeChannelData( const std::string &
 std::string Shuffle::inChannelName( const std::string &outChannelName ) const
 {
 	ImagePlug::GlobalScope s( Context::current() );
-	for( ChannelPlugIterator it( channelsPlug() ); !it.done(); ++it )
+	for( ChannelPlug::Iterator it( channelsPlug() ); !it.done(); ++it )
 	{
 		if( (*it)->outPlug()->getValue() == outChannelName )
 		{

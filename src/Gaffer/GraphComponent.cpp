@@ -43,12 +43,13 @@
 #include "IECore/Exception.h"
 #include "IECore/StringAlgo.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/format.hpp"
 #include "boost/lexical_cast.hpp"
 #include "boost/regex.hpp"
 
 #include <set>
+#include <unordered_map>
 
 using namespace Gaffer;
 using namespace IECore;
@@ -61,14 +62,54 @@ using namespace std;
 namespace
 {
 
+// Equivalent to checking a regex match against "^[A-Za-z_]+[A-Za-z_0-9]*",
+// but significantly quicker.
+//
+/// \todo Relax restrictions to only disallow '.' and `/'? We originally had
+/// these strict requirements because we accessed GraphComponent children
+/// as attributes in Python, but that approach has long since gone.
+bool validName( const std::string &name )
+{
+	if( name.empty() )
+	{
+		return false;
+	}
+
+	const char f = name.front();
+	if(
+		!(f >= 'A' && f <= 'Z') &&
+		!(f >= 'a' && f <= 'z' ) &&
+		f != '_'
+	)
+	{
+		return false;
+	}
+
+	for( auto c : name )
+	{
+		if(
+			!(c >= 'A' && c <= 'Z') &&
+			!(c >= 'a' && c <= 'z' ) &&
+			!(c >= '0' && c <= '9' ) &&
+			c != '_'
+		)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void validateName( const InternedString &name )
 {
-	static boost::regex g_validator( "^[A-Za-z_]+[A-Za-z_0-9]*" );
-	if( !regex_match( name.c_str(), g_validator ) )
+	if( validName( name.string() ) )
 	{
-		std::string what = boost::str( boost::format( "Invalid name \"%s\"" ) % name.string() );
-		throw IECore::Exception( what );
+		return;
 	}
+
+	std::string what = boost::str( boost::format( "Invalid name \"%s\"" ) % name.string() );
+	throw IECore::Exception( what );
 }
 
 } // namespace
@@ -81,18 +122,19 @@ void validateName( const InternedString &name )
 // instances they are never actually used.
 //////////////////////////////////////////////////////////////////////////
 
-struct GraphComponent::Signals : boost::noncopyable
+struct GraphComponent::MemberSignals : boost::noncopyable
 {
 
 	UnarySignal nameChangedSignal;
 	BinarySignal childAddedSignal;
 	BinarySignal childRemovedSignal;
 	BinarySignal parentChangedSignal;
+	ChildrenReorderedSignal childrenReorderedSignal;
 
 	// Utility to emit a signal if it has been created, but do nothing
 	// if it hasn't.
 	template<typename SignalMemberPointer, typename... Args>
-	static void emitLazily( Signals *signals, SignalMemberPointer signalMemberPointer, Args&&... args )
+	static void emitLazily( MemberSignals *signals, SignalMemberPointer signalMemberPointer, Args&&... args )
 	{
 		if( !signals )
 		{
@@ -128,8 +170,9 @@ GraphComponent::~GraphComponent()
 		(*it)->m_parent = nullptr;
 		(*it)->parentChanging( nullptr );
 		(*it)->parentChanged( nullptr );
-		Signals::emitLazily( (*it)->m_signals.get(), &Signals::parentChangedSignal, (*it).get(), nullptr );
+		MemberSignals::emitLazily( (*it)->m_signals.get(), &MemberSignals::parentChangedSignal, (*it).get(), nullptr );
 	}
+	m_children.clear();
 }
 
 const IECore::InternedString &GraphComponent::setName( const IECore::InternedString &name )
@@ -200,7 +243,7 @@ const IECore::InternedString &GraphComponent::setName( const IECore::InternedStr
 void GraphComponent::setNameInternal( const IECore::InternedString &name )
 {
 	m_name = name;
-	Signals::emitLazily( m_signals.get(), &Signals::nameChangedSignal, this );
+	MemberSignals::emitLazily( m_signals.get(), &MemberSignals::nameChangedSignal, this );
 }
 
 const IECore::InternedString &GraphComponent::getName() const
@@ -344,6 +387,7 @@ void GraphComponent::throwIfChildRejected( const GraphComponent *potentialChild 
 
 void GraphComponent::addChildInternal( GraphComponentPtr child, size_t index )
 {
+	DirtyPropagationScope dirtyPropagationScope;
 	child->parentChanging( this );
 	GraphComponent *previousParent = child->m_parent;
 	if( previousParent )
@@ -357,9 +401,9 @@ void GraphComponent::addChildInternal( GraphComponentPtr child, size_t index )
 	m_children.insert( m_children.begin() + min( index, m_children.size() ), child );
 	child->m_parent = this;
 	child->setName( child->m_name.value() ); // to force uniqueness
-	Signals::emitLazily( m_signals.get(), &Signals::childAddedSignal, this, child.get() );
+	MemberSignals::emitLazily( m_signals.get(), &MemberSignals::childAddedSignal, this, child.get() );
 	child->parentChanged( previousParent );
-	Signals::emitLazily( child->m_signals.get(), &Signals::parentChangedSignal, child.get(), previousParent );
+	MemberSignals::emitLazily( child->m_signals.get(), &MemberSignals::parentChangedSignal, child.get(), previousParent );
 }
 
 void GraphComponent::removeChild( GraphComponentPtr child )
@@ -390,18 +434,9 @@ void GraphComponent::removeChild( GraphComponentPtr child )
 	}
 }
 
-void GraphComponent::clearChildren()
-{
-	// because our storage is a vector, it's a good bit quicker to remove
-	// from the back to the front.
-	for( int i = (int)(m_children.size()) - 1; i >= 0; --i )
-	{
-		removeChild( m_children[i] );
-	}
-}
-
 void GraphComponent::removeChildInternal( GraphComponentPtr child, bool emitParentChanged )
 {
+	DirtyPropagationScope dirtyPropagationScope;
 	if( emitParentChanged )
 	{
 		child->parentChanging( nullptr );
@@ -420,11 +455,11 @@ void GraphComponent::removeChildInternal( GraphComponentPtr child, bool emitPare
 	}
 	m_children.erase( it );
 	child->m_parent = nullptr;
-	Signals::emitLazily( m_signals.get(), &Signals::childRemovedSignal, this, child.get() );
+	MemberSignals::emitLazily( m_signals.get(), &MemberSignals::childRemovedSignal, this, child.get() );
 	if( emitParentChanged )
 	{
 		child->parentChanged( this );
-		Signals::emitLazily( child->m_signals.get(), &Signals::parentChangedSignal, child.get(), this );
+		MemberSignals::emitLazily( child->m_signals.get(), &MemberSignals::parentChangedSignal, child.get(), this );
 	}
 }
 
@@ -435,9 +470,99 @@ size_t GraphComponent::index() const
 	return std::find( c.begin(), c.end(), this ) - c.begin();
 }
 
-const GraphComponent::ChildContainer &GraphComponent::children() const
+void GraphComponent::reorderChildren( const ChildContainer &newOrder )
 {
-	return m_children;
+	if( newOrder.size() != m_children.size() )
+	{
+		throw IECore::InvalidArgumentException(
+			boost::str( boost::format( "Wrong number of children specified (%1% but should be %2%)" ) % newOrder.size() % m_children.size() )
+		);
+	}
+
+	// Build map from child to index, so we can quickly look up the
+	// index for a particular child.
+
+	unordered_map<const GraphComponent *, size_t> indexMap;
+	for( size_t index = 0; index < m_children.size(); ++index )
+	{
+		indexMap[m_children[index].get()] = index;
+	}
+
+	// Build list of indices corresponding to `newOrder`, validating
+	// `newOrder` as we go.
+
+	auto indices = std::make_shared<vector<size_t>>();
+	indices->reserve( m_children.size() );
+	for( const auto &child : newOrder )
+	{
+		if( child->parent() != this )
+		{
+			throw IECore::InvalidArgumentException(
+				boost::str( boost::format( "\"%1%\" is not a child of \"%2%\"" ) % child->fullName() % fullName() )
+			);
+		}
+
+		auto it = indexMap.find( child.get() );
+		if( it == indexMap.end() )
+		{
+			// We removed it from the map already
+			throw IECore::InvalidArgumentException(
+				boost::str( boost::format( "Child \"%1%\" is in more than one position" ) % child->getName() )
+			);
+		}
+		indices->push_back( it->second );
+		indexMap.erase( it );
+	}
+
+	assert( indexMap.empty() );
+
+	/// \todo For most likely reordering operations, indices will consist
+	/// mostly of sections where each index is 1 greater than the previous.
+	/// This could be compressed with a form of run-length encoding to limit
+	/// the amount of data we store in the undo queue.
+
+	// Add an action to do the work.
+
+	Action::enact(
+		this,
+		// Do
+		[this, indices] () {
+			ChildContainer children;
+			children.reserve( indices->size() );
+			for( auto i : *indices )
+			{
+				children.push_back( m_children[i] );
+			}
+			m_children = children;
+			childrenReordered( *indices );
+			MemberSignals::emitLazily( m_signals.get(), &MemberSignals::childrenReorderedSignal, this, *indices );
+		},
+		// Undo
+		[this, indices] () {
+			ChildContainer children;
+			children.resize( indices->size() );
+			vector<size_t> signalIndices;
+			signalIndices.resize( indices->size() );
+			for( size_t i = 0; i < indices->size(); ++i )
+			{
+				children[(*indices)[i]] = m_children[i];
+				signalIndices[(*indices)[i]] = i;
+			}
+			m_children = children;
+			childrenReordered( signalIndices );
+			MemberSignals::emitLazily( m_signals.get(), &MemberSignals::childrenReorderedSignal, this, signalIndices );
+		}
+	);
+}
+
+void GraphComponent::clearChildren()
+{
+	// because our storage is a vector, it's a good bit quicker to remove
+	// from the back to the front.
+	for( int i = (int)(m_children.size()) - 1; i >= 0; --i )
+	{
+		removeChild( m_children[i] );
+	}
 }
 
 GraphComponent *GraphComponent::ancestor( IECore::TypeId type )
@@ -522,11 +647,20 @@ GraphComponent::BinarySignal &GraphComponent::parentChangedSignal()
 	return signals()->parentChangedSignal;
 }
 
+GraphComponent::ChildrenReorderedSignal &GraphComponent::childrenReorderedSignal()
+{
+	return signals()->childrenReorderedSignal;
+}
+
 void GraphComponent::parentChanging( Gaffer::GraphComponent *newParent )
 {
 }
 
 void GraphComponent::parentChanged( Gaffer::GraphComponent *oldParent )
+{
+}
+
+void GraphComponent::childrenReordered( const std::vector<size_t> &oldIndices )
 {
 }
 
@@ -556,11 +690,11 @@ std::string GraphComponent::unprefixedTypeName( const char *typeName )
 	return result;
 }
 
-GraphComponent::Signals *GraphComponent::signals()
+GraphComponent::MemberSignals *GraphComponent::signals()
 {
 	if( !m_signals )
 	{
-		m_signals.reset( new Signals );
+		m_signals = std::make_unique<MemberSignals>();
 	}
 	return m_signals.get();
 }

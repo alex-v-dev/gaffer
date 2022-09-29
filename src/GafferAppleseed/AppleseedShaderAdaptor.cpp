@@ -36,7 +36,6 @@
 
 #include "GafferAppleseed/AppleseedShaderAdaptor.h"
 
-#include "GafferScene/RendererAlgo.h"
 #include "GafferScene/SceneProcessor.h"
 
 #include "Gaffer/Context.h"
@@ -68,7 +67,7 @@ IECore::InternedString g_closureParameterName( "in_input" );
 IECore::InternedString g_colorParameterName( "in_color" );
 IECore::InternedString g_scalarParameterName( "in_scalar" );
 
-typedef tbb::concurrent_hash_map<std::string, OSLQuery::Parameter *> ParameterMap;
+using ParameterMap = tbb::concurrent_hash_map<std::string, OSLQuery::Parameter *>;
 
 ParameterMap &parameterMap()
 {
@@ -107,7 +106,7 @@ OSLQuery::Parameter *firstOutputParameter( const std::string &shaderName )
 // AppleseedShaderAdaptor
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( AppleseedShaderAdaptor );
+GAFFER_NODE_DEFINE_TYPE( AppleseedShaderAdaptor );
 
 AppleseedShaderAdaptor::AppleseedShaderAdaptor( const std::string &name )
 	:	SceneProcessor( name )

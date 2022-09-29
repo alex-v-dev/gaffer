@@ -51,13 +51,13 @@ class UVInspector( GafferUI.NodeSetEditor ) :
 
 		column = GafferUI.ListContainer()
 
-		GafferUI.NodeSetEditor.__init__( self, column, scriptNode, **kw )
+		GafferUI.NodeSetEditor.__init__( self, column, scriptNode, nodeSet = scriptNode.focusSet(), **kw )
 
 		self.__uvView = GafferSceneUI.UVView()
 
 		with column :
 
-			with GafferUI.Frame( borderWidth = 4, borderStyle = GafferUI.Frame.BorderStyle.None ) :
+			with GafferUI.Frame( borderWidth = 4, borderStyle = GafferUI.Frame.BorderStyle.None_ ) :
 				toolbar = GafferUI.NodeToolbar.create( self.__uvView )
 
 			self.__gadgetWidget = GafferUI.GadgetWidget(
@@ -74,6 +74,15 @@ class UVInspector( GafferUI.NodeSetEditor ) :
 			self.__gadgetWidget.getViewportGadget().frame( imath.Box3f( imath.V3f( 0, 0, 0 ), imath.V3f( 1, 1, 0 ) ) )
 
 		self.keyPressSignal().connect( Gaffer.WeakMethod( self.__keyPress ), scoped = False )
+		self.__gadgetWidget.getViewportGadget().buttonPressSignal().connect(
+			Gaffer.WeakMethod( self.__buttonPress ), scoped = False
+		)
+		self.__gadgetWidget.getViewportGadget().dragBeginSignal().connect(
+			Gaffer.WeakMethod( self.__dragBegin ), scoped = False
+		)
+		self.__gadgetWidget.getViewportGadget().dragEndSignal().connect(
+			Gaffer.WeakMethod( self.__dragEnd ), scoped = False
+		)
 
 		self._updateFromSet()
 
@@ -102,6 +111,23 @@ class UVInspector( GafferUI.NodeSetEditor ) :
 
 		return False
 
+	def __buttonPress( self, viewportGadget, event ) :
+
+		return event.buttons == event.Buttons.Left
+
+	def __dragBegin( self, viewportGadget, event ) :
+
+		uv = viewportGadget.rasterToGadgetSpace(
+			imath.V2f( event.line.p0.x, event.line.p0.y ),
+			viewportGadget.getPrimaryChild() # The gadget displaying the UVs
+		)
+		GafferUI.Pointer.setCurrent( "values" )
+		return imath.V2f( uv.p0.x, uv.p0.y )
+
+	def __dragEnd( self, viewportGadget, event ) :
+
+		GafferUI.Pointer.setCurrent( "" )
+
 GafferUI.Editor.registerType( "UVInspector", UVInspector )
 
 Gaffer.Metadata.registerNode(
@@ -110,7 +136,7 @@ Gaffer.Metadata.registerNode(
 
 	"toolbarLayout:customWidget:StateWidget:widgetType", "GafferSceneUI.UVInspector._StateWidget",
 	"toolbarLayout:customWidget:StateWidget:section", "Top",
-	"toolbarLayout:customWidget:StateWidget:index", -1,
+	"toolbarLayout:customWidget:StateWidget:index", 0,
 
 	plugs = {
 
@@ -157,17 +183,17 @@ class _StateWidget( GafferUI.Widget ) :
 
 		with row :
 
-			self.__busyWidget = GafferUI.BusyWidget( size = 20 )
 			self.__button = GafferUI.Button( hasFrame = False )
+			self.__busyWidget = GafferUI.BusyWidget( size = 20 )
 
 		self.__uvView = uvView
 
-		self.__buttonClickedConnection = self.__button.clickedSignal().connect(
-			Gaffer.WeakMethod( self.__buttonClick )
+		self.__button.clickedSignal().connect(
+			Gaffer.WeakMethod( self.__buttonClick ), scoped = False
 		)
 
-		self.__stateChangedConnection = self.__uvView.stateChangedSignal().connect(
-			Gaffer.WeakMethod( self.__stateChanged )
+		self.__uvView.stateChangedSignal().connect(
+			Gaffer.WeakMethod( self.__stateChanged ), scoped = False
 		)
 
 		self.__update()

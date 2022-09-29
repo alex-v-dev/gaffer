@@ -55,11 +55,14 @@ class GAFFERIMAGE_API FlatImageSource : public ImageNode
 
 		~FlatImageSource() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::FlatImageSource, FlatImageSourceTypeId, ImageNode );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::FlatImageSource, FlatImageSourceTypeId, ImageNode );
 
 	protected :
 
 		Gaffer::ValuePlug::CachePolicy computeCachePolicy( const Gaffer::ValuePlug *output ) const override;
+
+		void hashViewNames( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
+		IECore::ConstStringVectorDataPtr computeViewNames( const Gaffer::Context *context, const ImagePlug *parent ) const override;
 
 		void hashDeep( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		bool computeDeep( const Gaffer::Context *context, const ImagePlug *parent ) const override;

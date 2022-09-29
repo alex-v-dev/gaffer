@@ -35,6 +35,7 @@
 #ifndef IECOREPREVIEW_TASKMUTEX_H
 #define IECOREPREVIEW_TASKMUTEX_H
 
+#include "IECore/Canceller.h"
 #include "IECore/RefCounted.h"
 
 #include "boost/container/flat_set.hpp"
@@ -52,6 +53,7 @@
 #include "tbb/task_scheduler_observer.h"
 
 #include <iostream>
+#include <optional>
 #include <thread>
 
 namespace IECorePreview
@@ -103,7 +105,7 @@ namespace IECorePreview
 class TaskMutex : boost::noncopyable
 {
 
-	typedef tbb::spin_rw_mutex InternalMutex;
+	using InternalMutex = tbb::spin_rw_mutex;
 
 	public :
 
@@ -187,34 +189,20 @@ class TaskMutex : boost::noncopyable
 						}
 					};
 
+					std::optional<tbb::task_group_status> status;
 					m_mutex->m_executionState->arena.execute(
-						[this, &fWrapper] {
-#if TBB_INTERFACE_VERSION >= 10003
-							m_mutex->m_executionState->taskGroup.run_and_wait( fWrapper );
-#else
-							// The `run_and_wait()` method is buggy until
-							// TBB 2018 Update 3, causing calls to `wait()` on other threads to
-							// return immediately rather than do the work we want.
-							// So we call `run()` and `wait()` separately. This has two
-							// downsides though :
-							//
-							// 1. It appears to trigger a TBB bug whereby it is sometimes
-							//    unable to destroy the internals of the `task_arena`. It
-							//    then spends increasing amounts of time in
-							//    `market::try_destroy_arena()`, doing a linear search through
-							//    all the zombie arenas until it finds the one it
-							//    wants to destroy, decides for some reason it can't destroy it,
-							//    and gives up. With large numbers of arenas this can add
-							//    huge overhead.
-							// 2. It does not guarantee that `fWrapper` runs on the same thread
-							//    that `run()` is called on (`run_and_wait()` does provide
-							//    that guarantee). This forces us into nasty ThreadStateFixer
-							//    workarounds in Gaffer/ValuePlug.cpp.
-							m_mutex->m_executionState->taskGroup.run( fWrapper );
-							m_mutex->m_executionState->taskGroup.wait();
-#endif
+						[this, &fWrapper, &status] {
+							// Prior to TBB 2018 Update 3, `run_and_wait()` is buggy,
+							// causing calls to `wait()` on other threads to return
+							// immediately rather than do the work we want. Use
+							// `static_assert()` to ensure we never build with a buggy
+							// version.
+							static_assert( TBB_INTERFACE_VERSION >= 10003, "Minumum of TBB 2018 Update 3 required" );
+							status = m_mutex->m_executionState->taskGroup.run_and_wait( fWrapper );
 						}
 					);
+
+					assert( (bool)status );
 
 					executionStateLock.acquire( m_mutex->m_executionStateMutex );
 					m_mutex->m_executionState = nullptr;
@@ -222,6 +210,10 @@ class TaskMutex : boost::noncopyable
 					if( exception )
 					{
 						std::rethrow_exception( exception );
+					}
+					else if( status.value() == tbb::task_group_status::canceled )
+					{
+						throw IECore::Cancelled();
 					}
 				}
 
@@ -359,7 +351,7 @@ class TaskMutex : boost::noncopyable
 					observe( true );
 				}
 
-				~ArenaObserver()
+				~ArenaObserver() override
 				{
 					observe( false );
 				}
@@ -403,7 +395,7 @@ class TaskMutex : boost::noncopyable
 			}
 
 			// Work around https://bugs.llvm.org/show_bug.cgi?id=32978
-			~ExecutionState() noexcept( true )
+			~ExecutionState() noexcept( true ) override
 			{
 			}
 
@@ -417,7 +409,7 @@ class TaskMutex : boost::noncopyable
 		};
 		IE_CORE_DECLAREPTR( ExecutionState );
 
-		typedef tbb::spin_mutex ExecutionStateMutex;
+		using ExecutionStateMutex = tbb::spin_mutex;
 		ExecutionStateMutex m_executionStateMutex; // Protects m_executionState
 		ExecutionStatePtr m_executionState;
 

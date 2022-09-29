@@ -36,49 +36,116 @@
 
 import unittest
 
+import imath
+
 import IECore
 
+import Gaffer
+import GafferTest
 import GafferScene
 import GafferSceneTest
 
 class RendererAlgoTest( GafferSceneTest.SceneTestCase ) :
 
-	def test( self ) :
+	def testObjectSamples( self ) :
+
+		frame = GafferTest.FrameNode()
 
 		sphere = GafferScene.Sphere()
+		sphere["type"].setValue( sphere.Type.Primitive )
+		sphere["radius"].setInput( frame["output"] )
 
-		defaultAdaptors = GafferScene.createAdaptors()
-		defaultAdaptors["in"].setInput( sphere["out"] )
+		with Gaffer.Context() as c :
+			c["scene:path"] = IECore.InternedStringVectorData( [ "sphere" ] )
+			samples = GafferScene.Private.RendererAlgo.objectSamples( sphere["out"]["object"], [ 0.75, 1.25 ] )
 
-		def a() :
+		self.assertEqual( [ s.radius() for s in samples ], [ 0.75, 1.25 ] )
 
-			r = GafferScene.StandardAttributes()
-			r["attributes"]["doubleSided"]["enabled"].setValue( True )
-			r["attributes"]["doubleSided"]["value"].setValue( False )
+	def testNonInterpolableObjectSamples( self ) :
 
-			return r
+		frame = GafferTest.FrameNode()
 
-		GafferScene.registerAdaptor( "Test", a )
+		procedural = GafferScene.ExternalProcedural()
+		procedural["parameters"]["frame"] = Gaffer.NameValuePlug( "frame", 0.0 )
+		procedural["parameters"]["frame"]["value"].setInput( frame["output"] )
 
-		testAdaptors = GafferScene.createAdaptors()
-		testAdaptors["in"].setInput( sphere["out"] )
+		with Gaffer.Context() as c :
+			c["scene:path"] = IECore.InternedStringVectorData( [ "procedural" ] )
+			samples = GafferScene.Private.RendererAlgo.objectSamples( procedural["out"]["object"], [ 0.75, 1.25 ] )
 
-		self.assertFalse( "doubleSided" in sphere["out"].attributes( "/sphere" ) )
-		self.assertTrue( "doubleSided" in testAdaptors["out"].attributes( "/sphere" ) )
-		self.assertEqual( testAdaptors["out"].attributes( "/sphere" )["doubleSided"].value, False )
+		self.assertEqual( len( samples ), 1 )
+		self.assertEqual( samples[0].parameters()["frame"].value, 1.0 )
 
-		GafferScene.deregisterAdaptor( "Test" )
+	def testObjectSamplesForCameras( self ) :
 
-		defaultAdaptors2 = GafferScene.createAdaptors()
-		defaultAdaptors2["in"].setInput( sphere["out"] )
+		frame = GafferTest.FrameNode()
+		camera = GafferScene.Camera()
+		camera["perspectiveMode"].setValue( camera.PerspectiveMode.ApertureFocalLength )
+		camera["focalLength"].setInput( frame["output"] )
 
-		self.assertScenesEqual( defaultAdaptors["out"], defaultAdaptors2["out"] )
-		self.assertSceneHashesEqual( defaultAdaptors["out"], defaultAdaptors2["out"] )
+		with Gaffer.Context() as c :
+			c["scene:path"] = IECore.InternedStringVectorData( [ "camera" ] )
+			samples = GafferScene.Private.RendererAlgo.objectSamples( camera["out"]["object"], [ 0.75, 1.25 ] )
 
-	def tearDown( self ) :
+		self.assertEqual( [ s.parameters()["focalLength"].value for s in samples ], [ 0.75, 1.25 ] )
 
-		GafferSceneTest.SceneTestCase.tearDown( self )
-		GafferScene.deregisterAdaptor( "Test" )
+	def testOutputCameras( self ) :
+
+		frame = GafferTest.FrameNode()
+		camera = GafferScene.Camera()
+		camera["perspectiveMode"].setValue( camera.PerspectiveMode.ApertureFocalLength )
+		camera["focalLength"].setInput( frame["output"] )
+
+		options = GafferScene.StandardOptions()
+		options["in"].setInput( camera["out"] )
+
+		renderSets = GafferScene.Private.RendererAlgo.RenderSets( options["out"] )
+
+		def expectedCamera( frame ) :
+
+			with Gaffer.Context() as c :
+				c.setFrame( frame )
+				camera = options["out"].object( "/camera" )
+
+			GafferScene.SceneAlgo.applyCameraGlobals( camera, sceneGlobals, options["out"] )
+			return camera
+
+		# Non-animated case
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer(
+			GafferScene.Private.IECoreScenePreview.Renderer.RenderType.Batch
+		)
+		sceneGlobals = options["out"].globals()
+		GafferScene.Private.RendererAlgo.outputCameras( options["out"], sceneGlobals, renderSets, renderer )
+
+		capturedCamera = renderer.capturedObject( "/camera" )
+
+		self.assertEqual( capturedCamera.capturedSamples(), [ expectedCamera( 1 ) ] )
+		self.assertEqual( capturedCamera.capturedSampleTimes(), [] )
+
+		# Animated case
+
+		options["options"]["deformationBlur"]["enabled"].setValue( True )
+		options["options"]["deformationBlur"]["value"].setValue( True )
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer(
+			GafferScene.Private.IECoreScenePreview.Renderer.RenderType.Batch
+		)
+		sceneGlobals = options["out"].globals()
+		GafferScene.Private.RendererAlgo.outputCameras( options["out"], sceneGlobals, renderSets, renderer )
+
+		capturedCamera = renderer.capturedObject( "/camera" )
+		self.assertEqual( capturedCamera.capturedSamples(), [ expectedCamera( 0.75 ), expectedCamera( 1.25 ) ] )
+		self.assertEqual( capturedCamera.capturedSampleTimes(), [ 0.75, 1.25 ] )
+
+	def testCoordinateSystemSamples( self ) :
+
+		coordinateSystem = GafferScene.CoordinateSystem()
+		with Gaffer.Context() as c :
+			c["scene:path"] = IECore.InternedStringVectorData( [ "coordinateSystem" ] )
+			samples = GafferScene.Private.RendererAlgo.objectSamples( coordinateSystem["out"]["object"], [ 0.75, 1.25 ] )
+			self.assertEqual( len( samples ), 1 )
+			self.assertEqual( samples[0], coordinateSystem["out"].object( "/coordinateSystem" ) )
 
 if __name__ == "__main__":
 	unittest.main()

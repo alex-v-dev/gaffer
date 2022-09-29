@@ -43,7 +43,6 @@
 #include "GafferScene/FilterPlug.h"
 #include "GafferScene/ScenePlug.h"
 
-#include "Gaffer/CompoundDataPlug.h"
 #include "Gaffer/ComputeNode.h"
 #include "Gaffer/StringPlug.h"
 
@@ -58,7 +57,7 @@ class GAFFERSCENE_API UDIMQuery : public Gaffer::ComputeNode
 		UDIMQuery( const std::string &name=defaultName<UDIMQuery>() );
 		~UDIMQuery() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::UDIMQuery, UDIMQueryTypeId, Gaffer::ComputeNode );
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::UDIMQuery, UDIMQueryTypeId, Gaffer::ComputeNode );
 
 		GafferScene::ScenePlug *inPlug();
 		const GafferScene::ScenePlug *inPlug() const;
@@ -81,6 +80,9 @@ class GAFFERSCENE_API UDIMQuery : public Gaffer::ComputeNode
 
 		void hash( const Gaffer::ValuePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		void compute( Gaffer::ValuePlug *output, const Gaffer::Context *context ) const override;
+
+		Gaffer::ValuePlug::CachePolicy computeCachePolicy( const Gaffer::ValuePlug *output ) const override;
+		Gaffer::ValuePlug::CachePolicy hashCachePolicy( const Gaffer::ValuePlug *output ) const override;
 
 	private :
 

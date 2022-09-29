@@ -44,8 +44,10 @@ import GafferScene
 import GafferUI
 import GafferImageUI
 
+import IECore
+
 ##########################################################################
-# ImageView UI for the viewed images render node (if available)
+# ImageView UI for the viewed image's render node (if available)
 ##########################################################################
 
 for key, value in {
@@ -53,12 +55,15 @@ for key, value in {
 	"toolbarLayout:customWidget:RenderControlBalancingSpacer:widgetType" : "GafferSceneUI.InteractiveRenderUI._ViewRenderControlBalancingSpacer",
 	"toolbarLayout:customWidget:RenderControlBalancingSpacer:section" :  "Top",
 	"toolbarLayout:customWidget:RenderControlBalancingSpacer:visibilityActivator" : "viewSupportsRenderControl" ,
-	"toolbarLayout:customWidget:RenderControlBalancingSpacer:index" :  0,
+	"toolbarLayout:customWidget:RenderControlBalancingSpacer:index" :  1,
 
 	"toolbarLayout:customWidget:RenderControl:widgetType" : "GafferSceneUI.InteractiveRenderUI._ViewRenderControlUI",
 	"toolbarLayout:customWidget:RenderControl:section" :  "Top",
 	"toolbarLayout:customWidget:RenderControl:visibilityActivator" : "viewSupportsRenderControl" ,
-	"toolbarLayout:customWidget:RenderControl:index" :  -2,
+	"toolbarLayout:customWidget:RenderControl:index" :  -1,
+
+	"toolbarLayout:customWidget:RightCenterSpacer:index" :  -3,
+	"toolbarLayout:customWidget:StateWidgetBalancingSpacer:index" :  -2,
 
 	"toolbarLayout:activator:viewSupportsRenderControl" : lambda view : _ViewRenderControlUI._interactiveRenderNode( view ) is not None,
 
@@ -67,13 +72,14 @@ for key, value in {
 
 class _ViewRenderControlBalancingSpacer( GafferUI.Spacer ) :
 
-	def __init__( self, sceneView, **kw ) :
+	def __init__( self, imageView, **kw ) :
 
+		width = 104
 		GafferUI.Spacer.__init__(
 			self,
 			imath.V2i( 0 ), # Minimum
-			maximumSize = imath.V2i( 100, 1 ),
-			preferredSize = imath.V2i( 100, 1 )
+			preferredSize = imath.V2i( width, 1 ),
+			maximumSize = imath.V2i( width, 1 )
 		)
 
 class _ViewRenderControlUI( GafferUI.Widget ) :
@@ -88,6 +94,7 @@ class _ViewRenderControlUI( GafferUI.Widget ) :
 				GafferUI.Spacer( imath.V2i( 1, 1 ), imath.V2i( 1, 1 ) )
 				self.__label = GafferUI.Label( "Render" )
 				self.__stateWidget = _StatePlugValueWidget( None )
+				self.__messagesWidget = _MessageSummaryPlugValueWidget( None )
 
 		self.__view = view
 
@@ -105,7 +112,8 @@ class _ViewRenderControlUI( GafferUI.Widget ) :
 
 			if not statePlug.isSame( self.__stateWidget.getPlug() ) :
 				self.__stateWidget.setPlug( statePlug )
-				self.__renderNodePlugDirtiedConnection = renderNode.plugDirtiedSignal().connect( Gaffer.WeakMethod( self.__renderNodePlugDirtied ) )
+				self.__messagesWidget.setPlug( renderNode["messages"] )
+				self.__renderNodePlugDirtiedConnection = renderNode.plugDirtiedSignal().connect( Gaffer.WeakMethod( self.__renderNodePlugDirtied ), scoped = True )
 
 			# We disable the controls if a render is in progress, but not being viewed
 			with self.__view.getContext() :
@@ -117,9 +125,11 @@ class _ViewRenderControlUI( GafferUI.Widget ) :
 				"" if controlsEnabled else "Controls disabled because image is not the one currently rendering."
 			)
 			self.__stateWidget.setEnabled( controlsEnabled )
+			self.__messagesWidget.setEnabled( controlsEnabled )
 
 		else :
 			self.__stateWidget.setPlug( None )
+			self.__messagesWidget.setPlug( None )
 			self.__renderNodePlugDirtiedConnection = None
 
 	@staticmethod
@@ -129,7 +139,10 @@ class _ViewRenderControlUI( GafferUI.Widget ) :
 			return None
 
 		with view.getContext() :
-			renderScene = GafferScene.SceneAlgo.sourceScene( view["in"] )
+			try :
+				renderScene = GafferScene.SceneAlgo.sourceScene( view["in"] )
+			except :
+				return None
 
 		if not renderScene :
 			return None
@@ -139,10 +152,14 @@ class _ViewRenderControlUI( GafferUI.Widget ) :
 
 	def __imageIsRendering( self, imagePlug ) :
 
-		# Make-shift detection of an in-progress render.
-		# Finished images have the `fileFormat` key courtesy of OIIO.
-		## \TODO add more formal metadata to determine this
-		return "fileFormat" not in imagePlug.metadata()
+		rendering = False
+
+		try :
+			rendering = imagePlug.metadata()[ "gaffer:isRendering" ].value
+		except :
+			pass
+
+		return rendering
 
 	@GafferUI.LazyMethod()
 	def __updateLazily( self ) :
@@ -223,10 +240,149 @@ class _StatePlugValueWidget( GafferUI.PlugValueWidget ) :
 	def __stopClicked( self, button ) :
 		self.getPlug().setValue( GafferScene.InteractiveRender.State.Stopped )
 
+###############################################################################
+# A widget presenting a summary of the messages in a render nodes messages plug
+###############################################################################
+
+class _MessageSummaryPlugValueWidget( GafferUI.PlugValueWidget ) :
+
+	def __init__( self, plug ) :
+
+		self.__summaryWidget = GafferUI.MessageSummaryWidget(
+			displayLevel = IECore.MessageHandler.Level.Warning,
+			hideUnusedLevels = True,
+			buttonToolTip = "Click to open the render log"
+		)
+
+		GafferUI.PlugValueWidget.__init__( self, self.__summaryWidget, plug )
+
+		self.__summaryWidget.levelButtonClickedSignal().connect( Gaffer.WeakMethod( self.__levelButtonClicked ), scoped = False )
+
+		self._updateFromPlug()
+
+	def getToolTip( self ) :
+
+		# Suppress the default messages tool-tip.
+		return ""
+
+	@GafferUI.LazyMethod( deferUntilPlaybackStops = True )
+	def _updateFromPlug( self ) :
+
+		if self.getPlug() is not None :
+			with self.getContext() :
+				messages = self.getPlug().getValue().value
+		else :
+			messages = Gaffer.Private.IECorePreview.Messages()
+
+		self.__summaryWidget.setMessages( messages )
+		self.__summaryWidget.setEnabled( self.getPlug() is not None )
+
+	def __levelButtonClicked( self, level ) :
+
+		window = _MessagesWindow.acquire( self.getPlug() )
+		window.setVisible( True )
+		window.messageWidget().scrollToNextMessage( level )
+
+###############################################################################
+# A utility window containing a render nodes message log
+###############################################################################
+
+## TODO: This is awefully similar to numerous color picker windows, etc...
+# we ideally could do with a GafferUI.PlugWindow or similar.
+class _MessagesWindow( GafferUI.Window ) :
+
+	# Use acquire instead to retrieve an existing window or create a new one
+	def __init__( self, parentWindow, plug ) :
+
+		GafferUI.Window.__init__( self, borderWidth = 8 )
+
+		self.setChild( _MessagesPlugValueWidget( plug ) )
+		self._qtWidget().resize( 600, 500 )
+
+		parentWindow.addChildWindow( self, removeOnClose = True )
+
+		node = plug.node()
+		scriptNode = node.scriptNode()
+		while node and not node.isSame( scriptNode ) :
+			node.nameChangedSignal().connect( Gaffer.WeakMethod( self.__updateTitle ), scoped = False )
+			node.parentChangedSignal().connect( Gaffer.WeakMethod( self.__destroy ), scoped = False )
+			node = node.parent()
+
+		self.__updateTitle()
+
+	def messageWidget( self ) :
+
+		return self.getChild().messageWidget()
+
+	def __updateTitle( self, *unused ) :
+
+		plug = self.getChild().getPlug()
+		self.setTitle( "{} Messages".format( plug.node().relativeName( plug.ancestor( Gaffer.ScriptNode ) ) ) )
+
+	def __destroy( self, *unused ) :
+
+		self.parent().removeChild( self )
+
+	@classmethod
+	def acquire( cls, plug ) :
+
+		script = plug.node().scriptNode()
+		scriptWindow = GafferUI.ScriptWindow.acquire( script )
+		childWindows = scriptWindow.childWindows()
+
+		for window in childWindows :
+			if isinstance( window, cls ) and window.getChild().getPlug().isSame( plug ) :
+				return window
+
+		window = cls( scriptWindow, plug )
+		window.setVisible( True )
+
+		return window
+
 ##########################################################################
-# Metadata for GafferScene.Preview.InteractiveRender node. We intend
-# for this to entirely replace the GafferScene.InteractiveRender node
-# which is registered under this section.
+# UI for the messages plug that presents the render log
+##########################################################################
+
+class _MessagesPlugValueWidget( GafferUI.PlugValueWidget ) :
+
+	def __init__( self, plug, **kwargs ) :
+
+		self.__messages = GafferUI.MessageWidget(
+			toolbars = True,
+			follow = True,
+			role = GafferUI.MessageWidget.Role.Log
+		)
+
+		GafferUI.PlugValueWidget.__init__( self, self.__messages, plug, **kwargs )
+
+		self._updateFromPlug()
+
+	def hasLabel( self ) :
+
+		return True
+
+	def getToolTip( self ) :
+
+		# Suppress the default messages tool-tip that otherwise appears all over the log window.
+		return ""
+
+	def messageWidget( self ) :
+
+		return self.__messages
+
+	@GafferUI.LazyMethod( deferUntilPlaybackStops = True )
+	def _updateFromPlug( self, *unused ) :
+
+		if self.getPlug() is not None :
+			with self.getContext() :
+				messages = self.getPlug().getValue().value
+		else :
+			messages = Gaffer.Private.IECorePreview.Messages()
+
+		self.__messages.setMessages( messages )
+
+##########################################################################
+# Metadata for InteractiveRender node.
 ##########################################################################
 
 Gaffer.Metadata.registerNode(
@@ -238,6 +394,8 @@ Gaffer.Metadata.registerNode(
 	Performs interactive renders, updating the render on the fly
 	whenever the input scene changes.
 	""",
+
+	"layout:section:Settings.Log:collapsed", False,
 
 	plugs = {
 
@@ -279,6 +437,19 @@ Gaffer.Metadata.registerNode(
 
 		],
 
+		"messages" : [
+
+			"description",
+			"""
+			Messages from the render process.
+			""",
+
+			"label", "Messages",
+			"plugValueWidget:type", "GafferSceneUI.InteractiveRenderUI._MessagesPlugValueWidget",
+			"layout:section", "Settings.Log"
+
+		],
+
 		"out" : [
 
 			"description",
@@ -290,4 +461,3 @@ Gaffer.Metadata.registerNode(
 
 	}
 )
-

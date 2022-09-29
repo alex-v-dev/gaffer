@@ -58,6 +58,10 @@ class ScriptWindow( GafferUI.Window ) :
 
 		menuDefinition = self.menuDefinition( script.applicationRoot() ) if script.applicationRoot() else IECore.MenuDefinition()
 		self.__listContainer.append( GafferUI.MenuBar( menuDefinition ) )
+		# Must parent `__listContainer` to the window before setting the layout,
+		# because `CompoundEditor.__parentChanged` needs to find the ancestor
+		# ScriptWindow.
+		self.setChild( self.__listContainer )
 
 		applicationRoot = self.__script.ancestor( Gaffer.ApplicationRoot )
 		layouts = GafferUI.Layouts.acquire( applicationRoot ) if applicationRoot is not None else None
@@ -65,8 +69,6 @@ class ScriptWindow( GafferUI.Window ) :
 			self.setLayout( layouts.createDefault( script ) )
 		else :
 			self.setLayout( GafferUI.CompoundEditor( script ) )
-
-		self.setChild( self.__listContainer )
 
 		self.closedSignal().connect( Gaffer.WeakMethod( self.__closed ), scoped = False )
 
@@ -170,7 +172,7 @@ class ScriptWindow( GafferUI.Window ) :
 	@classmethod
 	def connect( cls, applicationRoot ) :
 
-		applicationRoot["scripts"].childAddedSignal().connect( 0, ScriptWindow.__scriptAdded, scoped = False )
+		applicationRoot["scripts"].childAddedSignal().connectFront( ScriptWindow.__scriptAdded, scoped = False )
 		applicationRoot["scripts"].childRemovedSignal().connect( ScriptWindow.__staticScriptRemoved, scoped = False )
 
 	__automaticallyCreatedInstances = [] # strong references to instances made by __scriptAdded()
@@ -200,8 +202,8 @@ class _WindowTitleBehaviour :
 		self.__window = weakref.ref( window )
 		self.__script = weakref.ref( script )
 
-		self.__scriptPlugSetConnection = script.plugSetSignal().connect( Gaffer.WeakMethod( self.__scriptPlugChanged ) )
-		self.__metadataChangedConnection = Gaffer.Metadata.nodeValueChangedSignal().connect( Gaffer.WeakMethod( self.__metadataChanged ) )
+		self.__scriptPlugSetConnection = script.plugSetSignal().connect( Gaffer.WeakMethod( self.__scriptPlugChanged ), scoped = True )
+		self.__metadataChangedConnection = Gaffer.Metadata.nodeValueChangedSignal().connect( Gaffer.WeakMethod( self.__metadataChanged ), scoped = True )
 
 		self.__updateTitle()
 
@@ -233,4 +235,3 @@ class _WindowTitleBehaviour :
 
 		if Gaffer.MetadataAlgo.readOnlyAffectedByChange( self.__script(), nodeTypeId, key, node ) :
 			self.__updateTitle()
-

@@ -42,7 +42,7 @@ using namespace IECore;
 using namespace Gaffer;
 using namespace GafferScene;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( CopyAttributes );
+GAFFER_NODE_DEFINE_TYPE( CopyAttributes );
 
 size_t CopyAttributes::g_firstPlugIndex = 0;
 
@@ -119,7 +119,8 @@ void CopyAttributes::affects( const Gaffer::Plug *input, AffectedPlugsContainer 
 		input == filterPlug() ||
 		input == attributesPlug() ||
 		input == sourceLocationPlug() ||
-		input == deleteExistingPlug()
+		input == deleteExistingPlug() ||
+		input == sourcePlug()->existsPlug()
 	)
 	{
 		outputs.push_back( outPlug()->attributesPlug() );
@@ -143,14 +144,20 @@ void CopyAttributes::hashAttributes( const ScenePath &path, const Gaffer::Contex
 	const std::string sourceLocation = sourceLocationPlug()->getValue();
 	if( sourceLocation.empty() )
 	{
-		sourcePlug()->attributesPlug()->hash( h );
+		if( sourcePlug()->exists() )
+		{
+			sourcePlug()->attributesPlug()->hash( h );
+		}
 	}
 	else
 	{
 		ScenePlug::ScenePath sourceLocationPath;
 		ScenePlug::stringToPath( sourceLocation, sourceLocationPath );
-		ScenePlug::PathScope pathScope( context, sourceLocationPath );
-		sourcePlug()->attributesPlug()->hash( h );
+		ScenePlug::PathScope pathScope( context, &sourceLocationPath );
+		if( sourcePlug()->exists() )
+		{
+			sourcePlug()->attributesPlug()->hash( h );
+		}
 	}
 
 	attributesPlug()->hash( h );
@@ -174,14 +181,25 @@ IECore::ConstCompoundObjectPtr CopyAttributes::computeAttributes( const ScenePat
 	const std::string sourceLocation = sourceLocationPlug()->getValue();
 	if( sourceLocation.empty() )
 	{
-		sourceAttributes = sourcePlug()->attributesPlug()->getValue();
+		if( sourcePlug()->exists() )
+		{
+			sourceAttributes = sourcePlug()->attributesPlug()->getValue();
+		}
 	}
 	else
 	{
 		ScenePlug::ScenePath sourceLocationPath;
 		ScenePlug::stringToPath( sourceLocation, sourceLocationPath );
-		ScenePlug::PathScope pathScope( context, sourceLocationPath );
-		sourceAttributes = sourcePlug()->attributesPlug()->getValue();
+		ScenePlug::PathScope pathScope( context, &sourceLocationPath );
+		if( sourcePlug()->exists() )
+		{
+			sourceAttributes = sourcePlug()->attributesPlug()->getValue();
+		}
+	}
+
+	if( !sourceAttributes )
+	{
+		return result;
 	}
 
 	const std::string matchPattern = attributesPlug()->getValue();

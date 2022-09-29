@@ -51,6 +51,7 @@
 #include "boost/python/slice.hpp"
 #include "boost/python/suite/indexing/container_utils.hpp"
 
+using namespace IECorePython;
 using namespace Gaffer;
 using namespace GafferBindings;
 
@@ -78,10 +79,16 @@ IECore::RunTimeTypedPtr getItem( Set &s, long index )
 	return s.member( index );
 }
 
+#if PY_MAJOR_VERSION > 2
+	using SliceType = PyObject;
+#else
+	using SliceType = PySliceObject;
+#endif
+
 boost::python::list getSlice( Set &s, boost::python::slice sl )
 {
 	Py_ssize_t start, stop, step, length;
-	if( PySlice_GetIndicesEx( (PySliceObject *)sl.ptr(), s.size(), &start, &stop, &step, &length ) )
+	if( PySlice_GetIndicesEx( (SliceType *)sl.ptr(), s.size(), &start, &stop, &step, &length ) )
 	{
 		boost::python::throw_error_already_set();
 	}
@@ -96,8 +103,7 @@ boost::python::list getSlice( Set &s, boost::python::slice sl )
 
 struct MemberSignalSlotCaller
 {
-
-	boost::signals::detail::unusable operator()( boost::python::object slot, SetPtr s, Set::MemberPtr m )
+	void operator()( boost::python::object slot, const SetPtr s, const Set::MemberPtr m )
 	{
 		try
 		{
@@ -105,12 +111,9 @@ struct MemberSignalSlotCaller
 		}
 		catch( const boost::python::error_already_set &e )
 		{
-			PyErr_PrintEx( 0 ); // clears the error status
+			ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
 	}
-
-
 };
 
 // StandardSet
@@ -149,7 +152,7 @@ struct MemberAcceptanceSlotCaller
 		}
 		catch( const boost::python::error_already_set &e )
 		{
-			PyErr_PrintEx( 0 ); // clears the error status
+			IECorePython::ExceptionAlgo::translatePythonException();
 		}
 		return false;
 	}
@@ -177,7 +180,8 @@ void GafferModule::bindSet()
 			.def( "memberRemovedSignal", &Set::memberRemovedSignal, boost::python::return_internal_reference<1>() )
 		;
 
-		SignalClass<Set::MemberSignal, DefaultSignalCaller<Set::MemberSignal>, MemberSignalSlotCaller>( "MemberSignal" );
+		SignalClass< Set::MemberSignal,
+			DefaultSignalCaller< Set::MemberSignal >, MemberSignalSlotCaller >( "MemberSignal" );
 	}
 
 	{
@@ -216,4 +220,3 @@ void GafferModule::bindSet()
 	;
 
 }
-

@@ -52,14 +52,15 @@ import GafferDispatchUI
 ##########################################################################
 
 Gaffer.Metadata.registerValue( GafferDispatch.TaskNode, "nodeGadget:color", imath.Color3f( 0.61, 0.1525, 0.1525 ) )
-Gaffer.Metadata.registerValue( GafferDispatch.TaskNode.TaskPlug, "nodule:color", imath.Color3f( 0.645, 0.2483, 0.2483 ) )
-Gaffer.Metadata.registerValue( GafferDispatch.TaskNode.TaskPlug, "connectionGadget:color", imath.Color3f( 0.315, 0.0787, 0.0787 ) )
+Gaffer.Metadata.registerValue( GafferDispatch.TaskNode.TaskPlug, "nodule:color", imath.Color3f( 0.71, 0.35, 0.35 ) )
+Gaffer.Metadata.registerValue( GafferDispatch.TaskNode.TaskPlug, "connectionGadget:color", imath.Color3f( 0.71, 0.35, 0.35 ) )
 
 Gaffer.Metadata.registerValue( Gaffer.SubGraph, "nodeGadget:color", imath.Color3f( 0.225 ) )
 Gaffer.Metadata.registerValue( Gaffer.BoxIO, "nodeGadget:color", imath.Color3f( 0.225 ) )
 Gaffer.Metadata.registerValue( Gaffer.EditScope, "nodeGadget:color", imath.Color3f( 0.1876, 0.3908, 0.6 ) )
 
 Gaffer.Metadata.registerValue( Gaffer.Random, "nodeGadget:color", imath.Color3f( 0.45, 0.3, 0.3 ) )
+Gaffer.Metadata.registerValue( Gaffer.RandomChoice, "nodeGadget:color", imath.Color3f( 0.45, 0.3, 0.3 ) )
 Gaffer.Metadata.registerValue( Gaffer.Expression, "nodeGadget:color", imath.Color3f( 0.3, 0.45, 0.3 ) )
 Gaffer.Metadata.registerValue( Gaffer.Animation, "nodeGadget:color", imath.Color3f( 0.3, 0.3, 0.45 ) )
 Gaffer.Metadata.registerValue( Gaffer.Spreadsheet, "nodeGadget:color", imath.Color3f( 0.69, 0.5445, 0.2208 ) )
@@ -100,7 +101,9 @@ def __nodeContextMenu( graphEditor, node, menuDefinition ) :
 	GafferDispatchUI.DispatcherUI.appendNodeContextMenuDefinitions( graphEditor, node, menuDefinition )
 	GafferUI.GraphEditor.appendContentsMenuDefinitions( graphEditor, node, menuDefinition )
 	GafferUI.UIEditor.appendNodeContextMenuDefinitions( graphEditor, node, menuDefinition )
+	GafferUI.AnnotationsUI.appendNodeContextMenuDefinitions( graphEditor, node, menuDefinition )
 	GafferSceneUI.FilteredSceneProcessorUI.appendNodeContextMenuDefinitions( graphEditor, node, menuDefinition )
+	GafferSceneUI.CryptomatteUI.appendNodeContextMenuDefinitions( graphEditor, node, menuDefinition )
 	GafferUI.GraphBookmarksUI.appendNodeContextMenuDefinitions( graphEditor, node, menuDefinition )
 
 GafferUI.GraphEditor.nodeContextMenuSignal().connect( __nodeContextMenu, scoped = False )

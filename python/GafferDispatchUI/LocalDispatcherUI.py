@@ -128,7 +128,7 @@ class _LocalJobsPath( Gaffer.Path ) :
 
 		return c
 
-	def propertyNames( self ) :
+	def propertyNames( self, canceller = None ) :
 
 		return Gaffer.Path.propertyNames() + [
 			"localDispatcher:status",
@@ -139,7 +139,7 @@ class _LocalJobsPath( Gaffer.Path ) :
 			"localDispatcher:memory",
 		]
 
-	def property( self, name ) :
+	def property( self, name, canceller = None ) :
 
 		result = Gaffer.Path.property( self, name )
 		if result is not None :
@@ -178,11 +178,11 @@ class _LocalJobsPath( Gaffer.Path ) :
 
 		return self.__jobPool
 
-	def isLeaf( self ) :
+	def isLeaf( self, canceller = None ) :
 
 		return len( self )
 
-	def _children( self ) :
+	def _children( self, canceller ) :
 
 		if self.isLeaf() :
 			return []
@@ -218,7 +218,7 @@ class _LocalJobsWindow( GafferUI.Window ) :
 						GafferUI.PathListingWidget.StandardColumn( "CPU", "localDispatcher:cpu" ),
 						GafferUI.PathListingWidget.StandardColumn( "Memory", "localDispatcher:memory" ),
 					),
-					allowMultipleSelection=True
+					selectionMode = GafferUI.PathListingWidget.SelectionMode.Rows,
 				)
 				self.__jobListingWidget._qtWidget().header().setSortIndicator( 1, QtCore.Qt.AscendingOrder )
 				self.__jobListingWidget.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__jobSelectionChanged ), scoped = False )
@@ -240,7 +240,8 @@ class _LocalJobsWindow( GafferUI.Window ) :
 								self.__detailsDirectory.setTextSelectable( True )
 
 					with GafferUI.ListContainer( GafferUI.ListContainer.Orientation.Vertical, spacing=10, borderWidth=10, parenting = { "label"  : "Messages" } ) as self.__messagesTab :
-						self.__messageWidget = GafferUI.MessageWidget()
+						self.__messageWidget = GafferUI.MessageWidget( toolbars = True, follow = True )
+						self.__messageWidget._qtWidget().setMinimumHeight( 150 )
 
 				self.__tabs.currentChangedSignal().connect( Gaffer.WeakMethod( self.__tabChanged ), scoped = False )
 
@@ -315,7 +316,7 @@ class _LocalJobsWindow( GafferUI.Window ) :
 			return
 
 		for m in jobs[0].messageHandler().messages :
-			self.__messageWidget.appendMessage( m.level, m.context, m.message )
+			self.__messageWidget.messageHandler().handle( m.level, m.context, m.message )
 
 	def __killClicked( self, button ) :
 

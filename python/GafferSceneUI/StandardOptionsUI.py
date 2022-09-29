@@ -78,8 +78,6 @@ def __cameraSummary( plug ) :
 def __motionBlurSummary( plug ) :
 
 	info = []
-	if plug["cameraBlur"]["enabled"].getValue() :
-		info.append( "Camera " + ( "On" if plug["cameraBlur"]["value"].getValue() else "Off" ) )
 	if plug["transformBlur"]["enabled"].getValue() :
 		info.append( "Transform " + ( "On" if plug["transformBlur"]["value"].getValue() else "Off" ) )
 	if plug["deformationBlur"]["enabled"].getValue() :
@@ -153,7 +151,7 @@ plugsMetadata = {
 		its aspect ratio. If the aperture's aspect ratio is larger than
 		the resolution's, the top/bottom edges of the aperture will be
 		cropped. If it's smaller, then the top/bottom edges will
-		capture extra vertical scene content. 
+		capture extra vertical scene content.
 		- _Vertical:_ The aperture gate will fit vertically between the
 		top/bottom edges of the resolution gate, while preserving its
 		aspect ratio. If the aperture's aspect ratio is larger than the
@@ -171,7 +169,7 @@ plugsMetadata = {
 		preserving its aspect ratio. In other words, it will make the
 		opposite choice of the _Fit_ mode. If the two gates' aspect
 		ratios differ, the aperture will be horizontally or vertically
-		cropped. 
+		cropped.
 		- _Distort:_ The aperture gate will match the size of the
 		resolution gate. If their aspect ratios differ, the resulting
 		image will appear vertically or horizontally stretched or
@@ -325,21 +323,6 @@ plugsMetadata = {
 	],
 
 	# Motion blur plugs
-
-	"options.cameraBlur" : [
-
-		"description",
-		"""
-		Whether or not camera motion is taken into
-		account in the renderered image. To specify the
-		number of segments to use for camera motion, use
-		a StandardAttributes node filtered for the camera.
-		""",
-
-		"layout:section", "Motion Blur",
-		"label", "Camera",
-
-	],
 
 	"options.transformBlur" : [
 

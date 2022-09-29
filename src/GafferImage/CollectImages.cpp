@@ -43,6 +43,8 @@
 #include "Gaffer/ArrayPlug.h"
 #include "Gaffer/Context.h"
 
+#include <numeric>
+
 using namespace std;
 using namespace Imath;
 using namespace IECore;
@@ -103,7 +105,7 @@ void sourceLayerAndChannel( const string &destChannel, const vector<string> &roo
 // CollectImages
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( CollectImages );
+GAFFER_NODE_DEFINE_TYPE( CollectImages );
 
 size_t CollectImages::g_firstPlugIndex = 0;
 
@@ -198,6 +200,67 @@ void CollectImages::affects( const Gaffer::Plug *input, AffectedPlugsContainer &
 
 }
 
+void CollectImages::hashViewNames( const GafferImage::ImagePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const
+{
+	ImageProcessor::hashViewNames( output, context, h );
+
+	const std::string layerVariable = layerVariablePlug()->getValue();
+
+	ConstStringVectorDataPtr rootLayersData = rootLayersPlug()->getValue();
+	const vector<string> &rootLayers = rootLayersData->readable();
+
+	Context::EditableScope editScope( context );
+	for( unsigned int i = 0; i < rootLayers.size(); i++ )
+	{
+		editScope.set( layerVariable, &( rootLayers[i] ) );
+		inPlug()->viewNamesPlug()->hash( h );
+	}
+}
+
+IECore::ConstStringVectorDataPtr CollectImages::computeViewNames( const Gaffer::Context *context, const ImagePlug *parent ) const
+{
+
+	const std::string layerVariable = layerVariablePlug()->getValue();
+
+	ConstStringVectorDataPtr rootLayersData = rootLayersPlug()->getValue();
+	const vector<string> &rootLayers = rootLayersData->readable();
+
+	if( rootLayers.size() == 0 )
+	{
+		return ImagePlug::defaultViewNames();
+	}
+
+	Context::EditableScope editScope( context );
+	editScope.set( layerVariable, &( rootLayers[0] ) );
+	ConstStringVectorDataPtr firstViewNamesData = inPlug()->viewNamesPlug()->getValue();
+	const std::vector<string> &firstViewNames = firstViewNamesData->readable();
+	for( unsigned int i = 1; i < rootLayers.size(); i++ )
+	{
+		editScope.set( layerVariable, &( rootLayers[i] ) );
+		ConstStringVectorDataPtr layerViewNamesData = inPlug()->viewNamesPlug()->getValue();
+		if( firstViewNames != layerViewNamesData->readable() )
+		{
+			// Requiring all contexts to have matching view names is quite restrictive, but is the simplest.
+			// The most thorough solution might be to union the view names across all contexts, but then
+			// computing something like the format plug gets more complex, since you have to search for
+			// the first context where it is set.  Perhaps taking the views of the first context could be a
+			// reasonable compromise, which I think would just require clearing out the channel names
+			// when looking at a view that doesn't existing for that context value
+
+			throw IECore::Exception( boost::str( boost::format(
+					"Root layer \"%s\" does not match views for \"%s\" : <%s> vs <%s>"
+				) %
+					rootLayers[i] %
+					rootLayers[0] %
+					std::accumulate( layerViewNamesData->readable().begin(), layerViewNamesData->readable().end(), std::string(" ")) %
+					std::accumulate( firstViewNames.begin(), firstViewNames.end(), std::string(" "))
+			) );
+		}
+	}
+
+	return firstViewNamesData;
+}
+
 void CollectImages::hashFormat( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const
 {
 	ConstStringVectorDataPtr rootLayersData = rootLayersPlug()->getValue();
@@ -205,7 +268,7 @@ void CollectImages::hashFormat( const GafferImage::ImagePlug *parent, const Gaff
 	if( rootLayersData->readable().size() )
 	{
 		Context::EditableScope editScope( context );
-		editScope.set( layerVariablePlug()->getValue(), rootLayersData->readable()[0] );
+		editScope.set( layerVariablePlug()->getValue(), &( rootLayersData->readable()[0] ) );
 		h = inPlug()->formatPlug()->hash();
 	}
 	else
@@ -221,7 +284,7 @@ GafferImage::Format CollectImages::computeFormat( const Gaffer::Context *context
 	if( rootLayersData->readable().size() )
 	{
 		Context::EditableScope editScope( context );
-		editScope.set( layerVariablePlug()->getValue(), rootLayersData->readable()[0] );
+		editScope.set( layerVariablePlug()->getValue(), &( rootLayersData->readable()[0] ) );
 		return inPlug()->formatPlug()->getValue();
 	}
 	else
@@ -241,7 +304,7 @@ void CollectImages::hashDeep( const GafferImage::ImagePlug *parent, const Gaffer
 	Context::EditableScope editScope( context );
 	for( const auto &i : rootLayersData->readable() )
 	{
-		editScope.set( layerVariable, i );
+		editScope.set( layerVariable, &i );
 		inPlug()->deepPlug()->hash( h );
 	}
 }
@@ -256,7 +319,7 @@ bool CollectImages::computeDeep( const Gaffer::Context *context, const ImagePlug
 	Context::EditableScope editScope( context );
 	for( const auto &i : rootLayersData->readable() )
 	{
-		editScope.set( layerVariable, i );
+		editScope.set( layerVariable, &i );
 		bool curDeep = inPlug()->deepPlug()->getValue();
 		if( outDeep == -1 )
 		{
@@ -288,7 +351,7 @@ void CollectImages::hashSampleOffsets( const GafferImage::ImagePlug *parent, con
 	Context::EditableScope editScope( context );
 	for( const auto &i : rootLayersData->readable() )
 	{
-		editScope.set( layerVariable, i );
+		editScope.set( layerVariable, &i );
 		inPlug()->sampleOffsetsPlug()->hash( h );
 	}
 }
@@ -307,7 +370,7 @@ IECore::ConstIntVectorDataPtr CollectImages::computeSampleOffsets( const Imath::
 	Context::EditableScope editScope( context );
 	for( const auto &i : rootLayersData->readable() )
 	{
-		editScope.set( layerVariable, i );
+		editScope.set( layerVariable, &i );
 		IECore::ConstIntVectorDataPtr curSampleOffsetsData = inPlug()->sampleOffsetsPlug()->getValue();
 		if( !outSampleOffsetsData )
 		{
@@ -330,7 +393,7 @@ void CollectImages::hashMetadata( const GafferImage::ImagePlug *parent, const Ga
 	if( rootLayersData->readable().size() )
 	{
 		Context::EditableScope editScope( context );
-		editScope.set( layerVariablePlug()->getValue(), rootLayersData->readable()[0] );
+		editScope.set( layerVariablePlug()->getValue(), &( rootLayersData->readable()[0] ) );
 		h = inPlug()->metadataPlug()->hash();
 	}
 	else
@@ -346,7 +409,7 @@ IECore::ConstCompoundDataPtr CollectImages::computeMetadata( const Gaffer::Conte
 	if( rootLayersData->readable().size() )
 	{
 		Context::EditableScope editScope( context );
-		editScope.set( layerVariablePlug()->getValue(), rootLayersData->readable()[0] );
+		editScope.set( layerVariablePlug()->getValue(), &( rootLayersData->readable()[0] ) );
 		return inPlug()->metadataPlug()->getValue();
 	}
 	else
@@ -372,11 +435,11 @@ void CollectImages::hashDataWindow( const GafferImage::ImagePlug *output, const 
 	}
 
 	Context::EditableScope editScope( context );
-	editScope.set( layerVariable, rootLayers[0] );
+	editScope.set( layerVariable, &( rootLayers[0] ) );
 	inPlug()->deepPlug()->hash( h );
 	for( unsigned int i = 0; i < rootLayers.size(); i++ )
 	{
-		editScope.set( layerVariable, rootLayers[i] );
+		editScope.set( layerVariable, &( rootLayers[i] ) );
 		inPlug()->dataWindowPlug()->hash( h );
 	}
 }
@@ -396,11 +459,11 @@ Imath::Box2i CollectImages::computeDataWindow( const Gaffer::Context *context, c
 	}
 
 	Context::EditableScope editScope( context );
-	editScope.set( layerVariable, rootLayers[0] );
+	editScope.set( layerVariable, &( rootLayers[0] ) );
 	bool deep = inPlug()->deepPlug()->getValue();
 	for( unsigned int i = 0; i < rootLayers.size(); i++ )
 	{
-		editScope.set( layerVariable, rootLayers[i] );
+		editScope.set( layerVariable, &( rootLayers[i] ) );
 		Box2i curDataWindow = inPlug()->dataWindowPlug()->getValue();
 		if( i == 0 || !deep )
 		{
@@ -437,7 +500,7 @@ void CollectImages::hashChannelNames( const GafferImage::ImagePlug *output, cons
 	Context::EditableScope editScope( context );
 	for( unsigned int i = 0; i < rootLayers.size(); i++ )
 	{
-		editScope.set( layerVariable, rootLayers[i] );
+		editScope.set( layerVariable, &( rootLayers[i] ) );
 		inPlug()->channelNamesPlug()->hash( h );
 	}
 }
@@ -455,7 +518,7 @@ IECore::ConstStringVectorDataPtr CollectImages::computeChannelNames( const Gaffe
 	Context::EditableScope editScope( context );
 	for( unsigned int i = 0; i < rootLayers.size(); i++ )
 	{
-		editScope.set( layerVariable, rootLayers[i] );
+		editScope.set( layerVariable, &( rootLayers[i] ) );
 		ConstStringVectorDataPtr layerChannelsData = inPlug()->channelNamesPlug()->getValue();
 		const std::vector<string> &layerChannels = layerChannelsData->readable();
 
@@ -496,8 +559,8 @@ void CollectImages::hashChannelData( const GafferImage::ImagePlug *parent, const
 	sourceLayerAndChannel( channelName, rootLayers, srcLayer, srcChannel );
 
 	Context::EditableScope editScope( context );
-	editScope.set( ImagePlug::channelNameContextName, srcChannel );
-	editScope.set( layerVariable, srcLayer );
+	editScope.set( ImagePlug::channelNameContextName, &srcChannel );
+	editScope.set( layerVariable, &srcLayer );
 
 	const V2i tileOrigin = context->get<V2i>( ImagePlug::tileOriginContextName );
 	const Box2i tileBound( tileOrigin, tileOrigin + V2i( ImagePlug::tileSize() ) );
@@ -543,7 +606,7 @@ IECore::ConstFloatVectorDataPtr CollectImages::computeChannelData( const std::st
 	sourceLayerAndChannel( channelName, rootLayers, srcLayer, srcChannel );
 
 	Context::EditableScope editScope( context );
-	editScope.set( layerVariable, srcLayer );
+	editScope.set( layerVariable, &srcLayer );
 
 	// First use this EditableScope as a global scope
 	editScope.remove( ImagePlug::channelNameContextName );
@@ -559,8 +622,8 @@ IECore::ConstFloatVectorDataPtr CollectImages::computeChannelData( const std::st
 	}
 
 	// Then set up the scope to evaluate the input channel data
-	editScope.set( ImagePlug::channelNameContextName, srcChannel );
-	editScope.set( ImagePlug::tileOriginContextName, tileOrigin );
+	editScope.set( ImagePlug::channelNameContextName, &srcChannel );
+	editScope.set( ImagePlug::tileOriginContextName, &tileOrigin );
 
 	ConstFloatVectorDataPtr inputData = inPlug()->channelDataPlug()->getValue();
 
@@ -588,4 +651,3 @@ IECore::ConstFloatVectorDataPtr CollectImages::computeChannelData( const std::st
 		return resultData;
 	}
 }
-

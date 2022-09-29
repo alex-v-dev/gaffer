@@ -53,8 +53,7 @@ class SetIterator;
 
 /// Set provides an abstract base class for an arbitrary collection
 /// of IECore::RunTimeTyped objects.
-/// \todo Provide an iterator wrapping member().
-class GAFFER_API Set : public IECore::RunTimeTyped, public boost::signals::trackable
+class GAFFER_API Set : public IECore::RunTimeTyped, public Signals::Trackable
 {
 
 	public :
@@ -64,9 +63,9 @@ class GAFFER_API Set : public IECore::RunTimeTyped, public boost::signals::track
 
 		IE_CORE_DECLARERUNTIMETYPEDEXTENSION( Gaffer::Set, SetTypeId, IECore::RunTimeTyped );
 
-		typedef IECore::RunTimeTyped Member;
-		typedef Member::Ptr MemberPtr;
-		typedef Member::ConstPtr ConstMemberPtr;
+		using Member = IECore::RunTimeTyped;
+		using MemberPtr = Member::Ptr;
+		using ConstMemberPtr = Member::ConstPtr;
 
 		/// Returns the number of members of the set.
 		virtual size_t size() const = 0;
@@ -77,7 +76,7 @@ class GAFFER_API Set : public IECore::RunTimeTyped, public boost::signals::track
 		/// Returns true if the object is a member of the set.
 		virtual bool contains( const Member *object ) const = 0;
 
-		typedef boost::signal<void ( Set *, Member * )> MemberSignal;
+		using MemberSignal = Signals::Signal<void ( Set *, Member * ), Signals::CatchingCombiner<void>>;
 
 		/// A signal emitted when a new member is added to the Set. It is
 		/// the responsibility of derived classes to emit this when appropriate.
@@ -86,8 +85,8 @@ class GAFFER_API Set : public IECore::RunTimeTyped, public boost::signals::track
 		/// the responsibility of derived classes to emit this when appropriate.
 		MemberSignal &memberRemovedSignal();
 
-		typedef SetIterator<Set, Member> Iterator;
-		typedef SetIterator<Set const, Member const> ConstIterator;
+		using Iterator = SetIterator<Set, Member>;
+		using ConstIterator = SetIterator<Set const, Member const>;
 
 		Iterator begin();
 		ConstIterator begin() const;

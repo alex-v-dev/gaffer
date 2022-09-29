@@ -82,6 +82,9 @@ enum TypeId
 	RotateHandleTypeId = 110287,
 	AnimationGadgetTypeId = 110288,
 	AnnotationsGadgetTypeId = 110289,
+	GraphGadgetSetPositionsActionTypeId = 110290,
+	ToolContainerTypeId = 110291,
+	FPSGadgetTypeId = 110292,
 
 	LastTypeId = 110450
 };

@@ -54,7 +54,7 @@ class GAFFER_API Spreadsheet : public ComputeNode
 		Spreadsheet( const std::string &name=defaultName<Spreadsheet>() );
 		~Spreadsheet() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( Gaffer::Spreadsheet, SpreadsheetTypeId, ComputeNode );
+		GAFFER_NODE_DECLARE_TYPE( Gaffer::Spreadsheet, SpreadsheetTypeId, ComputeNode );
 
 		/// Plug types
 		/// ==========
@@ -70,13 +70,13 @@ class GAFFER_API Spreadsheet : public ComputeNode
 		///
 		/// > Note : It is strongly recommended that the child RowPlugs are
 		/// > accessed via their numeric indices and never via their names.
-		class RowsPlug : public ValuePlug
+		class GAFFER_API RowsPlug : public ValuePlug
 		{
 
 			public :
 
 				RowsPlug( const std::string &name = defaultName<RowsPlug>(), Direction direction = In, unsigned flags = Default );
-				virtual ~RowsPlug();
+				~RowsPlug() override;
 
 				GAFFER_PLUG_DECLARE_TYPE( Gaffer::Spreadsheet::RowsPlug, Gaffer::SpreadsheetRowsPlugTypeId, Gaffer::ValuePlug );
 
@@ -104,6 +104,15 @@ class GAFFER_API Spreadsheet : public ComputeNode
 				/// Spreadsheet so that they can be used for the editing and
 				/// serialisation of promoted plugs.
 
+				/// Adds a column to the spreadsheet, using `value` as a prototype for
+				/// the `CellPlug::valuePlug()` for each cell. If `adoptEnabledPlug`
+				/// is true, then `value` must have a BoolPlug child called "enabled",
+				/// and this will be used instead of adding another "enabled" plug to
+				/// the cell itself. This is useful when adding columns for NameValuePlugs
+				/// and TweakPlugs.
+				size_t addColumn( const ValuePlug *value, IECore::InternedString name, bool adoptEnabledPlug );
+				/// \todo Remove this overload, and add default values for `name` and `adoptEnabledPlug`
+				/// in the version above.
 				size_t addColumn( const ValuePlug *value, IECore::InternedString name = IECore::InternedString() );
 				void removeColumn( size_t columnIndex );
 
@@ -134,7 +143,7 @@ class GAFFER_API Spreadsheet : public ComputeNode
 
 		/// Defines a single row of the spreadsheet. Access using
 		/// `RowPlug::Range( *rowsPlug() )` or via `rowsPlug()->getChild<RowPlug>()`.
-		class RowPlug : public ValuePlug
+		class GAFFER_API RowPlug : public ValuePlug
 		{
 
 			public :
@@ -162,13 +171,17 @@ class GAFFER_API Spreadsheet : public ComputeNode
 		/// Defines a single cell in the spreadsheet. Access using
 		/// `CellPlug::Range( *rowPlug->cellsPlug() )` or via
 		/// `rowPlug->cellsPlug()->getChild<CellPlug>()`.
-		class CellPlug : public ValuePlug
+		class GAFFER_API CellPlug : public ValuePlug
 		{
 
 			public :
 
 				GAFFER_PLUG_DECLARE_TYPE( Gaffer::Spreadsheet::CellPlug, Gaffer::SpreadsheetCellPlugTypeId, Gaffer::ValuePlug );
 
+				/// Returns the plug used to enable or disable this cell.
+				/// Note : If `addColumn( adoptEnabledPlug = true )` was
+				/// used, this will return a child of `valuePlug()`, not
+				/// a direct child of the CellPlug itself.
 				BoolPlug *enabledPlug();
 				const BoolPlug *enabledPlug() const;
 
@@ -182,7 +195,7 @@ class GAFFER_API Spreadsheet : public ComputeNode
 
 			private :
 
-				CellPlug( const std::string &name, const Gaffer::Plug *value, Plug::Direction direction = Plug::In );
+				CellPlug( const std::string &name, const Gaffer::Plug *value, bool adoptEnabledPlug = false, Plug::Direction direction = Plug::In );
 				friend class Spreadsheet;
 
 		};
@@ -201,8 +214,14 @@ class GAFFER_API Spreadsheet : public ComputeNode
 		ValuePlug *outPlug();
 		const ValuePlug *outPlug() const;
 
-		StringVectorDataPlug *activeRowNamesPlug();
-		const StringVectorDataPlug *activeRowNamesPlug() const;
+		StringVectorDataPlug *enabledRowNamesPlug();
+		const StringVectorDataPlug *enabledRowNamesPlug() const;
+
+		CompoundObjectPlug *resolvedRowsPlug();
+		const CompoundObjectPlug *resolvedRowsPlug() const;
+
+		IntPlug *activeRowIndexPlug();
+		const IntPlug *activeRowIndexPlug() const;
 
 		/// Returns the input plug which provides the value
 		/// for `output` in the current context.
@@ -227,9 +246,6 @@ class GAFFER_API Spreadsheet : public ComputeNode
 
 		ObjectPlug *rowsMapPlug();
 		const ObjectPlug *rowsMapPlug() const;
-
-		IntPlug *rowIndexPlug();
-		const IntPlug *rowIndexPlug() const;
 
 		const ValuePlug *correspondingInput( const Plug *output, size_t rowIndex ) const;
 

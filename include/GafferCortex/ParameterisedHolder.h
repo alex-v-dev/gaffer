@@ -86,7 +86,7 @@ class GAFFERCORTEX_API ParameterisedHolder : public BaseType
 		void setParameterisedValues();
 
 		/// \todo Is this even needed? Can we just use an UndoScope instead?
-		class ParameterModificationContext
+		class GAFFERCORTEX_API ParameterModificationContext
 		{
 			public :
 				ParameterModificationContext( Ptr parameterisedHolder );
@@ -119,14 +119,14 @@ class GAFFERCORTEX_API ParameterisedHolder : public BaseType
 		IECore::RunTimeTypedPtr m_parameterised;
 		CompoundParameterHandlerPtr m_parameterHandler;
 
-		boost::signals::connection m_plugSetConnection;
+		Gaffer::Signals::Connection m_plugSetConnection;
 
 };
 
-typedef ParameterisedHolder<Gaffer::Node> ParameterisedHolderNode;
-typedef ParameterisedHolder<Gaffer::DependencyNode> ParameterisedHolderDependencyNode;
-typedef ParameterisedHolder<Gaffer::ComputeNode> ParameterisedHolderComputeNode;
-typedef ParameterisedHolder<GafferDispatch::TaskNode> ParameterisedHolderTaskNode;
+using ParameterisedHolderNode = ParameterisedHolder<Gaffer::Node>;
+using ParameterisedHolderDependencyNode = ParameterisedHolder<Gaffer::DependencyNode>;
+using ParameterisedHolderComputeNode = ParameterisedHolder<Gaffer::ComputeNode>;
+using ParameterisedHolderTaskNode = ParameterisedHolder<GafferDispatch::TaskNode>;
 
 IE_CORE_DECLAREPTR( ParameterisedHolderNode )
 IE_CORE_DECLAREPTR( ParameterisedHolderDependencyNode )

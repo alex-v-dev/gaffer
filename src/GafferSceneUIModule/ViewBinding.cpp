@@ -108,6 +108,31 @@ boost::python::list registeredShadingModes()
 	return result;
 }
 
+void sceneViewRegisterRenderer( const std::string &name, object settingsCreator )
+{
+	SceneView::registerRenderer(
+		name,
+		// Deliberately "leaking" `settingsCreator` because this lambda will be
+		// stored in a static map which will be destroyed _after_ Python is shutdown,
+		// at which point deleting a PyObject will crash.
+		[settingsCreator = new object( settingsCreator )] {
+			IECorePython::ScopedGILLock gilLock;
+			SceneProcessorPtr result = extract<SceneProcessorPtr>( (*settingsCreator)() );
+			return result;
+		}
+	);
+}
+
+boost::python::list sceneViewRegisteredRenderers()
+{
+	boost::python::list result;
+	for( auto &r : SceneView::registeredRenderers() )
+	{
+		result.append( r );
+	}
+	return result;
+}
+
 void frame( SceneView &view, PathMatcher &filter, Imath::V3f &direction )
 {
 	IECorePython::ScopedGILRelease gilRelease;
@@ -201,6 +226,11 @@ void registerRenderer( const std::string &shaderPrefix, object creator )
 	ShaderView::registerRenderer( shaderPrefix, CreatorWrapper<InteractiveRender>( creator ) );
 }
 
+void deregisterRenderer( const std::string &shaderPrefix)
+{
+	ShaderView::deregisterRenderer( shaderPrefix );
+}
+
 void registerScene( const std::string &shaderPrefix, const std::string &name, object creator )
 {
 	ShaderView::registerScene( shaderPrefix, name, CreatorWrapper<Node>( creator ) );
@@ -226,18 +256,16 @@ boost::python::list registeredScenes( const IECore::InternedString &shaderPrefix
 
 struct SceneChangedSlotCaller
 {
-	boost::signals::detail::unusable operator()( boost::python::object slot, ShaderViewPtr v )
+	void operator()( boost::python::object slot, ShaderViewPtr v )
 	{
 		try
 		{
 			slot( v );
-			return boost::signals::detail::unusable();
 		}
 		catch( const boost::python::error_already_set &e )
 		{
 			IECorePython::ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
 	}
 };
 
@@ -258,7 +286,7 @@ void setPaused( UVView &v, bool paused )
 
 struct UVViewSlotCaller
 {
-	boost::signals::detail::unusable operator()( boost::python::object slot, UVViewPtr g )
+	void operator()( boost::python::object slot, UVViewPtr g )
 	{
 		try
 		{
@@ -268,7 +296,6 @@ struct UVViewSlotCaller
 		{
 			ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
 	}
 };
 
@@ -285,6 +312,10 @@ void GafferSceneUIModule::bindViews()
 		.def( "frame", &frame, ( boost::python::arg_( "filter" ), boost::python::arg_( "direction" ) = Imath::V3f( -0.64, -0.422, -0.64 ) ) )
 		.def( "expandSelection", &expandSelection, ( boost::python::arg_( "depth" ) = 1 ) )
 		.def( "collapseSelection", &collapseSelection )
+		.def( "registerRenderer", &sceneViewRegisterRenderer )
+		.staticmethod( "registerRenderer" )
+		.def( "registeredRenderers", &sceneViewRegisteredRenderers )
+		.staticmethod( "registeredRenderers" )
 		.def( "registerShadingMode", &registerShadingMode )
 		.staticmethod( "registerShadingMode" )
 		.def( "registeredShadingModes", &registeredShadingModes )
@@ -297,6 +328,8 @@ void GafferSceneUIModule::bindViews()
 		.def( "sceneChangedSignal", &ShaderView::sceneChangedSignal, return_internal_reference<1>() )
 		.def( "registerRenderer", &registerRenderer )
 		.staticmethod( "registerRenderer" )
+		.def( "deregisterRenderer", &deregisterRenderer )
+		.staticmethod( "deregisterRenderer" )
 		.def( "registerScene", &registerScene )
 		.def( "registerScene", &registerReferenceScene )
 		.staticmethod( "registerScene" )

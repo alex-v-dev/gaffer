@@ -62,7 +62,7 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 
 		GafferUI.Dialogue.__init__( self, title, sizeMode=sizeMode, **kw )
 
-		self._getWidget().setBorderStyle( GafferUI.Frame.BorderStyle.None )
+		self._getWidget().setBorderStyle( GafferUI.Frame.BorderStyle.None_ )
 
 		self.__dispatchers = dispatchers
 		self.__tasks = tasks
@@ -84,7 +84,7 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 			with GafferUI.TabbedContainer() as self.__tabs :
 
 				for node in self.__nodesToShow :
-					nodeFrame = GafferUI.Frame( borderStyle=GafferUI.Frame.BorderStyle.None, borderWidth=0 )
+					nodeFrame = GafferUI.Frame( borderStyle=GafferUI.Frame.BorderStyle.None_, borderWidth=0 )
 					nodeFrame.addChild( self.__nodeEditor( node ) )
 					# remove the per-node execute button
 					Gaffer.Metadata.registerValue( node, "layout:customWidget:dispatchButton:widgetType", "", persistent = False )
@@ -97,13 +97,13 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 						self.__dispatchersMenu = GafferUI.MultiSelectionMenu( allowMultipleSelection = False, allowEmptySelection = False )
 						self.__dispatchersMenu.append( [ x.getName() for x in self.__dispatchers ] )
 						self.__dispatchersMenu.setSelection( [ self.__dispatchers[0].getName() ] )
-						self.__dispatchersMenuChanged = self.__dispatchersMenu.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__dispatcherChanged ) )
+						self.__dispatchersMenu.selectionChangedSignal().connect( Gaffer.WeakMethod( self.__dispatcherChanged ), scoped = False )
 						dispatcherMenuColumn.setVisible( len(self.__dispatchers) > 1 )
 
-					self.__dispatcherFrame = GafferUI.Frame( borderStyle=GafferUI.Frame.BorderStyle.None, borderWidth=0 )
+					self.__dispatcherFrame = GafferUI.Frame( borderStyle=GafferUI.Frame.BorderStyle.None_, borderWidth=0 )
 					self.__tabs.setLabel( dispatcherTab, "Dispatcher" )
 
-				with GafferUI.Frame( borderStyle=GafferUI.Frame.BorderStyle.None, borderWidth=4 ) as contextTab :
+				with GafferUI.Frame( borderStyle=GafferUI.Frame.BorderStyle.None_, borderWidth=4 ) as contextTab :
 					GafferUI.PlugValueWidget.create( self.__script["variables"] )
 					self.__tabs.setLabel( contextTab, "Context Variables" )
 
@@ -111,17 +111,17 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 		with GafferUI.ListContainer( spacing = 4 ) as self.__progressUI :
 
 			with GafferUI.ListContainer( parenting = { "horizontalAlignment" : GafferUI.HorizontalAlignment.Center, "verticalAlignment" : GafferUI.VerticalAlignment.Center } ) :
-				self.__progressIconFrame = GafferUI.Frame( borderStyle = GafferUI.Frame.BorderStyle.None, parenting = { "horizontalAlignment" : GafferUI.HorizontalAlignment.Center } )
+				self.__progressIconFrame = GafferUI.Frame( borderStyle = GafferUI.Frame.BorderStyle.None_, parenting = { "horizontalAlignment" : GafferUI.HorizontalAlignment.Center } )
 				self.__progressLabel = GafferUI.Label( parenting = { "horizontalAlignment" : GafferUI.HorizontalAlignment.Center } )
 
 			with GafferUI.Collapsible( "Details", collapsed = True, parenting = { "expand" : True } ) as self.__messageCollapsible :
-				self.__messageWidget = GafferUI.MessageWidget()
+				self.__messageWidget = GafferUI.MessageWidget( toolbars = True )
 				# connect to the collapsible state change so we can increase the window
 				# size when the details pane is first shown.
-				self.__messageCollapsibleConneciton = self.__messageCollapsible.stateChangedSignal().connect( Gaffer.WeakMethod( self.__messageCollapsibleChanged ) )
+				self.__messageCollapsibleConnection = self.__messageCollapsible.stateChangedSignal().connect( Gaffer.WeakMethod( self.__messageCollapsibleChanged ), scoped = False )
 
 		self.__backButton = self._addButton( "Back" )
-		self.__backButtonConnection = self.__backButton.clickedSignal().connect( 0, Gaffer.WeakMethod( self.__initiateSettings ) )
+		self.__backButton.clickedSignal().connectFront( Gaffer.WeakMethod( self.__initiateSettings ), scoped = False )
 
 		self.__primaryButton = self._addButton( "Dispatch" )
 
@@ -200,7 +200,7 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 		self.__primaryButton.setText( "Dispatch" )
 		self.__primaryButton.setEnabled( True )
 		self.__primaryButton.setVisible( True )
-		self.__primaryButtonConnection = self.__primaryButton.clickedSignal().connect( 0, Gaffer.WeakMethod( self.__initiateDispatch ) )
+		self.__primaryButtonConnection = self.__primaryButton.clickedSignal().connectFront( Gaffer.WeakMethod( self.__initiateDispatch ), scoped = True )
 
 		self.__tabs.setCurrent( self.__tabs[0] )
 		self._getWidget().setChild( self.__settings )
@@ -278,7 +278,7 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 		self.__primaryButton.setText( "Quit" )
 		self.__primaryButton.setEnabled( True )
 		self.__primaryButton.setVisible( True )
-		self.__primaryButtonConnection = self.__primaryButton.clickedSignal().connect( Gaffer.WeakMethod( self.__close ) )
+		self.__primaryButtonConnection = self.__primaryButton.clickedSignal().connect( Gaffer.WeakMethod( self.__close ), scoped = True )
 
 	def __initiateResultDisplay( self ) :
 
@@ -313,7 +313,7 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 		self.__primaryButton.setText( "Ok" )
 		self.__primaryButton.setEnabled( True )
 		self.__primaryButton.setVisible( True )
-		self.__primaryButtonConnection = self.__primaryButton.clickedSignal().connect( Gaffer.WeakMethod( self.__close ) )
+		self.__primaryButtonConnection = self.__primaryButton.clickedSignal().connect( Gaffer.WeakMethod( self.__close ), scoped = True )
 		self.__primaryButton._qtWidget().setFocus()
 
 	def __close( self, *unused ) :
@@ -329,4 +329,4 @@ class DispatchDialogue( GafferUI.Dialogue ) :
 			# remove our connection - we only want to resize the first time we
 			# show the messages. after this we assume that if the window is smaller
 			# it is because the user has made it so, and wishes it to remain so.
-			self.__messageCollapsibleConneciton = None
+			self.__messageCollapsibleConnection.disconnect()

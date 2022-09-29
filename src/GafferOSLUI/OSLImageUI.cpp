@@ -52,9 +52,10 @@
 #include "IECore/CompoundData.h"
 
 #include "boost/algorithm/string.hpp"
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace Gaffer;
 using namespace GafferUI;
 
@@ -87,6 +88,16 @@ class OSLImagePlugAdder : public PlugAdder
 
 		bool canCreateConnection( const Plug *endpoint ) const override
 		{
+			if( !PlugAdder::canCreateConnection( endpoint ) )
+			{
+				return false;
+			}
+
+			if( MetadataAlgo::readOnly( m_plugsParent.get() ) )
+			{
+				return false;
+			}
+
 			IECore::ConstCompoundDataPtr plugAdderOptions = Metadata::value<IECore::CompoundData>( m_plugsParent->node(), "plugAdderOptions" );
 			return !availableChannels( plugAdderOptions.get(), endpoint ).empty();
 		}
@@ -110,7 +121,7 @@ class OSLImagePlugAdder : public PlugAdder
 		std::set<std::string> usedNames() const
 		{
 			std::set<std::string> used;
-			for( NameValuePlugIterator it( m_plugsParent.get() ); !it.done(); ++it )
+			for( NameValuePlug::Iterator it( m_plugsParent.get() ); !it.done(); ++it )
 			{
 				// TODO - this method for checking if a plug variesWithContext should probably live in PlugAlgo
 				// ( it's based on Switch::variesWithContext )
@@ -181,6 +192,11 @@ class OSLImagePlugAdder : public PlugAdder
 
 		bool buttonRelease( const ButtonEvent &event )
 		{
+			if( MetadataAlgo::readOnly( m_plugsParent.get() ) )
+			{
+				return false;
+			}
+
 			IECore::ConstCompoundDataPtr plugAdderOptions = Metadata::value<IECore::CompoundData>( m_plugsParent->node(), "plugAdderOptions" );
 			vector<std::string> origNames = availableChannels( plugAdderOptions.get() );
 			map<std::string, std::string> nameMapping;
@@ -238,7 +254,7 @@ class OSLImagePlugAdder : public PlugAdder
 			{
 				try
 				{
-					matchingDataType = PlugAlgo::extractDataFromPlug( valueInput );
+					matchingDataType = PlugAlgo::getValueAsData( valueInput );
 				}
 				catch( ... )
 				{
@@ -283,7 +299,7 @@ class OSLImagePlugAdder : public PlugAdder
 
 			std::sort( result.begin(), result.end() );
 			vector<std::string> customSortResult;
-			for( const std::string &i : { "RGB", "RGBA", "R", "G", "B", "A" } )
+			for( const char *i : { "RGB", "RGBA", "R", "G", "B", "A" } )
 			{
 				if( std::find( result.begin(), result.end(), i ) != result.end() )
 				{
@@ -308,7 +324,7 @@ struct Registration
 {
 		Registration()
 		{
-			NoduleLayout::registerCustomGadget( "GafferOSLUI.OSLImageUI.PlugAdder", boost::bind( &create, ::_1 ) );
+			NoduleLayout::registerCustomGadget( "GafferOSLUI.OSLImageUI.PlugAdder", &create );
 		}
 
 	private :
@@ -322,5 +338,3 @@ struct Registration
 Registration g_registration;
 
 } // namespace
-
-

@@ -222,7 +222,7 @@ PrimitiveVariable inAim( const Primitive *inputPrimitive, Primitive *outputPrimi
 {
 	ViewSpec spec;
 
-	using OptionalVector = boost::optional<PrimitiveVariable::IndexedView<V3f>>;
+	using OptionalVector = std::optional<PrimitiveVariable::IndexedView<V3f>>;
 	OptionalVector xAxis, yAxis, zAxis;
 
 	if( xAxisName != "" )
@@ -504,7 +504,7 @@ void randomise( vector<Quatf> &orientations, const V3f &axis, float spreadMax, f
 // Orientation
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Orientation );
+GAFFER_NODE_DEFINE_TYPE( Orientation );
 
 size_t Orientation::g_firstPlugIndex = 0;
 

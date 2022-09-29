@@ -50,10 +50,11 @@
 #include "IECore/VectorTypedData.h"
 
 #include "boost/algorithm/string/predicate.hpp"
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/lexical_cast.hpp"
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace GafferScene;
 using namespace Gaffer;
@@ -127,7 +128,7 @@ bool isCompoundNumericPlug( const Gaffer::Plug *plug )
 	}
 }
 
-typedef boost::unordered_set<const Shader *> ShaderSet;
+using ShaderSet = boost::unordered_set<const Shader *>;
 
 struct CycleDetector
 {
@@ -333,6 +334,8 @@ class Shader::NetworkBuilder
 			IECoreScene::ShaderPtr shader = new IECoreScene::Shader( shaderNode->namePlug()->getValue(), type );
 
 			const std::string nodeName = shaderNode->nodeNamePlug()->getValue();
+			shader->blindData()->writable()["label"] = new IECore::StringData( nodeName );
+			// \todo: deprecated, stop storing gaffer:nodeName after a grace period
 			shader->blindData()->writable()["gaffer:nodeName"] = new IECore::StringData( nodeName );
 			shader->blindData()->writable()["gaffer:nodeColor"] = new IECore::Color3fData( shaderNode->nodeColorPlug()->getValue() );
 
@@ -353,7 +356,7 @@ class Shader::NetworkBuilder
 			if( !isLeafParameter( parameter ) || parameter->parent<Node>() )
 			{
 				// Compound parameter - recurse
-				for( InputPlugIterator it( parameter ); !it.done(); ++it )
+				for( Plug::InputIterator it( parameter ); !it.done(); ++it )
 				{
 					hashParameterWalk( it->get(), h );
 				}
@@ -361,7 +364,7 @@ class Shader::NetworkBuilder
 			else if( const Gaffer::ArrayPlug *arrayParameter = IECore::runTimeCast<const Gaffer::ArrayPlug>( parameter ) )
 			{
 				// Array parameter
-				for( InputPlugIterator it( arrayParameter ); !it.done(); ++it )
+				for( Plug::InputIterator it( arrayParameter ); !it.done(); ++it )
 				{
 					hashParameter( it->get(), h );
 				}
@@ -378,7 +381,7 @@ class Shader::NetworkBuilder
 			if( !isLeafParameter( parameter ) || parameter->parent<Node>() )
 			{
 				// Compound parameter - recurse
-				for( InputPlugIterator it( parameter ); !it.done(); ++it )
+				for( Plug::InputIterator it( parameter ); !it.done(); ++it )
 				{
 					IECore::InternedString childParameterName;
 					if( parameterName.string().size() )
@@ -396,7 +399,7 @@ class Shader::NetworkBuilder
 			else if( const Gaffer::ArrayPlug *array = IECore::runTimeCast<const Gaffer::ArrayPlug>( parameter ) )
 			{
 				int i = 0;
-				for( InputPlugIterator it( array ); !it.done(); ++it, ++i )
+				for( Plug::InputIterator it( array ); !it.done(); ++it, ++i )
 				{
 					IECore::InternedString childParameterName = parameterName.string() + "[" + std::to_string( i ) + "]";
 					addParameter( it->get(), childParameterName, shader, connections );
@@ -424,6 +427,7 @@ class Shader::NetworkBuilder
 			}
 			else
 			{
+				static_cast<const Shader *>( parameter->node() )->parameterHash( parameter, h );
 				assert( isOutputParameter( effectiveParameter ) );
 				h.append( shaderHash( effectiveShader ) );
 				if( effectiveShader->outPlug()->isAncestorOf( effectiveParameter ) )
@@ -445,14 +449,37 @@ class Shader::NetworkBuilder
 			const Shader *effectiveShader = static_cast<const Shader *>( effectiveParameter->node() );
 			if( isInputParameter( effectiveParameter ) )
 			{
+				// We aren't driven by a live connection to a shader node, but we could be picking up an input
+				// from a different node, due to the passthrough for disabled nodes.  Note that the input we are
+				// finding here could be of a different type than the parameter we are writing a value for, which
+				// may cause problems.
+				//
+				// The best solution I can think of is:
+				// * always use ( parameter->node() )->parameterValue( parameter ) regardless of the inputs
+				// * modify the shader compute to pass through the input value when the shader is disabled
+				//   ( matching the behaviour of correspondingInput )
+				// * replace effectiveParameter with drivingParameter, which only returns outputs representing
+				//   actual shader connections, and otherwise null, simplifying logic in this class
+				//
+				// I'm now feeling like this is a pretty good solution, but it's more of a change, so we're
+				// not worrying about it for now.
 				if( IECore::DataPtr value = effectiveShader->parameterValue( effectiveParameter ) )
 				{
 					shader->parameters()[parameterName] = value;
 				}
+
+				// The children may be driven by actual connections
 				addParameterComponentConnections( parameter, parameterName, connections );
 			}
 			else
 			{
+				// Store the local value of the parameter even if we have a connection.
+				// The value will not be used, but it still lets us track the type of the connection.
+				if( IECore::DataPtr value = static_cast<const Shader *>( parameter->node() )->parameterValue( parameter ) )
+				{
+					shader->parameters()[parameterName] = value;
+				}
+
 				IECore::InternedString outputName;
 				if( effectiveShader->outPlug()->isAncestorOf( effectiveParameter ) )
 				{
@@ -471,7 +498,7 @@ class Shader::NetworkBuilder
 			{
 				return;
 			}
-			for( InputPlugIterator it( parameter ); !it.done(); ++it )
+			for( Plug::InputIterator it( parameter ); !it.done(); ++it )
 			{
 				const Gaffer::Plug *effectiveParameter = this->effectiveParameter( it->get() );
 				if( effectiveParameter && isOutputParameter( effectiveParameter ) )
@@ -493,7 +520,7 @@ class Shader::NetworkBuilder
 			{
 				return;
 			}
-			for( InputPlugIterator it( parameter ); !it.done(); ++it )
+			for( Plug::InputIterator it( parameter ); !it.done(); ++it )
 			{
 				const Gaffer::Plug *effectiveParameter = this->effectiveParameter( it->get() );
 				if( effectiveParameter && isOutputParameter( effectiveParameter ) )
@@ -522,7 +549,7 @@ class Shader::NetworkBuilder
 			IECore::MurmurHash hash;
 		};
 
-		typedef std::map<const Shader *, HandleAndHash> ShaderMap;
+		using ShaderMap = std::map<const Shader *, HandleAndHash>;
 		ShaderMap m_shaders;
 
 		ShaderSet m_downstreamShaders; // Used for detecting cycles
@@ -535,7 +562,7 @@ class Shader::NetworkBuilder
 
 static IECore::InternedString g_nodeColorMetadataName( "nodeGadget:color" );
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Shader );
+GAFFER_NODE_DEFINE_TYPE( Shader );
 
 size_t Shader::g_firstPlugIndex = 0;
 const IECore::InternedString Shader::g_outputParameterContextName( "scene:shader:outputParameter" );
@@ -555,7 +582,7 @@ Shader::Shader( const std::string &name )
 	addChild( new CompoundObjectPlug( "__outAttributes", Plug::Out, new IECore::CompoundObject ) );
 
 	nameChangedSignal().connect( boost::bind( &Shader::nameChanged, this ) );
-	Metadata::nodeValueChangedSignal().connect( boost::bind( &Shader::nodeMetadataChanged, this, ::_1, ::_2, ::_3 ) );
+	Metadata::nodeValueChangedSignal( this ).connect( boost::bind( &Shader::nodeMetadataChanged, this, ::_2 ) );
 }
 
 Shader::~Shader()
@@ -669,6 +696,19 @@ IECore::ConstCompoundObjectPtr Shader::attributes() const
 	return outAttributesPlug()->getValue();
 }
 
+bool Shader::affectsAttributes( const Gaffer::Plug *input ) const
+{
+	return
+		parametersPlug()->isAncestorOf( input ) ||
+		input == enabledPlug() ||
+		input == nodeNamePlug() ||
+		input == namePlug() ||
+		input == typePlug() ||
+		input->parent<Plug>() == nodeColorPlug() ||
+		input == attributeSuffixPlug()
+	;
+}
+
 void Shader::attributesHash( const Gaffer::Plug *output, IECore::MurmurHash &h ) const
 {
 	attributeSuffixPlug()->hash( h );
@@ -698,20 +738,23 @@ void Shader::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs
 {
 	ComputeNode::affects( input, outputs );
 
-	if(
-		parametersPlug()->isAncestorOf( input ) ||
-		input == enabledPlug() ||
-		input == nodeNamePlug() ||
-		input == namePlug() ||
-		input == typePlug() ||
-		input->parent<Plug>() == nodeColorPlug()
-	)
+	if( affectsAttributes( input ) )
 	{
+		outputs.push_back( outAttributesPlug() );
+	}
+
+	if( input == outAttributesPlug() )
+	{
+		// Our `outPlug()` is the one that actually gets connected into
+		// the ShaderPlug on ShaderAssignment etc. But `ShaderPlug::attributes()`
+		// pulls on `outAttributesPlug()`, so when that is dirtied, we should
+		// also dirty `outPlug()` to propagate dirtiness to ShaderAssignments.
+
 		if( const Plug *out = outPlug() )
 		{
 			if( !out->children().empty() )
 			{
-				for( RecursivePlugIterator it( out ); !it.done(); it++ )
+				for( Plug::RecursiveIterator it( out ); !it.done(); it++ )
 				{
 					if( (*it)->children().empty() )
 					{
@@ -724,7 +767,6 @@ void Shader::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs
 				outputs.push_back( out );
 			}
 		}
-		outputs.push_back( outAttributesPlug() );
 	}
 }
 
@@ -752,9 +794,9 @@ void Shader::hash( const Gaffer::ValuePlug *output, const Gaffer::Context *conte
 	{
 		ComputeNode::hash( output, context, h );
 		const Plug *outputParameter = outPlug();
-		if( auto *name = context->get<IECore::StringData>( g_outputParameterContextName, nullptr ) )
+		if( const std::string *name = context->getIfExists< std::string >( g_outputParameterContextName ) )
 		{
-			outputParameter = outputParameter->descendant<Plug>( name->readable() );
+			outputParameter = outputParameter->descendant<Plug>( *name );
 		}
 		attributesHash( outputParameter, h );
 		return;
@@ -778,9 +820,9 @@ void Shader::compute( Gaffer::ValuePlug *output, const Gaffer::Context *context 
 	if( output == outAttributesPlug() )
 	{
 		const Plug *outputParameter = outPlug();
-		if( auto *name = context->get<IECore::StringData>( g_outputParameterContextName, nullptr ) )
+		if( const std::string *name = context->getIfExists< std::string >( g_outputParameterContextName ) )
 		{
-			outputParameter = outputParameter->descendant<Plug>( name->readable() );
+			outputParameter = outputParameter->descendant<Plug>( *name );
 		}
 		static_cast<CompoundObjectPlug *>( output )->setValue( attributes( outputParameter ) );
 		return;
@@ -814,7 +856,7 @@ IECore::DataPtr Shader::parameterValue( const Gaffer::Plug *parameterPlug ) cons
 {
 	if( const Gaffer::ValuePlug *valuePlug = IECore::runTimeCast<const Gaffer::ValuePlug>( parameterPlug ) )
 	{
-		return Gaffer::PlugAlgo::extractDataFromPlug( valuePlug );
+		return Gaffer::PlugAlgo::getValueAsData( valuePlug );
 	}
 
 	return nullptr;
@@ -825,14 +867,9 @@ void Shader::nameChanged()
 	nodeNamePlug()->setValue( getName() );
 }
 
-void Shader::nodeMetadataChanged( IECore::TypeId nodeTypeId, IECore::InternedString key, const Gaffer::Node *node )
+void Shader::nodeMetadataChanged( IECore::InternedString key )
 {
-	if( node && node != this )
-	{
-		return;
-	}
-
-	if( key == g_nodeColorMetadataName && this->isInstanceOf( nodeTypeId ) )
+	if( key == g_nodeColorMetadataName )
 	{
 		IECore::ConstColor3fDataPtr d = Metadata::value<const IECore::Color3fData>( this, g_nodeColorMetadataName );
 		nodeColorPlug()->setValue( d ? d->readable() : Color3f( 0.0f ) );

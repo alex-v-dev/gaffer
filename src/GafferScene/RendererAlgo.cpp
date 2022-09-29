@@ -34,7 +34,7 @@
 //
 //////////////////////////////////////////////////////////////////////////
 
-#include "GafferScene/RendererAlgo.h"
+#include "GafferScene/Private/RendererAlgo.h"
 
 #include "GafferScene/Private/IECoreScenePreview/Renderer.h"
 #include "GafferScene/SceneAlgo.h"
@@ -44,6 +44,7 @@
 #include "Gaffer/Context.h"
 #include "Gaffer/Metadata.h"
 #include "Gaffer/ScriptNode.h"
+#include "Gaffer/Version.h"
 
 #include "IECoreScene/Camera.h"
 #include "IECoreScene/ClippingPlane.h"
@@ -75,27 +76,23 @@ using namespace Gaffer;
 using namespace GafferScene;
 
 //////////////////////////////////////////////////////////////////////////
-// Internal utilities
+// RendererAlgo implementation
 //////////////////////////////////////////////////////////////////////////
 
 namespace
 {
 
-void motionTimes( size_t segments, const V2f &shutter, std::set<float> &times )
-{
-	for( size_t i = 0; i<segments + 1; ++i )
-	{
-		times.insert( lerp( shutter[0], shutter[1], (float)i / (float)segments ) );
-	}
-}
+InternedString g_transformBlurAttributeName( "gaffer:transformBlur" );
+InternedString g_transformBlurSegmentsAttributeName( "gaffer:transformBlurSegments" );
+InternedString g_deformationBlurAttributeName( "gaffer:deformationBlur" );
+InternedString g_deformationBlurSegmentsAttributeName( "gaffer:deformationBlurSegments" );
 
 } // namespace
 
-//////////////////////////////////////////////////////////////////////////
-// RendererAlgo implementation
-//////////////////////////////////////////////////////////////////////////
-
 namespace GafferScene
+{
+
+namespace Private
 {
 
 namespace RendererAlgo
@@ -118,28 +115,134 @@ void createOutputDirectories( const IECore::CompoundObject *globals )
 	}
 }
 
-void transformSamples( const ScenePlug *scene, size_t segments, const Imath::V2f &shutter, std::vector<Imath::M44f> &samples, std::set<float> &sampleTimes )
+bool motionTimes( bool motionBlur, const V2f &shutter, const CompoundObject *attributes, const InternedString &attributeName, const InternedString &segmentsAttributeName, std::vector<float> &times )
 {
-	// Static case
-
-	if( !segments )
+	unsigned int segments = 0;
+	if( motionBlur )
 	{
-		samples.push_back( scene->transformPlug()->getValue() );
-		return;
+		const BoolData *enabled = attributes->member<BoolData>( attributeName );
+		if( !enabled || enabled->readable() ) // Default enabled if not found
+		{
+			const IntData *d = attributes->member<IntData>( segmentsAttributeName );
+			segments = d ? std::max( 0, d->readable() ) : 1;
+		}
+	}
+
+	bool changed = false;
+	if( segments == 0 )
+	{
+		changed = times.size() != 0;
+		times.clear();
+		return changed;
+	}
+
+	if( times.size() != segments + 1 )
+	{
+		changed = true;
+		times.resize( segments + 1 );
+	}
+	for( size_t i = 0; i < segments + 1; ++i )
+	{
+		float t = lerp( shutter[0], shutter[1], (float)i / (float)segments );
+		if( times[i] != t )
+		{
+			changed = true;
+			times[i] = t;
+		}
+	}
+	return changed;
+}
+
+bool transformMotionTimes( bool motionBlur, const V2f &shutter, const CompoundObject *attributes, std::vector<float> &times )
+{
+	return motionTimes( motionBlur, shutter, attributes, g_transformBlurAttributeName, g_transformBlurSegmentsAttributeName, times );
+}
+
+bool deformationMotionTimes( bool motionBlur, const V2f &shutter, const CompoundObject *attributes, std::vector<float> &times )
+{
+	return motionTimes( motionBlur, shutter, attributes, g_deformationBlurAttributeName, g_deformationBlurSegmentsAttributeName, times );
+}
+
+bool transformSamples( const M44fPlug *transformPlug, const std::vector<float> &sampleTimes, std::vector<Imath::M44f> &samples, IECore::MurmurHash *hash )
+{
+	std::vector< IECore::MurmurHash > sampleHashes;
+	if( !sampleTimes.size() )
+	{
+		sampleHashes.push_back( transformPlug->hash() );
+	}
+	else
+	{
+		Context::EditableScope timeContext( Context::current() );
+
+		bool moving = false;
+		sampleHashes.reserve( sampleTimes.size() );
+		for( const float sampleTime : sampleTimes )
+		{
+			timeContext.setFrame( sampleTime );
+			IECore::MurmurHash h = transformPlug->hash();
+			if( !moving && !sampleHashes.empty() && h != sampleHashes.front() )
+			{
+				moving = true;
+			}
+			sampleHashes.push_back( h );
+		}
+
+		if( !moving )
+		{
+			sampleHashes.resize( 1 );
+		}
+	}
+
+	if( hash )
+	{
+		IECore::MurmurHash combinedHash;
+		if( sampleHashes.size() == 1 )
+		{
+			combinedHash = sampleHashes[0];
+		}
+		else
+		{
+			for( const IECore::MurmurHash &h : sampleHashes )
+			{
+				combinedHash.append( h );
+			}
+		}
+
+		if( combinedHash == *hash )
+		{
+			return false;
+		}
+		else
+		{
+			*hash = combinedHash;
+		}
+	}
+
+	samples.clear();
+	if( !sampleTimes.size() )
+	{
+		// No shutter to sample over
+		samples.push_back( transformPlug->getValue( &sampleHashes[0]) );
+		return true;
+	}
+
+	Context::EditableScope timeContext( Context::current() );
+	if( sampleHashes.size() == 1 )
+	{
+		// We have a shutter, but all the samples hash the same, so just evaluate one
+		timeContext.setFrame( sampleTimes[0] );
+		samples.push_back( transformPlug->getValue( &sampleHashes[0]) );
+		return true;
 	}
 
 	// Motion case
-
-	motionTimes( segments, shutter, sampleTimes );
-
-	Context::EditableScope timeContext( Context::current() );
-
 	bool moving = false;
 	samples.reserve( sampleTimes.size() );
-	for( std::set<float>::const_iterator it = sampleTimes.begin(), eIt = sampleTimes.end(); it != eIt; ++it )
+	for( size_t i = 0; i < sampleTimes.size(); i++ )
 	{
-		timeContext.setFrame( *it );
-		const M44f m = scene->transformPlug()->getValue();
+		timeContext.setFrame( sampleTimes[i] );
+		M44f m;
+		m = transformPlug->getValue( &sampleHashes[i] );
 		if( !moving && !samples.empty() && m != samples.front() )
 		{
 			moving = true;
@@ -150,58 +253,146 @@ void transformSamples( const ScenePlug *scene, size_t segments, const Imath::V2f
 	if( !moving )
 	{
 		samples.resize( 1 );
-		sampleTimes.clear();
 	}
+	return true;
 }
 
-void objectSamples( const ScenePlug *scene, size_t segments, const Imath::V2f &shutter, std::vector<IECoreScene::ConstVisibleRenderablePtr> &samples, std::set<float> &sampleTimes )
+bool objectSamples( const ObjectPlug *objectPlug, const std::vector<float> &sampleTimes, std::vector<IECore::ConstObjectPtr> &samples, IECore::MurmurHash *hash )
 {
+	std::vector< IECore::MurmurHash > sampleHashes;
+	if( !sampleTimes.size() )
+	{
+		sampleHashes.push_back( objectPlug->hash() );
+	}
+	else
+	{
+		const Context *frameContext = Context::current();
+		Context::EditableScope timeContext( frameContext );
+
+		bool moving = false;
+		sampleHashes.reserve( sampleTimes.size() );
+		for( const float sampleTime : sampleTimes )
+		{
+			timeContext.setFrame( sampleTime );
+
+			const MurmurHash objectHash = objectPlug->hash();
+			if( !moving && !sampleHashes.empty() && objectHash != sampleHashes.front() )
+			{
+				moving = true;
+			}
+			sampleHashes.push_back( objectHash );
+		}
+
+		if( !moving )
+		{
+			sampleHashes.resize( 1 );
+		}
+	}
+
+	if( hash )
+	{
+		IECore::MurmurHash combinedHash;
+		if( sampleHashes.size() == 1 )
+		{
+			combinedHash = sampleHashes[0];
+		}
+		else
+		{
+			for( const IECore::MurmurHash &h : sampleHashes )
+			{
+				combinedHash.append( h );
+			}
+		}
+
+		if( combinedHash == *hash )
+		{
+			return false;
+		}
+		else
+		{
+			*hash = combinedHash;
+		}
+	}
 
 	// Static case
-
-	if( !segments )
+	samples.clear();
+	if( sampleHashes.size() == 1 )
 	{
-		ConstObjectPtr object = scene->objectPlug()->getValue();
-		if( const VisibleRenderable *renderable = runTimeCast<const VisibleRenderable>( object.get() ) )
+		ConstObjectPtr object;
+		if( !sampleTimes.size() )
 		{
-			samples.push_back( renderable );
+			// No shutter, just hash on frame
+			object = objectPlug->getValue( &sampleHashes[0]);
 		}
-		return;
+		else
+		{
+			// We have a shutter, but all the samples hash the same, so just evaluate one
+			Context::EditableScope timeContext( Context::current() );
+			timeContext.setFrame( sampleTimes[0] );
+			object = objectPlug->getValue( &sampleHashes[0]);
+		}
+
+		if(
+			runTimeCast<const VisibleRenderable>( object.get() ) ||
+			runTimeCast<const Camera>( object.get() ) ||
+			runTimeCast<const CoordinateSystem>( object.get() )
+		)
+		{
+			samples.push_back( object.get() );
+		}
+
+		return true;
 	}
 
 	// Motion case
 
-	motionTimes( segments, shutter, sampleTimes );
+	const Context *frameContext = Context::current();
+	Context::EditableScope timeContext( frameContext );
 
-	Context::EditableScope timeContext( Context::current() );
-
-	bool moving = false;
-	MurmurHash lastHash;
 	samples.reserve( sampleTimes.size() );
-	for( std::set<float>::const_iterator it = sampleTimes.begin(), eIt = sampleTimes.end(); it != eIt; ++it )
+	for( size_t i = 0; i < sampleTimes.size(); i++ )
 	{
-		timeContext.setFrame( *it );
+		timeContext.setFrame( sampleTimes[i] );
 
-		const MurmurHash objectHash = scene->objectPlug()->hash();
-		ConstObjectPtr object = scene->objectPlug()->getValue( &objectHash );
+		ConstObjectPtr object = objectPlug->getValue( &sampleHashes[i] );
 
-		if( const Primitive *primitive = runTimeCast<const Primitive>( object.get() ) )
+		if(
+			runTimeCast<const Primitive>( object.get() ) ||
+			runTimeCast<const Camera>( object.get() )
+		)
 		{
-			// We can support multiple samples for these, so check to see
-			// if we actually have something moving.
-			if( !moving && !samples.empty() && objectHash != lastHash )
-			{
-				moving = true;
-			}
-			samples.push_back( primitive );
-			lastHash = objectHash;
+			samples.push_back( object.get() );
 		}
-		else if( const VisibleRenderable *renderable = runTimeCast< const VisibleRenderable >( object.get() ) )
+		else if(
+			runTimeCast<const VisibleRenderable>( object.get() ) ||
+			runTimeCast<const CoordinateSystem>( object.get() )
+		)
 		{
 			// We can't motion blur these chappies, so just take the one
-			// sample.
-			samples.push_back( renderable );
-			break;
+			// sample. This must be at the frame time rather than shutter
+			// open time so that non-interpolable objects appear in the right
+			// position relative to non-blurred objects.
+			Context::Scope frameScope( frameContext );
+			std::vector<float> tempTimes = {};
+
+			// This is a pretty weird case - we would have taken an earlier branch if the hashes
+			// had all matched, so it looks like this object is actual animated, despite not supporting
+			// animation.
+			// The most correct thing to do here is reset the hash, since we may not have included the
+			// on frame in the samples we hashed, and in theory, the on frame value could vary indepndently
+			// of shutter open and close.  This means that an animated non-animateable object will never have
+			// a matching hash, and will be updated every pass.  May be a performance hazard, but probably
+			// preferable to incorrect behaviour?  Just means people need to be careful to make sure their
+			// heavy crowd procedurals don't have a hash that changes during the shutter?
+			// ( I guess in theory we could check if the on frame time is in sampleTimes, but I don't want to
+			// add any more special cases to this weird corner ).
+			//
+			if( hash )
+			{
+				*hash = IECore::MurmurHash();
+			}
+
+			return objectSamples( objectPlug, tempTimes, samples );
 		}
 		else
 		{
@@ -210,74 +401,14 @@ void objectSamples( const ScenePlug *scene, size_t segments, const Imath::V2f &s
 			break;
 		}
 	}
-
-	if( !moving )
-	{
-		samples.resize( std::min<size_t>( samples.size(), 1 ) );
-		sampleTimes.clear();
-	}
+	return true;
 }
 
 } // namespace RendererAlgo
 
-} // namespace GafferScene
-
-//////////////////////////////////////////////////////////////////////////
-// Adaptor registry
-//////////////////////////////////////////////////////////////////////////
-
-namespace
-{
-
-typedef boost::container::flat_map<string, GafferScene::RendererAlgo::Adaptor> Adaptors;
-
-Adaptors &adaptors()
-{
-	static Adaptors a;
-	return a;
-}
-
-} // namespace
-
-namespace GafferScene
-{
-
-namespace RendererAlgo
-{
-
-void registerAdaptor( const std::string &name, Adaptor adaptor )
-{
-	adaptors()[name] = adaptor;
-}
-
-void deregisterAdaptor( const std::string &name )
-{
-	adaptors().erase( name );
-}
-
-SceneProcessorPtr createAdaptors()
-{
-	SceneProcessorPtr result = new SceneProcessor;
-
-	ScenePlug *in = result->inPlug();
-
-	const Adaptors &a = adaptors();
-	for( Adaptors::const_iterator it = a.begin(), eIt = a.end(); it != eIt; ++it )
-	{
-		SceneProcessorPtr adaptor = it->second();
-		result->addChild( adaptor );
-		adaptor->inPlug()->setInput( in );
-		in = adaptor->outPlug();
-	}
-
-	result->outPlug()->setInput( in );
-	return result;
-}
-
-} // namespace RendererAlgo
+} // namespace Private
 
 } // namespace GafferScene
-
 
 //////////////////////////////////////////////////////////////////////////
 // RenderSets class
@@ -295,6 +426,9 @@ ConstInternedStringVectorDataPtr g_emptySetsAttribute = new InternedStringVector
 } // namespace
 
 namespace GafferScene
+{
+
+namespace Private
 {
 
 namespace RendererAlgo
@@ -349,7 +483,7 @@ struct RenderSets::Updater
 				potentialChange = LightsSetChanged;
 			}
 
-			setScope.setSetName( n );
+			setScope.setSetName( &n );
 			const IECore::MurmurHash &hash = m_scene->setPlug()->hash();
 			if( s->hash != hash )
 			{
@@ -480,6 +614,8 @@ ConstInternedStringVectorDataPtr RenderSets::setsAttribute( const std::vector<IE
 
 } // namespace RendererAlgo
 
+} // namespace Private
+
 } // namespace GafferScene
 
 //////////////////////////////////////////////////////////////////////////
@@ -499,6 +635,9 @@ IECore::InternedString g_lightFilters( "lightFilters" );
 } // namespace
 
 namespace GafferScene
+{
+
+namespace Private
 {
 
 namespace RendererAlgo
@@ -721,11 +860,13 @@ void LightLinks::outputLightFilterLinks( const ScenePlug *scene )
 	// Update the `filteredLights` fields in our FilterLinks.
 
 	tbb::task_group_context taskGroupContext( tbb::task_group_context::isolated );
+	const ThreadState &threadState = ThreadState::current();
 
 	tbb::parallel_for(
 		m_filterLinks.range(),
-		[scene]( FilterLinkMap::range_type &range )
+		[scene, &threadState]( FilterLinkMap::range_type &range )
 		{
+			ThreadState::Scope threadStateScope( threadState );
 			for( auto &f : range )
 			{
 				if( f.second.filteredLightsDirty )
@@ -746,6 +887,8 @@ void LightLinks::outputLightFilterLinks( const ScenePlug *scene )
 		m_lights.range(),
 		[this]( const LightMap::range_type &range )
 		{
+			// No need to scope `threadState` here, as `outputLightFilterLinks()`
+			// doesn't trigger Gaffer processes.
 			for( const auto &l : range )
 			{
 				outputLightFilterLinks( l.first, l.second.get() );
@@ -796,6 +939,8 @@ void LightLinks::outputLightFilterLinks( const std::string &lightName, IECoreSce
 
 } // namespace RendererAlgo
 
+} // namespace Private
+
 } // namespace GafferScene
 
 //////////////////////////////////////////////////////////////////////////
@@ -813,12 +958,8 @@ const InternedString g_transformBlurOptionName( "option:render:transformBlur" );
 const InternedString g_deformationBlurOptionName( "option:render:deformationBlur" );
 const InternedString g_shutterOptionName( "option:render:shutter" );
 
-static InternedString g_setsAttributeName( "sets" );
-static InternedString g_visibleAttributeName( "scene:visible" );
-static InternedString g_transformBlurAttributeName( "gaffer:transformBlur" );
-static InternedString g_transformBlurSegmentsAttributeName( "gaffer:transformBlurSegments" );
-static InternedString g_deformationBlurAttributeName( "gaffer:deformationBlur" );
-static InternedString g_deformationBlurSegmentsAttributeName( "gaffer:deformationBlurSegments" );
+InternedString g_setsAttributeName( "sets" );
+InternedString g_visibleAttributeName( "scene:visible" );
 
 IECore::InternedString optionName( const IECore::InternedString &globalsName )
 {
@@ -835,7 +976,7 @@ IECore::InternedString optionName( const IECore::InternedString &globalsName )
 struct LocationOutput
 {
 
-	LocationOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::RendererAlgo::RenderSets &renderSets, const ScenePlug::ScenePath &root, const ScenePlug *scene )
+	LocationOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::Private::RendererAlgo::RenderSets &renderSets, const ScenePlug::ScenePath &root, const ScenePlug *scene )
 		:	m_renderer( renderer ), m_attributes( SceneAlgo::globalAttributes( globals ) ), m_renderSets( renderSets ), m_root( root )
 	{
 		const BoolData *transformBlurData = globals->member<BoolData>( g_transformBlurOptionName );
@@ -896,14 +1037,9 @@ struct LocationOutput
 			return m_renderer;
 		}
 
-		Imath::V2f shutter() const
+		void deformationMotionTimes( std::vector<float> &times )
 		{
-			return m_options.shutter;
-		}
-
-		size_t deformationSegments() const
-		{
-			return motionSegments( m_options.deformationBlur, g_deformationBlurAttributeName, g_deformationBlurSegmentsAttributeName );
+			GafferScene::Private::RendererAlgo::deformationMotionTimes( m_options.deformationBlur, m_options.shutter, m_attributes.get(), times );
 		}
 
 		const IECore::CompoundObject *attributes() const
@@ -924,7 +1060,7 @@ struct LocationOutput
 
 		void applyTransform( IECoreScenePreview::Renderer::ObjectInterface *objectInterface )
 		{
-			if( !m_transformSamples.size() || !objectInterface )
+			if( !m_transformSamples.size() )
 			{
 				return;
 			}
@@ -939,25 +1075,6 @@ struct LocationOutput
 		}
 
 	private :
-
-		size_t motionSegments( bool motionBlur, const InternedString &attributeName, const InternedString &segmentsAttributeName ) const
-		{
-			if( !motionBlur )
-			{
-				return 0;
-			}
-
-			if( const BoolData *d = m_attributes->member<BoolData>( attributeName ) )
-			{
-				if( !d->readable() )
-				{
-					return 0;
-				}
-			}
-
-			const IntData *d = m_attributes->member<IntData>( segmentsAttributeName );
-			return d ? d->readable() : 1;
-		}
 
 		void updateAttributes( const ScenePlug *scene, const ScenePlug::ScenePath &path )
 		{
@@ -987,11 +1104,12 @@ struct LocationOutput
 
 		void updateTransform( const ScenePlug *scene )
 		{
-			const size_t segments = motionSegments( m_options.transformBlur, g_transformBlurAttributeName, g_transformBlurSegmentsAttributeName );
-			vector<M44f> samples; set<float> sampleTimes;
-			RendererAlgo::transformSamples( scene, segments, m_options.shutter, samples, sampleTimes );
+			vector<float> sampleTimes;
+			GafferScene::Private::RendererAlgo::transformMotionTimes( m_options.transformBlur, m_options.shutter, m_attributes.get(), sampleTimes );
+			vector<M44f> samples;
+			GafferScene::Private::RendererAlgo::transformSamples( scene->transformPlug(), sampleTimes, samples );
 
-			if( sampleTimes.empty() )
+			if( samples.size() == 1 )
 			{
 				for( vector<M44f>::iterator it = m_transformSamples.begin(), eIt = m_transformSamples.end(); it != eIt; ++it )
 				{
@@ -1007,10 +1125,10 @@ struct LocationOutput
 				updatedTransformTimes.reserve( samples.size() );
 
 				vector<M44f>::const_iterator s = samples.begin();
-				for( set<float>::const_iterator it = sampleTimes.begin(), eIt = sampleTimes.end(); it != eIt; ++it, ++s )
+				for( const float sampleTime : sampleTimes )
 				{
-					updatedTransformSamples.push_back( *s * transform( *it ) );
-					updatedTransformTimes.push_back( *it );
+					updatedTransformSamples.push_back( *s++ * transform( sampleTime ) );
+					updatedTransformTimes.push_back( sampleTime );
 				}
 
 				m_transformSamples = updatedTransformSamples;
@@ -1057,7 +1175,7 @@ struct LocationOutput
 
 		Options m_options;
 		IECore::ConstCompoundObjectPtr m_attributes;
-		const GafferScene::RendererAlgo::RenderSets &m_renderSets;
+		const GafferScene::Private::RendererAlgo::RenderSets &m_renderSets;
 		const ScenePlug::ScenePath &m_root;
 
 		std::vector<M44f> m_transformSamples;
@@ -1068,7 +1186,7 @@ struct LocationOutput
 struct CameraOutput : public LocationOutput
 {
 
-	CameraOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::RendererAlgo::RenderSets &renderSets, const ScenePlug::ScenePath &root, const ScenePlug *scene )
+	CameraOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::Private::RendererAlgo::RenderSets &renderSets, const ScenePlug::ScenePath &root, const ScenePlug *scene )
 		:	LocationOutput( renderer, globals, renderSets, root, scene ), m_globals( globals ), m_cameraSet( renderSets.camerasSet() )
 	{
 	}
@@ -1083,20 +1201,66 @@ struct CameraOutput : public LocationOutput
 		const size_t cameraMatch = m_cameraSet.match( path );
 		if( cameraMatch & IECore::PathMatcher::ExactMatch )
 		{
-			IECore::ConstObjectPtr object = scene->objectPlug()->getValue();
-			if( const Camera *camera = runTimeCast<const Camera>( object.get() ) )
+			// Sample cameras and apply globals
+			vector<float> sampleTimes;
+			deformationMotionTimes( sampleTimes );
+
+			vector<ConstObjectPtr> samples;
+			GafferScene::Private::RendererAlgo::objectSamples( scene->objectPlug(), sampleTimes, samples );
+
+			vector<ConstCameraPtr> cameraSamples; cameraSamples.reserve( samples.size() );
+			for( const auto &sample : samples )
 			{
-				IECoreScene::CameraPtr cameraCopy = camera->copy();
+				if( auto cameraSample = runTimeCast<const Camera>( sample.get() ) )
+				{
+					IECoreScene::CameraPtr cameraSampleCopy = cameraSample->copy();
+					GafferScene::SceneAlgo::applyCameraGlobals( cameraSampleCopy.get(), m_globals, scene );
+					cameraSamples.push_back( cameraSampleCopy );
+				}
+			}
 
-				GafferScene::RendererAlgo::applyCameraGlobals( cameraCopy.get(), m_globals, scene );
+			// Create ObjectInterface
 
-				IECoreScenePreview::Renderer::ObjectInterfacePtr objectInterface = renderer()->camera(
-					name( path ),
-					cameraCopy.get(),
-					attributesInterface().get()
+			if( !samples.size() || cameraSamples.size() != samples.size() )
+			{
+				IECore::msg(
+					IECore::Msg::Warning,
+					"RendererAlgo::CameraOutput",
+					boost::format( "Camera missing for location \"%1%\" at frame %2%" )
+						% name( path )
+						% Context::current()->getFrame()
 				);
+			}
+			else
+			{
+				IECoreScenePreview::Renderer::ObjectInterfacePtr objectInterface;
+				if( cameraSamples.size() == 1 )
+				{
+					objectInterface = renderer()->camera(
+						name( path ),
+						cameraSamples[0].get(),
+						attributesInterface().get()
+					);
+				}
+				else
+				{
+					vector<const Camera *> rawCameraSamples; rawCameraSamples.reserve( cameraSamples.size() );
+					for( auto &c : cameraSamples )
+					{
+						rawCameraSamples.push_back( c.get() );
+					}
+					objectInterface = renderer()->camera(
+						name( path ),
+						rawCameraSamples,
+						sampleTimes,
+						attributesInterface().get()
+					);
+				}
 
-				applyTransform( objectInterface.get() );
+				if( objectInterface )
+				{
+					applyTransform( objectInterface.get() );
+				}
 			}
 		}
 
@@ -1113,7 +1277,7 @@ struct CameraOutput : public LocationOutput
 struct LightOutput : public LocationOutput
 {
 
-	LightOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::RendererAlgo::RenderSets &renderSets, GafferScene::RendererAlgo::LightLinks *lightLinks, const ScenePlug::ScenePath &root, const ScenePlug *scene )
+	LightOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::Private::RendererAlgo::RenderSets &renderSets, GafferScene::Private::RendererAlgo::LightLinks *lightLinks, const ScenePlug::ScenePath &root, const ScenePlug *scene )
 		:	LocationOutput( renderer, globals, renderSets, root, scene ), m_lightSet( renderSets.lightsSet() ), m_lightLinks( lightLinks )
 	{
 	}
@@ -1137,25 +1301,29 @@ struct LightOutput : public LocationOutput
 				attributesInterface().get()
 			);
 
-			applyTransform( objectInterface.get() );
-			if( m_lightLinks )
+			if( objectInterface )
 			{
-				m_lightLinks->addLight( name, objectInterface );
+				applyTransform( objectInterface.get() );
+				if( m_lightLinks )
+				{
+					m_lightLinks->addLight( name, objectInterface );
+				}
 			}
+
 		}
 
 		return lightMatch & IECore::PathMatcher::DescendantMatch;
 	}
 
 	const PathMatcher &m_lightSet;
-	GafferScene::RendererAlgo::LightLinks *m_lightLinks;
+	GafferScene::Private::RendererAlgo::LightLinks *m_lightLinks;
 
 };
 
 struct LightFiltersOutput : public LocationOutput
 {
 
-	LightFiltersOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::RendererAlgo::RenderSets &renderSets, GafferScene::RendererAlgo::LightLinks *lightLinks, const ScenePlug::ScenePath &root, const ScenePlug *scene )
+	LightFiltersOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::Private::RendererAlgo::RenderSets &renderSets, GafferScene::Private::RendererAlgo::LightLinks *lightLinks, const ScenePlug::ScenePath &root, const ScenePlug *scene )
 		:	LocationOutput( renderer, globals, renderSets, root, scene ), m_lightFiltersSet( renderSets.lightFiltersSet() ), m_lightLinks( lightLinks )
 	{
 	}
@@ -1178,10 +1346,13 @@ struct LightFiltersOutput : public LocationOutput
 				attributesInterface().get()
 			);
 
-			applyTransform( objectInterface.get() );
-			if( m_lightLinks )
+			if( objectInterface )
 			{
-				m_lightLinks->addLightFilter( objectInterface, attributes() );
+				applyTransform( objectInterface.get() );
+				if( m_lightLinks )
+				{
+					m_lightLinks->addLightFilter( objectInterface, attributes() );
+				}
 			}
 		}
 
@@ -1191,14 +1362,14 @@ struct LightFiltersOutput : public LocationOutput
 	private :
 
 		const PathMatcher &m_lightFiltersSet;
-		GafferScene::RendererAlgo::LightLinks *m_lightLinks;
+		GafferScene::Private::RendererAlgo::LightLinks *m_lightLinks;
 
 };
 
 struct ObjectOutput : public LocationOutput
 {
 
-	ObjectOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::RendererAlgo::RenderSets &renderSets, const GafferScene::RendererAlgo::LightLinks *lightLinks, const ScenePlug::ScenePath &root, const ScenePlug *scene )
+	ObjectOutput( IECoreScenePreview::Renderer *renderer, const IECore::CompoundObject *globals, const GafferScene::Private::RendererAlgo::RenderSets &renderSets, const GafferScene::Private::RendererAlgo::LightLinks *lightLinks, const ScenePlug::ScenePath &root, const ScenePlug *scene )
 		:	LocationOutput( renderer, globals, renderSets, root, scene ), m_cameraSet( renderSets.camerasSet() ), m_lightSet( renderSets.lightsSet() ), m_lightFiltersSet( renderSets.lightFiltersSet() ), m_lightLinks( lightLinks )
 	{
 	}
@@ -1215,8 +1386,11 @@ struct ObjectOutput : public LocationOutput
 			return true;
 		}
 
-		vector<ConstVisibleRenderablePtr> samples; set<float> sampleTimes;
-		RendererAlgo::objectSamples( scene, deformationSegments(), shutter(), samples, sampleTimes );
+		vector<float> sampleTimes;
+		deformationMotionTimes( sampleTimes );
+
+		vector<ConstObjectPtr> samples;
+		GafferScene::Private::RendererAlgo::objectSamples( scene->objectPlug(), sampleTimes, samples );
 		if( !samples.size() )
 		{
 			return true;
@@ -1230,20 +1404,22 @@ struct ObjectOutput : public LocationOutput
 		}
 		else
 		{
-			/// \todo Can we rejig things so these conversions aren't necessary?
+			/// \todo Can we rejig things so this conversion isn't necessary?
 			vector<const Object *> objectsVector; objectsVector.reserve( samples.size() );
-			vector<float> timesVector( sampleTimes.begin(), sampleTimes.end() );
-			for( vector<ConstVisibleRenderablePtr>::const_iterator it = samples.begin(), eIt = samples.end(); it != eIt; ++it )
+			for( const auto &sample : samples )
 			{
-				objectsVector.push_back( it->get() );
+				objectsVector.push_back( sample.get() );
 			}
-			objectInterface = renderer()->object( name( path ), objectsVector, timesVector, attributesInterface.get() );
+			objectInterface = renderer()->object( name( path ), objectsVector, sampleTimes, attributesInterface.get() );
 		}
 
-		applyTransform( objectInterface.get() );
-		if( m_lightLinks )
+		if( objectInterface )
 		{
-			m_lightLinks->outputLightLinks( scene, attributes(), objectInterface.get() );
+			applyTransform( objectInterface.get() );
+			if( m_lightLinks )
+			{
+				m_lightLinks->outputLightLinks( scene, attributes(), objectInterface.get() );
+			}
 		}
 
 		return true;
@@ -1252,7 +1428,7 @@ struct ObjectOutput : public LocationOutput
 	const PathMatcher &m_cameraSet;
 	const PathMatcher &m_lightSet;
 	const PathMatcher &m_lightFiltersSet;
-	const RendererAlgo::LightLinks *m_lightLinks;
+	const GafferScene::Private::RendererAlgo::LightLinks *m_lightLinks;
 
 };
 
@@ -1272,6 +1448,8 @@ ConstOutputPtr addGafferOutputHeaders( const Output *output, const ScenePlug *sc
 	const Node *node = scene->node();
 	const ScriptNode *script = node->scriptNode();
 
+	param->writable()["header:gaffer:version"] = new StringData( Gaffer::versionString() );
+
 	// Include the path to the render node to allow tools to back-track from the image
 	param->writable()["header:gaffer:sourceScene"] = new StringData( scene->relativeName( script ) );
 
@@ -1281,8 +1459,8 @@ ConstOutputPtr addGafferOutputHeaders( const Output *output, const ScenePlug *sc
 	context->names( names );
 	for( const auto &name : names )
 	{
-		// Output params are never mutated, so this is 'safe'...
-		DataPtr data = const_cast<Data*>( context->get<Data>( name ) );
+		DataPtr data = context->getAsData( name );
+
 		// The requires a round-trip through the renderer's native type system, as such, it requires
 		// bi-directional conversion in Cortex. Unsupported types result in a slew of warning messages
 		// in render output. As many facilities employ un-supported types in their contexts as standard,
@@ -1302,8 +1480,8 @@ ConstOutputPtr addGafferOutputHeaders( const Output *output, const ScenePlug *sc
 			default :
 				IECore::msg(
 					IECore::Msg::Debug,
-					"GafferScene::RendereAlgo",
-					boost::format(  "Unsupported data type for Context variable \"%s\" (%s), unable to add header" ) % name % data->typeName()
+					"GafferScene::RendererAlgo",
+					boost::format(  "Unsupported data type for Context variable \"%s\" (%s), unable to add this variable to output image header" ) % name % data->typeName()
 				);
 		};
 	}
@@ -1314,6 +1492,9 @@ ConstOutputPtr addGafferOutputHeaders( const Output *output, const ScenePlug *sc
 } // namespace
 
 namespace GafferScene
+{
+
+namespace Private
 {
 
 namespace RendererAlgo
@@ -1469,7 +1650,7 @@ void outputCameras( const ScenePlug *scene, const IECore::CompoundObject *global
 	if( !cameraOption || cameraOption->readable().empty() )
 	{
 		CameraPtr defaultCamera = new IECoreScene::Camera;
-		RendererAlgo::applyCameraGlobals( defaultCamera.get(), globals, scene );
+		SceneAlgo::applyCameraGlobals( defaultCamera.get(), globals, scene );
 		IECoreScenePreview::Renderer::AttributesInterfacePtr defaultAttributes = renderer->attributes( scene->attributesPlug()->defaultValue() );
 		ConstStringDataPtr name = new StringData( "gaffer:defaultCamera" );
 		renderer->camera( name->readable(), defaultCamera.get(), defaultAttributes.get() );
@@ -1497,105 +1678,8 @@ void outputObjects( const ScenePlug *scene, const IECore::CompoundObject *global
 	SceneAlgo::parallelProcessLocations( scene, output, root );
 }
 
-void applyCameraGlobals( IECoreScene::Camera *camera, const IECore::CompoundObject *globals, const ScenePlug *scene )
-{
-	// Set any camera-relevant render globals that haven't been overridden on the camera
-	const IntData *filmFitData = globals->member<IntData>( "option:render:filmFit" );
-	if( !camera->hasFilmFit() && filmFitData )
-	{
-		camera->setFilmFit( (IECoreScene::Camera::FilmFit)filmFitData->readable() );
-	}
-
-	const V2iData *resolutionData = globals->member<V2iData>( "option:render:resolution" );
-	if( !camera->hasResolution() && resolutionData )
-	{
-		camera->setResolution( resolutionData->readable() );
-	}
-
-	const FloatData *resolutionMultiplierData = globals->member<FloatData>( "option:render:resolutionMultiplier" );
-	if( !camera->hasResolutionMultiplier() && resolutionMultiplierData )
-	{
-		camera->setResolutionMultiplier( resolutionMultiplierData->readable() );
-	}
-
-	const FloatData *pixelAspectRatioData = globals->member<FloatData>( "option:render:pixelAspectRatio" );
-	if( !camera->hasPixelAspectRatio() && pixelAspectRatioData )
-	{
-		camera->setPixelAspectRatio( pixelAspectRatioData->readable() );
-	}
-
-	const BoolData *overscanData = globals->member<BoolData>( "option:render:overscan" );
-	bool overscan = overscanData && overscanData->readable();
-	if( camera->hasOverscan() ) overscan = camera->getOverscan();
-	if( overscan )
-	{
-		if( !camera->hasOverscan() )
-		{
-			camera->setOverscan( true );
-		}
-		const FloatData *overscanLeftData = globals->member<FloatData>( "option:render:overscanLeft" );
-		if( !camera->hasOverscanLeft() && overscanLeftData )
-		{
-			camera->setOverscanLeft( overscanLeftData->readable() );
-		}
-		const FloatData *overscanRightData = globals->member<FloatData>( "option:render:overscanRight" );
-		if( !camera->hasOverscanRight() && overscanRightData )
-		{
-			camera->setOverscanRight( overscanRightData->readable() );
-		}
-		const FloatData *overscanTopData = globals->member<FloatData>( "option:render:overscanTop" );
-		if( !camera->hasOverscanTop() && overscanTopData )
-		{
-			camera->setOverscanTop( overscanTopData->readable() );
-		}
-		const FloatData *overscanBottomData = globals->member<FloatData>( "option:render:overscanBottom" );
-		if( !camera->hasOverscanBottom() && overscanBottomData )
-		{
-			camera->setOverscanBottom( overscanBottomData->readable() );
-		}
-	}
-
-	const Box2fData *cropWindowData = globals->member<Box2fData>( "option:render:cropWindow" );
-	if( !camera->hasCropWindow() && cropWindowData )
-	{
-		camera->setCropWindow( cropWindowData->readable() );
-	}
-
-	const BoolData *depthOfFieldData = globals->member<BoolData>( "option:render:depthOfField" );
-	/*if( !camera->hasDepthOfField() && depthOfFieldData )
-	{
-		camera->setDepthOfField( depthOfFieldData->readable() );
-	}*/
-	// \todo - switch to the form above once we have officially added the depthOfField parameter to Cortex.
-	// The plan then would be that the renderer backends should respect camera->getDepthOfField.
-	// For the moment we bake into fStop instead
-	bool depthOfField = false;
-	if( depthOfFieldData )
-	{
-		// First set from render globals
-		depthOfField = depthOfFieldData->readable();
-	}
-	if( const BoolData *d = camera->parametersData()->member<BoolData>( "depthOfField" ) )
-	{
-		// Override based on camera setting
-		depthOfField = d->readable();
-	}
-	if( !depthOfField )
-	{
-		// If there is no depth of field, bake that into the fStop
-		camera->setFStop( 0.0f );
-	}
-
-	// Bake the shutter from the globals into the camera before passing it to the renderer backend
-	//
-	// Before this bake, the shutter is an optional render setting override, with the shutter start
-	// and end relative to the current frame.  After baking, the shutter is currently an absolute
-	// shutter, with the frame added on.  Feels like it might be more consistent if we switched to
-	// always storing a relative shutter in camera->setShutter()
-	camera->setShutter( SceneAlgo::shutter( globals, scene ) );
-
-}
-
 } // namespace RendererAlgo
+
+} // namespace Private
 
 } // namespace GafferScene

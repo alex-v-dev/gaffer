@@ -41,7 +41,8 @@
 #include "GafferScene/RenderController.h"
 #include "GafferScene/ScenePlug.h"
 
-#include "Gaffer/Node.h"
+#include "Gaffer/ComputeNode.h"
+#include "Gaffer/TypedObjectPlug.h"
 
 namespace Gaffer
 {
@@ -54,7 +55,7 @@ IE_CORE_FORWARDDECLARE( StringPlug )
 namespace GafferScene
 {
 
-class GAFFERSCENE_API InteractiveRender : public Gaffer::Node
+class GAFFERSCENE_API InteractiveRender : public Gaffer::ComputeNode
 {
 
 	public :
@@ -62,7 +63,7 @@ class GAFFERSCENE_API InteractiveRender : public Gaffer::Node
 		InteractiveRender( const std::string &name=defaultName<InteractiveRender>() );
 		~InteractiveRender() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::InteractiveRender, GafferScene::InteractiveRenderTypeId, Gaffer::Node );
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::InteractiveRender, GafferScene::InteractiveRenderTypeId, Gaffer::ComputeNode );
 
 		enum State
 		{
@@ -83,12 +84,17 @@ class GAFFERSCENE_API InteractiveRender : public Gaffer::Node
 		GafferScene::ScenePlug *outPlug();
 		const GafferScene::ScenePlug *outPlug() const;
 
+		Gaffer::ObjectPlug *messagesPlug();
+		const Gaffer::ObjectPlug *messagesPlug() const;
+
 		/// Specifies a context in which the InteractiveRender should operate.
 		/// The default is null, meaning that the context of the ancestor
 		/// ScriptNode will be used, or failing that, a default context.
 		void setContext( Gaffer::ContextPtr context );
 		Gaffer::Context *getContext();
 		const Gaffer::Context *getContext() const;
+
+		void affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const override;
 
 	protected :
 
@@ -98,12 +104,27 @@ class GAFFERSCENE_API InteractiveRender : public Gaffer::Node
 		// loading of the module which registers the required renderer type.
 		InteractiveRender( const IECore::InternedString &rendererType, const std::string &name );
 
+		void hash( const Gaffer::ValuePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
+		void compute( Gaffer::ValuePlug *output, const Gaffer::Context *context ) const override;
+
+		Gaffer::ValuePlug::CachePolicy computeCachePolicy( const Gaffer::ValuePlug *output ) const override;
+
+		bool acceptsInput( const Gaffer::Plug *plug, const Gaffer::Plug *inputPlug ) const override;
+
+		IECoreScenePreview::Renderer *renderer() { return m_renderer.get(); }
+
 	private :
 
 		ScenePlug *adaptedInPlug();
 		const ScenePlug *adaptedInPlug() const;
 
-		void plugDirtied( const Gaffer::Plug *plug );
+		Gaffer::IntPlug *messageUpdateCountPlug();
+		const Gaffer::IntPlug *messageUpdateCountPlug() const;
+
+		void messagesChanged();
+		static void messagesChangedUI();
+
+		void plugSet( const Gaffer::Plug *plug );
 
 		void update();
 		Gaffer::ConstContextPtr effectiveContext();
@@ -115,14 +136,14 @@ class GAFFERSCENE_API InteractiveRender : public Gaffer::Node
 
 		Gaffer::ContextPtr m_context;
 
+		IE_CORE_FORWARDDECLARE( RenderMessageHandler )
+		RenderMessageHandlerPtr  m_messageHandler;
+
 		static size_t g_firstPlugIndex;
 
 };
 
 IE_CORE_DECLAREPTR( InteractiveRender );
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<InteractiveRender> > InteractiveRenderIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<InteractiveRender> > RecursiveInteractiveRenderIterator;
 
 } // namespace GafferScene
 

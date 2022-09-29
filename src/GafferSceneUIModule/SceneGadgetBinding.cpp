@@ -99,7 +99,7 @@ void waitForCompletion( SceneGadget &g )
 
 struct SceneGadgetSlotCaller
 {
-	boost::signals::detail::unusable operator()( boost::python::object slot, SceneGadgetPtr g )
+	void operator()( boost::python::object slot, SceneGadgetPtr g )
 	{
 		try
 		{
@@ -109,9 +109,19 @@ struct SceneGadgetSlotCaller
 		{
 			ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
 	}
 };
+
+void setRenderer( SceneGadget &g, IECore::InternedString name )
+{
+	ScopedGILRelease gilRelease;
+	g.setRenderer( name );
+}
+
+std::string getRenderer( SceneGadget &g )
+{
+	return g.getRenderer().string();
+}
 
 IECore::CompoundObjectPtr getOpenGLOptions( const SceneGadget &g )
 {
@@ -126,6 +136,7 @@ IECore::StringVectorDataPtr getSelectionMask( const SceneGadget &g )
 
 IECore::InternedStringVectorDataPtr objectAt( SceneGadget &g, IECore::LineSegment3f &l )
 {
+	ScopedGILRelease gilRelease;
 	IECore::InternedStringVectorDataPtr result = new IECore::InternedStringVectorData;
 	if( g.objectAt( l, result->writable() ) )
 	{
@@ -138,11 +149,34 @@ tuple objectAndIntersectionAt( SceneGadget &g, IECore::LineSegment3f &l )
 {
 	IECore::InternedStringVectorDataPtr result = new IECore::InternedStringVectorData;
 	Imath::V3f hitPos( 0.0f );
-	if( g.objectAt( l, result->writable(), hitPos ) )
+
 	{
-		return boost::python::make_tuple( result, hitPos );
+		ScopedGILRelease gilRelease;
+		if( !g.objectAt( l, result->writable(), hitPos ) )
+		{
+			result = nullptr;
+		}
 	}
-	return boost::python::make_tuple( object(), hitPos );
+
+	return boost::python::make_tuple( result, hitPos );
+}
+
+size_t objectsAt( SceneGadget &g, const Imath::V3f &corner0InGadgetSpace, const Imath::V3f &corner1InGadgetSpace, IECore::PathMatcher &paths )
+{
+	ScopedGILRelease gilRelease;
+	return g.objectsAt( corner0InGadgetSpace, corner1InGadgetSpace, paths );
+}
+
+Imath::Box3f selectionBound( SceneGadget &g )
+{
+	ScopedGILRelease gilRelease;
+	return g.selectionBound();
+}
+
+Imath::Box3f bound( SceneGadget &g, bool selected, const IECore::PathMatcher *omitted )
+{
+	ScopedGILRelease gilRelease;
+	return g.bound( selected, omitted );
 }
 
 } // namespace
@@ -165,16 +199,19 @@ void GafferSceneUIModule::bindSceneGadget()
 		.def( "state", &SceneGadget::state )
 		.def( "stateChangedSignal", &SceneGadget::stateChangedSignal, return_internal_reference<1>() )
 		.def( "waitForCompletion", &waitForCompletion )
+		.def( "setRenderer", &setRenderer )
+		.def( "getRenderer", &getRenderer )
 		.def( "setOpenGLOptions", &SceneGadget::setOpenGLOptions )
 		.def( "getOpenGLOptions", &getOpenGLOptions )
 		.def( "setSelectionMask", &SceneGadget::setSelectionMask )
 		.def( "getSelectionMask", &getSelectionMask )
 		.def( "objectAt", &objectAt )
 		.def( "objectAndIntersectionAt", &objectAndIntersectionAt )
-		.def( "objectsAt", &SceneGadget::objectsAt )
+		.def( "objectsAt", &objectsAt )
 		.def( "setSelection", &SceneGadget::setSelection )
 		.def( "getSelection", &SceneGadget::getSelection, return_value_policy<copy_const_reference>() )
-		.def( "selectionBound", &SceneGadget::selectionBound )
+		.def( "selectionBound", &selectionBound )
+		.def( "bound", &bound, ( arg( "selected" ), arg( "omitted" ) = object() ) )
 	;
 
 	enum_<SceneGadget::State>( "State" )

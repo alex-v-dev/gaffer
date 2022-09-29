@@ -41,11 +41,12 @@
 
 #include "Gaffer/Context.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
 using namespace GafferScene;
 using namespace Gaffer;
 using namespace IECore;
+using namespace boost::placeholders;
 using namespace std;
 
 namespace
@@ -58,7 +59,7 @@ const int g_descendantRoots = numeric_limits<int>::max();
 
 } // namespace
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( PathFilter );
+GAFFER_NODE_DEFINE_TYPE( PathFilter );
 
 size_t PathFilter::g_firstPlugIndex = 0;
 
@@ -159,6 +160,11 @@ void PathFilter::affects( const Gaffer::Plug *input, AffectedPlugsContainer &out
 	{
 		outputs.push_back( outPlug() );
 	}
+
+	if( input->parent<ScenePlug>() )
+	{
+		rootsPlug()->sceneAffects( input, outputs );
+	}
 }
 
 void PathFilter::hash( const Gaffer::ValuePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const
@@ -196,10 +202,9 @@ void PathFilter::compute( Gaffer::ValuePlug *output, const Gaffer::Context *cont
 
 void PathFilter::hashMatch( const ScenePlug *scene, const Gaffer::Context *context, IECore::MurmurHash &h ) const
 {
-	typedef IECore::TypedData<ScenePlug::ScenePath> ScenePathData;
-	const ScenePathData *pathData = context->get<ScenePathData>( ScenePlug::scenePathContextName, nullptr );
+	const ScenePlug::ScenePath *path = context->getIfExists<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
 
-	if( !pathData )
+	if( !path )
 	{
 		// This is a special case used by the Prune and Isolate nodes
 		// to request a hash representing the effects of the filter
@@ -217,6 +222,7 @@ void PathFilter::hashMatch( const ScenePlug *scene, const Gaffer::Context *conte
 		}
 		else
 		{
+			ScenePlug::GlobalScope globalScope( context );
 			pathMatcherPlug()->hash( h );
 		}
 		return;
@@ -224,8 +230,7 @@ void PathFilter::hashMatch( const ScenePlug *scene, const Gaffer::Context *conte
 
 	// Standard case
 
-	const ScenePlug::ScenePath &path = pathData->readable();
-	h.append( path.data(), path.size() );
+	h.append( path->data(), path->size() );
 
 	if( m_pathMatcher )
 	{
@@ -233,6 +238,7 @@ void PathFilter::hashMatch( const ScenePlug *scene, const Gaffer::Context *conte
 	}
 	else
 	{
+		ScenePlug::GlobalScope globalScope( context );
 		pathMatcherPlug()->hash( h );
 	}
 
@@ -245,11 +251,18 @@ void PathFilter::hashMatch( const ScenePlug *scene, const Gaffer::Context *conte
 unsigned PathFilter::computeMatch( const ScenePlug *scene, const Gaffer::Context *context ) const
 {
 	const ScenePlug::ScenePath &path = context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
-	ConstPathMatcherDataPtr pathMatcher = m_pathMatcher ? m_pathMatcher : pathMatcherPlug()->getValue();
+
+	ConstPathMatcherDataPtr pathMatcherData;
+	if( !m_pathMatcher )
+	{
+		ScenePlug::GlobalScope globalScope( context );
+		pathMatcherData = pathMatcherPlug()->getValue();
+	}
+	const PathMatcher &pathMatcher = pathMatcherData ? pathMatcherData->readable() : m_pathMatcher->readable();
 
 	if( !rootsPlug()->getInput() )
 	{
-		return pathMatcher->readable().match( path );
+		return pathMatcher.match( path );
 	}
 
 	ConstIntVectorDataPtr rootSizes = rootSizesPlug()->getValue();
@@ -261,28 +274,18 @@ unsigned PathFilter::computeMatch( const ScenePlug *scene, const Gaffer::Context
 	{
 		if( rootSize == g_descendantRoots )
 		{
-			if( !pathMatcher->readable().isEmpty() )
+			if( !pathMatcher.isEmpty() )
 			{
 				result |= PathMatcher::DescendantMatch;
 			}
 			break;
 		}
 		relativePath.erase( relativePath.begin(), relativePath.begin() + rootSize - previousRootSize );
-		result |= pathMatcher->readable().match( relativePath );
+		result |= pathMatcher.match( relativePath );
 		previousRootSize = rootSize;
 	}
 
 	return result;
-}
-
-bool PathFilter::sceneAffectsMatch( const ScenePlug *scene, const Gaffer::ValuePlug *child ) const
-{
-	if( Filter::sceneAffectsMatch( scene, child ) )
-	{
-		return true;
-	}
-
-	return rootsPlug()->sceneAffectsMatch( scene, child );
 }
 
 void PathFilter::hashRootSizes( const Gaffer::Context *context, IECore::MurmurHash &h ) const
@@ -290,7 +293,8 @@ void PathFilter::hashRootSizes( const Gaffer::Context *context, IECore::MurmurHa
 	const ScenePlug::ScenePath &path = context->get<ScenePlug::ScenePath>( ScenePlug::scenePathContextName );
 	if( path.size() )
 	{
-		ScenePlug::PathScope parentScope( context, ScenePlug::ScenePath( path.begin(), path.begin() + path.size() - 1 ) );
+		ScenePlug::ScenePath parentPath( path.begin(), path.begin() + path.size() - 1 );
+		ScenePlug::PathScope parentScope( context, &parentPath );
 		rootSizesPlug()->hash( h );
 	}
 	rootsPlug()->hash( h );
@@ -306,7 +310,8 @@ ConstIntVectorDataPtr PathFilter::computeRootSizes( const Gaffer::Context *conte
 	ConstIntVectorDataPtr parentRootSizes;
 	if( path.size() )
 	{
-		ScenePlug::PathScope parentScope( context, ScenePlug::ScenePath( path.begin(), path.begin() + path.size() - 1 ) );
+		ScenePlug::ScenePath parentPath( path.begin(), path.begin() + path.size() - 1 );
+		ScenePlug::PathScope parentScope( context, &parentPath );
 		parentRootSizes = rootSizesPlug()->getValue();
 		// If the parent has no descendant roots, then we already have
 		// all the roots we need.

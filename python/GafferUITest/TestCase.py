@@ -36,13 +36,44 @@
 
 import os
 import sys
+import functools
 import unittest
+import inspect
+import weakref
 
+from Qt import QtCore
+from Qt import QtCompat
+
+import IECore
+
+import Gaffer
 import GafferTest
 import GafferUI
 
 ## A useful base class for creating test cases for the ui.
 class TestCase( GafferTest.TestCase ) :
+
+	def setUp( self ) :
+
+		GafferTest.TestCase.setUp( self )
+
+		# Forward Qt messages to the IECore message handler.
+		# This causes them to be reported as errors by our
+		# base class.
+
+		def messageHandler( type, context, message ) :
+
+			IECore.msg(
+				{
+					QtCore.QtMsgType.QtInfoMsg : IECore.Msg.Level.Info,
+					QtCore.QtMsgType.QtDebugMsg : IECore.Msg.Level.Debug,
+				}.get( type, IECore.Msg.Level.Error ),
+				"Qt",
+				message
+			)
+
+		QtCompat.qInstallMessageHandler( messageHandler )
+		self.addCleanup( functools.partial( QtCompat.qInstallMessageHandler, None ) )
 
 	def tearDown( self ) :
 
@@ -106,6 +137,35 @@ class TestCase( GafferTest.TestCase ) :
 					for phrase in forbidden :
 						self.assertFalse( phrase in line, "Example %s references unstable '%s':\n%s" % ( e['filePath'], phrase, line ) )
 
+	def assertNodeUIsHaveExpectedLifetime( self, module ) :
+
+		for name in dir( module ) :
+
+			cls = getattr( module, name )
+			if not inspect.isclass( cls ) or not issubclass( cls, Gaffer.Node ) :
+				continue
+
+			script = Gaffer.ScriptNode()
+
+			try :
+				script["node"] = cls()
+			except :
+				continue
+
+			with GafferUI.Window() as window :
+				nodeUI = GafferUI.NodeUI.create( script["node"] )
+			window.setVisible( True )
+			self.waitForIdle( 10000 )
+
+			weakNodeUI = weakref.ref( nodeUI )
+			weakScript = weakref.ref( script )
+
+			del window, nodeUI
+			self.assertIsNone( weakNodeUI() )
+
+			del script
+			self.assertIsNone( weakScript() )
+
 	@staticmethod
 	def __widgetInstances() :
 
@@ -118,4 +178,3 @@ class TestCase( GafferTest.TestCase ) :
 				result.append( w() )
 
 		return result
-

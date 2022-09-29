@@ -53,12 +53,13 @@
 #include "PrimitivesBinding.h"
 #include "RenderBinding.h"
 #include "RenderControllerBinding.h"
-#include "RendererAlgoBinding.h"
 #include "SceneAlgoBinding.h"
 #include "ScenePathBinding.h"
 #include "SetAlgoBinding.h"
 #include "ShaderBinding.h"
 #include "TransformBinding.h"
+#include "QueryBinding.h"
+#include "CryptomatteBinding.h"
 
 using namespace boost::python;
 using namespace GafferSceneModule;
@@ -73,7 +74,6 @@ BOOST_PYTHON_MODULE( _GafferScene )
 	bindOptions();
 	bindAttributes();
 	bindSceneAlgo();
-	bindRendererAlgo();
 	bindSetAlgo();
 	bindPrimitives();
 	bindScenePath();
@@ -88,5 +88,7 @@ BOOST_PYTHON_MODULE( _GafferScene )
 	bindPrimitiveSampler();
 	bindIECoreGLPreview();
 	bindEditScopeAlgo();
+	bindQueries();
+	bindCryptomatte();
 
 }

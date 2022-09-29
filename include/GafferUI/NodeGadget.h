@@ -73,7 +73,7 @@ class GAFFERUI_API NodeGadget : public Gadget
 		/// purposes of drawing connections.
 		virtual Imath::V3f connectionTangent( const ConnectionCreator *creator ) const;
 
-		typedef boost::signal<void ( NodeGadget *, Nodule * )> NoduleSignal;
+		using NoduleSignal = Gaffer::Signals::Signal<void ( NodeGadget *, Nodule * )>;
 		/// Emitted when a nodule is added. It is the responsibility
 		/// of derived classes and compound nodules to emit this when
 		/// appropriate.
@@ -90,7 +90,7 @@ class GAFFERUI_API NodeGadget : public Gadget
 		/// nullptr will be returned.
 		static NodeGadgetPtr create( Gaffer::NodePtr node );
 
-		typedef std::function<NodeGadgetPtr ( Gaffer::NodePtr )> NodeGadgetCreator;
+		using NodeGadgetCreator = std::function<NodeGadgetPtr ( Gaffer::NodePtr )>;
 		/// Registers a named NodeGadget creator, optionally registering it as the default
 		/// creator for a particular type of node. The nodeGadgetType may subsequently be
 		/// used in a "nodeGadget:type" metadata registration to register the creator with
@@ -114,18 +114,22 @@ class GAFFERUI_API NodeGadget : public Gadget
 			static NodeGadgetPtr creator( Gaffer::NodePtr node ) { return new T( node ); };
 		};
 
+		virtual void activeForFocusNode( bool active );
+
+		friend class GraphGadget;
+
+		bool m_active;
+
 	private :
 
 		Gaffer::Node *m_node;
 		NoduleSignal m_noduleAddedSignal;
 		NoduleSignal m_noduleRemovedSignal;
 
+
 };
 
 IE_CORE_DECLAREPTR( NodeGadget );
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<NodeGadget> > NodeGadgetIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<NodeGadget> > RecursiveNodeGadgetIterator;
 
 } // namespace GafferUI
 

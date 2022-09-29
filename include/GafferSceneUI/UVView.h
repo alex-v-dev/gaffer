@@ -50,6 +50,7 @@
 #include "Gaffer/StringPlug.h"
 
 #include <unordered_set>
+#include <unordered_map>
 
 namespace GafferSceneUI
 {
@@ -64,7 +65,7 @@ class GAFFERSCENEUI_API UVView : public GafferUI::View
 		UVView( const std::string &name = defaultName<UVView>() );
 		~UVView() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferSceneUI::UVView, UVViewTypeId, View );
+		GAFFER_NODE_DECLARE_TYPE( GafferSceneUI::UVView, UVViewTypeId, View );
 
 		void setContext( Gaffer::ContextPtr context ) override;
 
@@ -89,7 +90,7 @@ class GAFFERSCENEUI_API UVView : public GafferUI::View
 
 		State state() const;
 
-		typedef boost::signal<void (UVView *)> UVViewSignal;
+		using UVViewSignal = Gaffer::Signals::Signal<void (UVView *)>;
 		UVViewSignal &stateChangedSignal();
 
 	protected :
@@ -126,6 +127,10 @@ class GAFFERSCENEUI_API UVView : public GafferUI::View
 		std::unique_ptr<Gaffer::BackgroundTask> m_texturesTask;
 
 		bool m_framed;
+
+		using DisplayTransformMap = std::unordered_map<std::string, GafferImage::ImageProcessorPtr>;
+		DisplayTransformMap m_displayTransforms;
+		bool m_displayTransformDirty;
 
 		static size_t g_firstPlugIndex;
 

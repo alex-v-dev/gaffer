@@ -100,6 +100,7 @@ class GLWidget( GafferUI.Widget ) :
 		GafferUI.Widget.__init__( self, graphicsView, **kw )
 
 		self.__overlays = set()
+		self.visibilityChangedSignal().connect( Gaffer.WeakMethod( self.__visibilityChanged ), scoped = False )
 
 	## Adds a widget to be overlaid on top of the GL rendering,
 	# stretched to fill the frame.
@@ -202,7 +203,20 @@ class GLWidget( GafferUI.Widget ) :
 		if self.__multisample:
 			GL.glEnable( GL.GL_MULTISAMPLE )
 
-		self._draw()
+		try :
+			self._draw()
+		except Exception as e :
+			IECore.msg( IECore.Msg.Level.Error, "GLWidget", str( e ) )
+
+	def __visibilityChanged( self, widget ) :
+
+		# Transfer our visibility to our overlay widgets, so that
+		# their `visibilityChangedSignal()` is emitted as well (Qt
+		# doesn't handle this for us). This is particularly important
+		# for overlays which use LazyMethod and BackgroundMethod, both
+		# of which react to visibility changes.
+		for overlay in self.__overlays :
+			overlay._qtWidget().setVisible( self.visible() )
 
 class _GLGraphicsView( QtWidgets.QGraphicsView ) :
 
@@ -214,13 +228,6 @@ class _GLGraphicsView( QtWidgets.QGraphicsView ) :
 		self.setVerticalScrollBarPolicy( QtCore.Qt.ScrollBarAlwaysOff )
 
 		glWidget = self.__createQGLWidget( format )
-
-		# On mac, we need to hide the GL widget until the last
-		# possible moment, otherwise we get "invalid drawable"
-		# errors spewing all over the place. See event() for the
-		# spot where we show the widget.
-		glWidget.hide()
-
 		self.setViewport( glWidget )
 		self.setViewportUpdateMode( self.FullViewportUpdate )
 
@@ -232,17 +239,6 @@ class _GLGraphicsView( QtWidgets.QGraphicsView ) :
 
 		return QtCore.QSize()
 
-	def event( self, event ) :
-
-		if event.type() == event.PolishRequest :
-			# This seems to be the one signal that reliably
-			# lets us know we're becoming genuinely visible
-			# on screen. We use it to show the GL widget we
-			# hid in our constructor.
-			self.viewport().show()
-
-		return QtWidgets.QGraphicsView.event( self, event )
-
 	def resizeEvent( self, event ) :
 
 		if self.scene() is not None :
@@ -250,12 +246,12 @@ class _GLGraphicsView( QtWidgets.QGraphicsView ) :
 			self.scene().setSceneRect( 0, 0, event.size().width(), event.size().height() )
 			owner = GafferUI.Widget._owner( self )
 
+			owner._makeCurrent()
+
 			# clear any existing errors that may trigger
 			# error checking code in _resize implementations.
 			while GL.glGetError() :
 				pass
-
-			owner._makeCurrent()
 
 			# We need to call the init method after a GL context has been
 			# created, but before any events requiring GL have been triggered.
@@ -431,18 +427,46 @@ class _GLGraphicsScene( QtWidgets.QGraphicsScene ) :
 
 		item.widget().setGeometry( QtCore.QRect( 0, 0, sceneRect.width(), sceneRect.height() ) )
 
-## A QGraphicsProxyWidget whose shape is composed from the
-# bounds of its child widgets. This allows our overlays to
-# pass through events in the regions where there isn't a
-# child widget.
+## A QGraphicsProxyWidget whose shape is derived from the opaque parts of its
+# child widgets. This allows our overlays to pass through events in the regions
+# where there isn't a visible child widget.
+#
+# shape() is called frequently but our mask is relatively expensive to calculate.
+# As transparency is stylesheet dependent, we need to render our child widgets
+# and work out a mask from the resultant alpha.
+#
+# To minimise impact, We only re-calculate our mask whenever our layout
+# changes. This covers 99% of common use cases, with the only exception that
+# mouse-driven opacity changes won't be considered.
 class _OverlayProxyWidget( QtWidgets.QGraphicsProxyWidget ) :
 
 	def __init__( self ) :
 
 		QtWidgets.QGraphicsProxyWidget.__init__( self )
+		self.__shape = None
+
+	def setWidget( self, widget ) :
+
+		QtWidgets.QGraphicsProxyWidget.setWidget( self, widget )
+		self.__shape = None
 
 	def shape( self ) :
 
-		path = QtGui.QPainterPath()
-		path.addRegion( self.widget().childrenRegion() )
-		return path
+		if self.__shape is None :
+
+			self.__shape = QtGui.QPainterPath()
+			if self.widget() :
+				pixmap = self.widget().grab()
+				if pixmap.size() != self.widget().size() :
+					# Account for the widget being grabbed at a higher resolution
+					# when using high resolution displays.
+					pixmap = pixmap.scaled( self.widget().size() )
+				self.__shape.addRegion( QtGui.QRegion( pixmap.mask() ) )
+
+		return self.__shape
+
+	# This covers re-layouts due to child changes, and parent changes (such as window resizing)
+	def setGeometry( self, *args, **kwargs ) :
+
+		QtWidgets.QGraphicsProxyWidget.setGeometry( self, *args, **kwargs )
+		self.__shape = None

@@ -37,6 +37,7 @@
 #include "GafferScene/Private/IECoreScenePreview/CapturingRenderer.h"
 
 #include "IECore/MessageHandler.h"
+#include "IECore/SimpleTypedData.h"
 
 using namespace std;
 using namespace IECore;
@@ -48,9 +49,24 @@ using namespace IECoreScenePreview;
 
 IECoreScenePreview::Renderer::TypeDescription<CapturingRenderer> CapturingRenderer::g_typeDescription( "Capturing" );
 
-CapturingRenderer::CapturingRenderer( RenderType type, const std::string &fileName )
-	:	m_rendering( false )
+CapturingRenderer::CapturingRenderer( RenderType type, const std::string &fileName, const IECore::MessageHandlerPtr &messageHandler )
+	:	m_messageHandler( messageHandler ), m_renderType( type ), m_rendering( false )
 {
+}
+
+CapturingRenderer::~CapturingRenderer()
+{
+	for( auto o : m_capturedObjects )
+	{
+		// Reset soon-to-be-dangling pointer from CapturedObject, in
+		// case clients keep the object alive longer than the renderer.
+		o.second->m_renderer = nullptr;
+		if( m_renderType != Interactive )
+		{
+			// Remove reference added in `object()`.
+			o.second->removeRef();
+		}
+	}
 }
 
 const CapturingRenderer::CapturedObject *CapturingRenderer::capturedObject( const std::string &name ) const
@@ -72,21 +88,29 @@ IECore::InternedString CapturingRenderer::name() const
 void CapturingRenderer::option( const IECore::InternedString &name, const IECore::Object *value )
 {
 	/// \todo Implement
+	checkPaused();
 }
 
 void CapturingRenderer::output( const IECore::InternedString &name, const IECoreScene::Output *output )
 {
 	/// \todo Implement
+	checkPaused();
 }
 
 Renderer::AttributesInterfacePtr CapturingRenderer::attributes( const IECore::CompoundObject *attributes )
 {
+	checkPaused();
 	return new CapturedAttributes( ConstCompoundObjectPtr( attributes ) );
 }
 
 Renderer::ObjectInterfacePtr CapturingRenderer::camera( const std::string &name, const IECoreScene::Camera *camera, const AttributesInterface *attributes )
 {
 	return this->object( name, camera, attributes );
+}
+
+Renderer::ObjectInterfacePtr CapturingRenderer::camera( const std::string &name, const std::vector<const IECoreScene::Camera *> &samples, const std::vector<float> &times, const AttributesInterface *attributes )
+{
+	return this->object( name, vector<const Object *>( samples.begin(), samples.end() ), times, attributes );
 }
 
 Renderer::ObjectInterfacePtr CapturingRenderer::light( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes )
@@ -101,12 +125,21 @@ Renderer::ObjectInterfacePtr CapturingRenderer::lightFilter( const std::string &
 
 Renderer::ObjectInterfacePtr CapturingRenderer::object( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes )
 {
-	return this->object( name, { object }, { 0.0f }, attributes );
+	return this->object( name, { object }, {}, attributes );
 }
 
 Renderer::ObjectInterfacePtr CapturingRenderer::object( const std::string &name, const std::vector<const IECore::Object *> &samples, const std::vector<float> &times, const AttributesInterface *attributes )
 {
+	IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 	checkPaused();
+
+	// To facilitate the testing of code that handles the return from the various object methods of
+	// a renderer, we return null if the `cr:unrenderable` attribute is set to true.
+	if( static_cast<const CapturedAttributes *>( attributes )->unrenderableAttributeValue() )
+	{
+		return nullptr;
+	}
 
 	ObjectMap::accessor a;
 	if( !m_capturedObjects.insert( a, name ) )
@@ -120,12 +153,22 @@ Renderer::ObjectInterfacePtr CapturingRenderer::object( const std::string &name,
 	CapturedObjectPtr result = new CapturedObject( this, name, samples, times );
 	result->attributes( attributes );
 	a->second = result.get();
+	if( m_renderType != Interactive )
+	{
+		// For non-interactive renders, the client code will typically drop
+		// their reference to the object immediately, but we still want to
+		// capture it for later examination. Add a reference to keep it alive.
+		// See ~CapturingRenderer for the associated `removeRef()`.
+		a->second->addRef();
+	}
 
 	return result;
 }
 
 void CapturingRenderer::render()
 {
+	IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 	if( m_rendering )
 	{
 		IECore::msg( IECore::Msg::Warning, "CapturingRenderer::render", "Already rendering" );
@@ -135,6 +178,8 @@ void CapturingRenderer::render()
 
 void CapturingRenderer::pause()
 {
+	IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 	if( m_rendering )
 	{
 		IECore::msg( IECore::Msg::Warning, "CapturingRenderer::pause", "Not rendering" );
@@ -155,7 +200,7 @@ void CapturingRenderer::checkPaused() const
 //////////////////////////////////////////////////////////////////////////
 
 CapturingRenderer::CapturedAttributes::CapturedAttributes( const IECore::ConstCompoundObjectPtr &attributes )
-	:	m_attributes( attributes )
+	:	m_attributes( attributes->copy() )
 {
 }
 
@@ -164,18 +209,35 @@ const IECore::CompoundObject *CapturingRenderer::CapturedAttributes::attributes(
 	return m_attributes.get();
 }
 
+int CapturingRenderer::CapturedAttributes::uneditableAttributeValue() const
+{
+	auto *data = m_attributes->member<IntData>( "cr:uneditable" );
+	return data ? data->readable() : 0;
+}
+
+bool CapturingRenderer::CapturedAttributes::unrenderableAttributeValue() const
+{
+	auto *data = m_attributes->member<BoolData>( "cr:unrenderable" );
+	return data && data->readable();
+}
+
 //////////////////////////////////////////////////////////////////////////
 // CapturedObject
 //////////////////////////////////////////////////////////////////////////
 
 CapturingRenderer::CapturedObject::CapturedObject( CapturingRenderer *renderer, const std::string &name, const std::vector<const IECore::Object *> &samples, const std::vector<float> &times )
-	:	m_renderer( renderer ), m_name( name ), m_capturedSamples( samples.begin(), samples.end() ), m_capturedSampleTimes( times ), m_numAttributeEdits( 0 )
+	:	m_renderer( renderer ), m_name( name ), m_capturedSamples( samples.begin(), samples.end() ), m_capturedSampleTimes( times ), m_numAttributeEdits( 0 ), m_id( 0 )
 {
 }
 
 CapturingRenderer::CapturedObject::~CapturedObject()
 {
-	m_renderer->m_capturedObjects.erase( m_name );
+	if( m_renderer && m_renderer->m_renderType == RenderType::Interactive )
+	{
+		// If the client of an interactive render drops ownership, that means
+		// they want the object to be deleted from the renderer.
+		m_renderer->m_capturedObjects.erase( m_name );
+	}
 }
 
 const std::vector<IECore::ConstObjectPtr> &CapturingRenderer::CapturedObject::capturedSamples() const
@@ -186,6 +248,16 @@ const std::vector<IECore::ConstObjectPtr> &CapturingRenderer::CapturedObject::ca
 const std::vector<float> &CapturingRenderer::CapturedObject::capturedSampleTimes() const
 {
 	return m_capturedSampleTimes;
+}
+
+const std::vector<Imath::M44f> &CapturingRenderer::CapturedObject::capturedTransforms() const
+{
+	return m_capturedTransforms;
+}
+
+const std::vector<float> &CapturingRenderer::CapturedObject::capturedTransformTimes() const
+{
+	return m_capturedTransformTimes;
 }
 
 const CapturingRenderer::CapturedAttributes *CapturingRenderer::CapturedObject::capturedAttributes() const
@@ -219,22 +291,42 @@ int CapturingRenderer::CapturedObject::numLinkEdits( const IECore::InternedStrin
 	return it->second.second;
 }
 
+uint32_t CapturingRenderer::CapturedObject::id() const
+{
+	return m_id;
+}
+
 void CapturingRenderer::CapturedObject::transform( const Imath::M44f &transform )
 {
 	m_renderer->checkPaused();
-	/// \todo Implement
+	m_capturedTransforms.clear();
+	m_capturedTransforms.push_back( transform );
+	m_capturedTransformTimes.clear();
 }
 
 void CapturingRenderer::CapturedObject::transform( const std::vector<Imath::M44f> &samples, const std::vector<float> &times )
 {
 	m_renderer->checkPaused();
-	/// \todo Implement
+	m_capturedTransforms = samples;
+	m_capturedTransformTimes = times;
 }
 
 bool CapturingRenderer::CapturedObject::attributes( const AttributesInterface *attributes )
 {
 	m_renderer->checkPaused();
-	m_capturedAttributes = static_cast<const CapturedAttributes *>( attributes );
+
+	auto capturedAttributes = static_cast<const CapturedAttributes *>( attributes );
+	if( capturedAttributes->unrenderableAttributeValue() )
+	{
+		return false;
+	}
+
+	if( m_capturedAttributes && m_capturedAttributes->uneditableAttributeValue() != capturedAttributes->uneditableAttributeValue() )
+	{
+		return false;
+	}
+
+	m_capturedAttributes = capturedAttributes;
 	m_numAttributeEdits++;
 	return true;
 }
@@ -245,4 +337,10 @@ void CapturingRenderer::CapturedObject::link( const IECore::InternedString &type
 	auto &p = m_capturedLinks[type];
 	p.first = objects;
 	p.second++;
+}
+
+void CapturingRenderer::CapturedObject::assignID( uint32_t id )
+{
+	m_renderer->checkPaused();
+	m_id = id;
 }

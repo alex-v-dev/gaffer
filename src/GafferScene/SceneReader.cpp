@@ -46,18 +46,19 @@
 #include "IECore/InternedString.h"
 #include "IECore/StringAlgo.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace IECoreScene;
 using namespace Gaffer;
 using namespace GafferScene;
 
-typedef boost::tokenizer<boost::char_separator<char> > Tokenizer;
+using Tokenizer = boost::tokenizer<boost::char_separator<char> >;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( SceneReader );
+GAFFER_NODE_DEFINE_TYPE( SceneReader );
 
 //////////////////////////////////////////////////////////////////////////
 // SceneReader implementation
@@ -65,7 +66,31 @@ GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( SceneReader );
 
 size_t SceneReader::g_firstPlugIndex = 0;
 
-static IECore::BoolDataPtr g_trueBoolData = new IECore::BoolData( true );
+namespace
+{
+
+IECore::ConstBoolDataPtr g_trueBoolData = new IECore::BoolData( true );
+const InternedString g_lights( "__lights" );
+const InternedString g_defaultLights( "defaultLights" );
+
+bool shouldEmulateDefaultLightsSet( const IECoreScene::SceneInterface *scene, const vector<InternedString> &setNames )
+{
+	// When loading a USD file that wasn't authored by Gaffer, there will be no `defaultLights`
+	// set, because USD uses a different mechanism for light linking. In this case, we want to
+	// put all the lights in the `defaultLights` set because having everything linked is typically
+	// better than having nothing linked. We do that by loading the `__lights` set in its place.
+	//
+	// When a `defaultLights` set has been authored explicitly, presumably because the file was
+	// written from Gaffer, we prefer that to any automatic behaviour. This allows us to round-trip
+	// light linking within Gaffer itself.
+	return
+		!strcmp( scene->typeName(), "USDScene" ) &&
+		std::find( setNames.begin(), setNames.end(), g_defaultLights ) == setNames.end() &&
+		std::find( setNames.begin(), setNames.end(), g_lights ) != setNames.end()
+	;
+}
+
+} // namespace
 
 SceneReader::SceneReader( const std::string &name )
 	:	SceneNode( name )
@@ -75,6 +100,8 @@ SceneReader::SceneReader( const std::string &name )
 	addChild( new IntPlug( "refreshCount" ) );
 	addChild( new StringPlug( "tags" ) );
 	addChild( new TransformPlug( "transform" ) );
+
+	outPlug()->childBoundsPlug()->setFlags( Plug::AcceptsDependencyCycles, true );
 	plugSetSignal().connect( boost::bind( &SceneReader::plugSet, this, ::_1 ) );
 }
 
@@ -126,26 +153,33 @@ void SceneReader::affects( const Gaffer::Plug *input, AffectedPlugsContainer &ou
 {
 	SceneNode::affects( input, outputs );
 
-	if( input == fileNamePlug() || input == refreshCountPlug() )
+	const bool affectsScene = input == fileNamePlug() || input == refreshCountPlug();
+
+	if(
+		affectsScene ||
+		input == outPlug()->childBoundsPlug() ||
+		transformPlug()->isAncestorOf( input )
+	)
 	{
 		outputs.push_back( outPlug()->boundPlug() );
+	}
+
+	if( affectsScene || transformPlug()->isAncestorOf( input ) )
+	{
 		outputs.push_back( outPlug()->transformPlug() );
+	}
+
+	if( affectsScene || input == tagsPlug() )
+	{
+		outputs.push_back( outPlug()->childNamesPlug() );
+	}
+
+	if( affectsScene )
+	{
 		outputs.push_back( outPlug()->attributesPlug() );
 		outputs.push_back( outPlug()->objectPlug() );
-		outputs.push_back( outPlug()->childNamesPlug() );
-		// deliberately not adding globalsPlug(), since we don't
-		// load those from file.
 		outputs.push_back( outPlug()->setNamesPlug() );
 		outputs.push_back( outPlug()->setPlug() );
-	}
-	else if( input == tagsPlug() )
-	{
-		outputs.push_back( outPlug()->childNamesPlug() );
-	}
-	else if( transformPlug()->isAncestorOf( input ) )
-	{
-		outputs.push_back( outPlug()->transformPlug() );
-		outputs.push_back( outPlug()->boundPlug() );
 	}
 }
 
@@ -173,6 +207,9 @@ void SceneReader::hashBound( const ScenePath &path, const Gaffer::Context *conte
 	}
 	else
 	{
+		// Deliberately not using `childBoundsPlug()->hash()`
+		// here because `fileName/path` uniquely identifies the
+		// result, and is quicker to compute.
 		fileNamePlug()->hash( h );
 		h.append( &path.front(), path.size() );
 	}
@@ -203,7 +240,7 @@ Imath::Box3f SceneReader::computeBound( const ScenePath &path, const Gaffer::Con
 	}
 	else
 	{
-		result = unionOfTransformedChildBounds( path, parent );
+		result = parent->childBoundsPlug()->getValue();
 	}
 
 	if( path.size() == 0 && !result.isEmpty() )
@@ -297,9 +334,21 @@ IECore::ConstCompoundObjectPtr SceneReader::computeAttributes( const ScenePath &
 			continue;
 		}
 
-		// the const cast is ok, because we're only using it to put the object into a CompoundObject that will
-		// be treated as forever const after being returned from this function.
-		result->members()[ std::string( *it ) ] = boost::const_pointer_cast<Object>( s->readAttribute( *it, context->getTime() ) );
+		ConstObjectPtr attribute = s->readAttribute( *it, context->getTime() );
+		if( attribute )
+		{
+			// The const cast is ok, because we're only using it to put the object into a CompoundObject that will
+			// be treated as forever const after being returned from this function.
+			result->members()[ std::string( *it ) ] = boost::const_pointer_cast<Object>( attribute );
+		}
+		else
+		{
+			IECore::msg(
+				IECore::Msg::Warning, "SceneReader::computeAttributes",
+				boost::format( "Failed to load attribute \"%1%\" at location \"%2%\"" )
+					% *it % ScenePlug::pathToString( path )
+			);
+		}
 	}
 
 	return result;
@@ -330,7 +379,7 @@ IECore::ConstObjectPtr SceneReader::computeObject( const ScenePath &path, const 
 		return parent->objectPlug()->defaultValue();
 	}
 
-	return s->readObject( context->getTime() );
+	return s->readObject( context->getTime(), context->canceller() );
 }
 
 void SceneReader::hashChildNames( const ScenePath &path, const Gaffer::Context *context, const ScenePlug *parent, IECore::MurmurHash &h ) const
@@ -432,7 +481,13 @@ IECore::ConstInternedStringVectorDataPtr SceneReader::computeSetNames( const Gaf
 	}
 
 	InternedStringVectorDataPtr result = new InternedStringVectorData();
+
 	s->readTags( result->writable(), SceneInterface::LocalTag | SceneInterface::DescendantTag );
+
+	if( shouldEmulateDefaultLightsSet( s.get(), result->readable() ) )
+	{
+		result->writable().push_back( g_defaultLights );
+	}
 
 	return result;
 }
@@ -445,7 +500,7 @@ void SceneReader::hashSet( const IECore::InternedString &setName, const Gaffer::
 	h.append( setName );
 }
 
-static void loadSetWalk( const SceneInterface *s, const InternedString &setName, PathMatcher &set, const vector<InternedString> &path )
+static void loadSetWalk( const SceneInterface *s, const InternedString &setName, const Gaffer::Context *context, PathMatcher &set, const vector<InternedString> &path )
 {
 	if( s->hasTag( setName, SceneInterface::LocalTag ) )
 	{
@@ -468,20 +523,36 @@ static void loadSetWalk( const SceneInterface *s, const InternedString &setName,
 	childPath.push_back( InternedString() ); // room for the child name
 	for( SceneInterface::NameList::const_iterator it = childNames.begin(), eIt = childNames.end(); it != eIt; ++it )
 	{
+		Canceller::check( context->canceller() );
+
 		ConstSceneInterfacePtr child = s->child( *it );
 		childPath.back() = *it;
-		loadSetWalk( child.get(), setName, set, childPath );
+		loadSetWalk( child.get(), setName, context, set, childPath );
 	}
 }
 
 IECore::ConstPathMatcherDataPtr SceneReader::computeSet( const IECore::InternedString &setName, const Gaffer::Context *context, const ScenePlug *parent ) const
 {
-	PathMatcherDataPtr result = new PathMatcherData;
 	ConstSceneInterfacePtr rootScene = scene( ScenePath() );
-	if( rootScene )
+	if( !rootScene )
 	{
-		loadSetWalk( rootScene.get(), setName, result->writable(), ScenePath() );
+		return outPlug()->setPlug()->defaultValue();
 	}
+
+	InternedString setNameToRead = setName;
+	if( setName == g_defaultLights )
+	{
+		vector<InternedString> setNames;
+		rootScene->readTags( setNames, SceneInterface::LocalTag | SceneInterface::DescendantTag );
+		if( shouldEmulateDefaultLightsSet( rootScene.get(), setNames ) )
+		{
+			setNameToRead = g_lights;
+		}
+	}
+
+	PathMatcherDataPtr result = new PathMatcherData;
+	loadSetWalk( rootScene.get(), setNameToRead, context, result->writable(), ScenePath() );
+
 	return result;
 }
 

@@ -53,9 +53,9 @@ using namespace GafferImage;
 
 namespace
 {
-	static IECore::InternedString g_tileInputBoundName( "tileInputBound"  );
-	static IECore::InternedString g_pixelInputPositionsName( "pixelInputPositions"  );
-	static IECore::InternedString g_pixelInputDerivativesName( "pixelInputDerivatives"  );
+	IECore::InternedString g_tileInputBoundName( "tileInputBound"  );
+	IECore::InternedString g_pixelInputPositionsName( "pixelInputPositions"  );
+	IECore::InternedString g_pixelInputDerivativesName( "pixelInputDerivatives"  );
 
 	const CompoundObject *sampleRegionsEmptyTile()
 	{
@@ -67,7 +67,7 @@ namespace
 	{
 		if( BufferAlgo::intersects( dataWindow, Box2i( tileOrigin, tileOrigin + V2i( ImagePlug::tileSize() ) ) ) )
 		{
-			tileScope.setTileOrigin( tileOrigin );
+			tileScope.setTileOrigin( &tileOrigin );
 			plug->hash( h );
 		}
 	}
@@ -76,7 +76,7 @@ namespace
 	{
 		if( BufferAlgo::intersects( dataWindow, Box2i( tileOrigin, tileOrigin + V2i( ImagePlug::tileSize() ) ) ) )
 		{
-			tileScope.setTileOrigin( tileOrigin );
+			tileScope.setTileOrigin( &tileOrigin );
 			return plug->getValue();
 		}
 		else
@@ -179,7 +179,7 @@ class Warp::EngineData : public Data
 // Warp
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Warp );
+GAFFER_NODE_DEFINE_TYPE( Warp );
 
 size_t Warp::g_firstPlugIndex = 0;
 
@@ -196,6 +196,7 @@ Warp::Warp( const std::string &name )
 	addChild( new CompoundObjectPlug( "__sampleRegions", Plug::Out, new CompoundObject, Plug::Default ) );
 
 	// Pass through the things we don't change at all.
+	outPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 	outPlug()->formatPlug()->setInput( inPlug()->formatPlug() );
 	outPlug()->metadataPlug()->setInput( inPlug()->metadataPlug() );
 	outPlug()->channelNamesPlug()->setInput( inPlug()->channelNamesPlug() );
@@ -704,4 +705,3 @@ void Warp::hashEngine( const Imath::V2i &tileOrigin, const Gaffer::Context *cont
 {
 	FlatImageProcessor::hash( enginePlug(), context, h );
 }
-

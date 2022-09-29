@@ -37,7 +37,8 @@
 
 #include "Gaffer/SplinePlug.h"
 
-#include "boost/bind.hpp"
+#include "Gaffer/Action.h"
+#include "Gaffer/ComputeNode.h"
 
 using namespace Gaffer;
 
@@ -207,6 +208,10 @@ T SplineDefinition<T>::spline() const
 			monotoneCubicCVsToBezierCurve<T>( points, result.points );
 		}
 	}
+	else if( interpolation == SplineDefinitionInterpolationConstant )
+	{
+		result.basis = T::Basis::constant();
+	}
 
 	int multiplicity = endPointMultiplicity();
 
@@ -293,9 +298,9 @@ SplinePlug<T>::SplinePlug( const std::string &name, Direction direction, const V
 	:	ValuePlug( name, direction, flags ), m_defaultValue( defaultValue )
 {
 	addChild( new IntPlug( "interpolation", direction, SplineDefinitionInterpolationCatmullRom,
-		SplineDefinitionInterpolationLinear, SplineDefinitionInterpolationMonotoneCubic ) );
+		SplineDefinitionInterpolationLinear, SplineDefinitionInterpolationConstant ) );
 
-	setValue( defaultValue );
+	setToDefault();
 }
 
 template<typename T>
@@ -345,6 +350,12 @@ template<typename T>
 PlugPtr SplinePlug<T>::createCounterpart( const std::string &name, Direction direction ) const
 {
 	Ptr result = new SplinePlug<T>( name, direction, m_defaultValue, getFlags() );
+	result->clearPoints();
+	for( unsigned i = 0; i < numPoints(); ++i )
+	{
+		const ValuePlug *p = pointPlug( i );
+		result->addChild( p->createCounterpart( p->getName(), direction ) );
+	}
 	return result;
 }
 
@@ -358,12 +369,62 @@ template<typename T>
 void SplinePlug<T>::setToDefault()
 {
 	setValue( m_defaultValue );
+	for( const auto &p : ValuePlug::Range( *this ) )
+	{
+		p->resetDefault();
+	}
+}
+
+template<typename T>
+void SplinePlug<T>::resetDefault()
+{
+	ValuePlug::resetDefault();
+
+	const T newDefault = getValue();
+	const T oldDefault = m_defaultValue;
+	Action::enact(
+		this,
+		[this, newDefault] () {
+			this->m_defaultValue = newDefault;
+		},
+		[this, oldDefault] () {
+			this->m_defaultValue = oldDefault;
+		}
+	);
 }
 
 template<typename T>
 bool SplinePlug<T>::isSetToDefault() const
 {
+	for( const auto &p : Plug::RecursiveRange( *this ) )
+	{
+		if( p->children().empty() )
+		{
+			const Plug *s = p->source();
+			if( s->direction() == Plug::Out && IECore::runTimeCast<const ComputeNode>( s->node() ) )
+			{
+				// Value is computed, and therefore can vary by context. There is no
+				// single "current value", so no true concept of whether or not it's at
+				// the default.
+				return false;
+			}
+		}
+	}
 	return getValue() == m_defaultValue;
+}
+
+template<typename T>
+IECore::MurmurHash SplinePlug<T>::defaultHash() const
+{
+	IECore::MurmurHash result;
+	result.append( typeId() );
+	result.append( m_defaultValue.interpolation );
+	for( auto &p : m_defaultValue.points )
+	{
+		result.append( p.first );
+		result.append( p.second );
+	}
+	return result;
 }
 
 template<typename T>

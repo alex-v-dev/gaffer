@@ -90,14 +90,6 @@ class GAFFER_API CompoundDataPlug : public Gaffer::ValuePlug
 
 IE_CORE_DECLAREPTR( CompoundDataPlug );
 
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, CompoundDataPlug> > CompoundDataPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, CompoundDataPlug> > InputCompoundDataPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, CompoundDataPlug> > OutputCompoundDataPlugIterator;
-
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, CompoundDataPlug>, PlugPredicate<> > RecursiveCompoundDataPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, CompoundDataPlug>, PlugPredicate<> > RecursiveInputCompoundDataPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, CompoundDataPlug>, PlugPredicate<> > RecursiveOutputCompoundDataPlugIterator;
-
 } // namespace Gaffer
 
 #endif // GAFFER_COMPOUNDDATAPLUG_H

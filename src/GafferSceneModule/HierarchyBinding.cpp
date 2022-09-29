@@ -48,10 +48,14 @@
 #include "GafferScene/MergeScenes.h"
 #include "GafferScene/Parent.h"
 #include "GafferScene/Prune.h"
+#include "GafferScene/Rename.h"
 #include "GafferScene/Seeds.h"
 #include "GafferScene/SubTree.h"
+#include "GafferScene/Unencapsulate.h"
+#include "GafferScene/MotionPath.h"
 
 #include "GafferBindings/DependencyNodeBinding.h"
+#include "GafferBindings/PlugBinding.h"
 
 using namespace boost::python;
 using namespace IECorePython;
@@ -112,6 +116,8 @@ void GafferSceneModule::bindHierarchy()
 	GafferBindings::DependencyNodeClass<CollectScenes>();
 	GafferBindings::DependencyNodeClass<Seeds>();
 	GafferBindings::DependencyNodeClass<Encapsulate>();
+	GafferBindings::DependencyNodeClass<Unencapsulate>();
+	GafferBindings::DependencyNodeClass<Rename>();
 
 	{
 		scope s = GafferBindings::DependencyNodeClass<MergeScenes>();
@@ -129,6 +135,33 @@ void GafferSceneModule::bindHierarchy()
 			.value( "IndexedRootsVariable", Instancer::PrototypeMode::IndexedRootsVariable )
 			.value( "RootPerVertex", Instancer::PrototypeMode::RootPerVertex )
 		;
+
+		GafferBindings::PlugClass<Instancer::ContextVariablePlug>()
+			.def( init<const char *, Plug::Direction, bool, unsigned>(
+					(
+						boost::python::arg_( "name" )=GraphComponent::defaultName<Instancer::ContextVariablePlug>(),
+						boost::python::arg_( "direction" )=Plug::In,
+						boost::python::arg_( "defaultEnable" )=true,
+						boost::python::arg_( "flags" )=Plug::Default
+					)
+				)
+			)
+			.attr( "__qualname__" ) = "Instancer.ContextVariablePlug"
+		;
+
 	}
 
+	{
+		scope s = GafferBindings::DependencyNodeClass<MotionPath>();
+
+		enum_<MotionPath::FrameMode>( "FrameMode" )
+			.value( "Relative", MotionPath::FrameMode::Relative )
+			.value( "Absolute", MotionPath::FrameMode::Absolute )
+			;
+
+		enum_<MotionPath::SamplingMode>( "SamplingMode" )
+			.value( "Variable", MotionPath::SamplingMode::Variable )
+			.value( "Fixed", MotionPath::SamplingMode::Fixed )
+			;
+	}
 }

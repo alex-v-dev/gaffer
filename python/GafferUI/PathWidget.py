@@ -75,7 +75,10 @@ class PathWidget( GafferUI.TextWidget ) :
 	def setPath( self, path ) :
 
 		self.__path = path
-		self.__pathChangedConnection = self.__path.pathChangedSignal().connect( Gaffer.WeakMethod( self.__pathChanged, fallbackResult = None ) )
+		self.__pathChangedConnection = self.__path.pathChangedSignal().connect(
+			Gaffer.WeakMethod( self.__pathChanged, fallbackResult = None ),
+			scoped = True
+		)
 		self.setText( str( self.__path ) )
 
 	def getPath( self ) :
@@ -119,8 +122,8 @@ class PathWidget( GafferUI.TextWidget ) :
 		elif event.key == "Down" :
 
 			if event.modifiers & GafferUI.ModifiableEvent.Modifiers.Shift :
-				 # select all!
-				 self.setSelection( None, None )
+				# select all!
+				self.setSelection( None, None )
 			else :
 				text = self.getText()
 				position = self.getCursorPosition()
@@ -233,7 +236,7 @@ class PathWidget( GafferUI.TextWidget ) :
 	def __textChanged( self, widget ) :
 
 		text = self.getText()
-		with Gaffer.BlockedConnection( self.__pathChangedConnection ) :
+		with Gaffer.Signals.BlockedConnection( self.__pathChangedConnection ) :
 			try :
 				self.__path.setFromString( self.getText() )
 			except :

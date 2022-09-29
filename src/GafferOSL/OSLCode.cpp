@@ -48,12 +48,13 @@
 
 #include "OSL/oslcomp.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/filesystem.hpp"
 
 #include <fstream>
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace IECore;
 using namespace OSL;
 using namespace Gaffer;
@@ -129,14 +130,14 @@ string generate( const OSLCode *shader, string &shaderName )
 
 	string result;
 
-	for( PlugIterator it( shader->parametersPlug() ); !it.done(); ++it )
+	for( Plug::Iterator it( shader->parametersPlug() ); !it.done(); ++it )
 	{
 		result += parameter( it->get() );
 	}
 
 	result += "\n";
 
-	for( PlugIterator it( shader->outPlug() ); !it.done(); ++it )
+	for( Plug::Iterator it( shader->outPlug() ); !it.done(); ++it )
 	{
 		result += parameter( it->get() );
 	}
@@ -306,9 +307,25 @@ boost::filesystem::path compile( const std::string &shaderName, const std::strin
 		}
 	}
 
+	if( !boost::filesystem::file_size( tempOSLFileName ) )
+	{
+		// Belt and braces. `compiler.compile()` should be reporting all errors,
+		// but on rare occasions we have still seen empty `.oso` files being
+		// produced. Detect this and warn so we can get to the bottom of it.
+		throw IECore::Exception( "Empty file after compilation : \"" + tempOSLFileName + "\"" );
+	}
+
 	// Move temp file where we really want it, and clean up.
 
 	boost::filesystem::rename( tempOSOFileName, osoFileName );
+
+	if( !boost::filesystem::file_size( osoFileName ) )
+	{
+		// Belt and braces. `rename()` should be reporting all errors,
+		// but on rare occasions we have still seen empty `.oso` files being
+		// produced. Detect this and warn so we can get to the bottom of it.
+		throw IECore::Exception( "Empty file after rename : \"" + osoFileName.string() + "\"" );
+	}
 
 	return osoFileName;
 }
@@ -347,7 +364,7 @@ InternedString CompileProcess::g_type( "oslCode:compile" );
 // OSLCode
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( OSLCode );
+GAFFER_NODE_DEFINE_TYPE( OSLCode );
 
 size_t OSLCode::g_firstPlugIndex;
 
@@ -362,7 +379,7 @@ OSLCode::OSLCode( const std::string &name )
 	/// \todo Rejig the NetworkGenerator so there is a hook for us to do our
 	/// code generation on demand at network generation time, and allow inputs
 	/// again.
-	addChild( new StringPlug( "code", Plug::In, "", Plug::Default & ~Plug::AcceptsInputs ) );
+	addChild( new StringPlug( "code", Plug::In, "", Plug::Default & ~Plug::AcceptsInputs, IECore::StringAlgo::NoSubstitutions ) );
 
 	// Must disable serialisation on the name because the GAFFEROSL_CODE_DIRECTORY
 	// might not be the same when we come to be loaded again.
@@ -461,10 +478,12 @@ void OSLCode::parameterAdded( const Gaffer::GraphComponent *parent, Gaffer::Grap
 		// OSLShaderUI registers a dynamic metadata entry which depends on whether or
 		// not the plug has children, so we must notify the world that the value will
 		// have changed.
-		Metadata::plugValueChangedSignal()( staticTypeId(), "out", "nodule:type", outPlug() );
+		Metadata::plugValueChangedSignal( this )( outPlug(), "nodule:type", Metadata::ValueChangedReason::StaticRegistration );
 	}
 
-	child->nameChangedSignal().connect( boost::bind( &OSLCode::parameterNameChanged, this ) );
+	m_nameChangedConnections[child] = child->nameChangedSignal().connect(
+		boost::bind( &OSLCode::parameterNameChanged, this )
+	);
 	updateShader();
 }
 
@@ -475,10 +494,10 @@ void OSLCode::parameterRemoved( const Gaffer::GraphComponent *parent, Gaffer::Gr
 		// OSLShaderUI registers a dynamic metadata entry which depends on whether or
 		// not the plug has children, so we must notify the world that the value will
 		// have changed.
-		Metadata::plugValueChangedSignal()( staticTypeId(), "out", "nodule:type", outPlug() );
+		Metadata::plugValueChangedSignal( this )( outPlug(), "nodule:type", Metadata::ValueChangedReason::StaticRegistration );
 	}
 
-	child->nameChangedSignal().disconnect( boost::bind( &OSLCode::parameterNameChanged, this ) );
+	m_nameChangedConnections.erase( child );
 	updateShader();
 }
 

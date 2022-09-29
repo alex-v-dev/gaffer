@@ -58,6 +58,7 @@
 #include "IECore/ObjectInterpolator.h"
 #include "IECore/SimpleTypedData.h"
 
+#include "foundation/core/version.h"
 #include "foundation/platform/timers.h"
 #include "foundation/utility/log.h"
 #include "foundation/utility/searchpaths.h"
@@ -91,9 +92,7 @@
 #include "boost/smart_ptr/scoped_ptr.hpp"
 #include "boost/thread.hpp"
 
-#include "tbb/atomic.h"
-#include "tbb/concurrent_unordered_map.h"
-
+#include "tbb/concurrent_hash_map.h"
 
 namespace asf = foundation;
 namespace asr = renderer;
@@ -159,6 +158,33 @@ class ScopedLogTarget
 		asf::auto_release_ptr<asf::ILogTarget> m_logTarget;
 };
 
+const std::vector<IECore::MessageHandler::Level> g_ieMsgLevels = {
+	IECore::MessageHandler::Level::Debug,
+	IECore::MessageHandler::Level::Info,
+	IECore::MessageHandler::Level::Warning,
+	IECore::MessageHandler::Level::Error,
+	IECore::MessageHandler::Level::Error
+};
+
+class CortexLogTarget : public asf::ILogTarget
+{
+
+	public :
+
+		CortexLogTarget( IECore::MessageHandler *messageHandler ) : m_messageHandler( messageHandler ) {};
+
+		void write( const asf::LogMessage::Category category, const char* file, const size_t line, const char* header, const char* message ) override
+		{
+			m_messageHandler->handle( g_ieMsgLevels[ min( int(category), 4 ) ], "Appleseed", message );
+		}
+
+		void release() override {};
+
+	private :
+
+		IECore::MessageHandlerPtr m_messageHandler;
+};
+
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
@@ -214,7 +240,7 @@ class AppleseedRendererBase : public IECoreScenePreview::Renderer
 		ShaderCachePtr m_shaderCache;
 		InstanceMasterCachePtr m_instanceMasterCache;
 
-		typedef tbb::concurrent_hash_map<IECore::MurmurHash, string> ProceduralCache;
+		using ProceduralCache = tbb::concurrent_hash_map<IECore::MurmurHash, string>;
 		ProceduralCache m_proceduralCache;
 
 		float m_shutterOpenTime;
@@ -235,8 +261,8 @@ namespace
 
 // appleseed projects are not thread-safe.
 // We need to protect project edits with locks.
-typedef boost::mutex MutexType;
-typedef boost::lock_guard<boost::mutex> LockGuardType;
+using MutexType = boost::mutex;
+using LockGuardType = boost::lock_guard<boost::mutex>;
 
 MutexType g_projectMutex;
 MutexType g_sceneMutex;
@@ -268,6 +294,12 @@ class AppleseedEntity : public IECoreScenePreview::Renderer::ObjectInterface
 
 		void link( const IECore::InternedString &type, const IECoreScenePreview::Renderer::ConstObjectSetPtr &objects ) override
 		{
+		}
+
+		void assignID( uint32_t id ) override
+		{
+			// Not implemented. We don't anticipate using Appleseed in scenarios
+			// where IDs are useful.
 		}
 
 	protected :
@@ -729,7 +761,7 @@ class ShaderCache : public RefCounted
 
 	private :
 
-		typedef tbb::concurrent_hash_map<MurmurHash, AppleseedShaderPtr> Cache;
+		using Cache = tbb::concurrent_hash_map<MurmurHash, AppleseedShaderPtr>;
 		Cache m_cache;
 		asr::Project &m_project;
 		bool m_isInteractive;
@@ -1001,7 +1033,7 @@ class InstanceMaster : public IECore::RefCounted
 
 		const string m_name;
 		asr::Assembly *m_mainAssembly;
-		tbb::atomic<int> m_numInstances;
+		std::atomic_int m_numInstances;
 
 };
 
@@ -1086,7 +1118,7 @@ class InstanceMasterCache : public IECore::RefCounted
 
 	private :
 
-		typedef tbb::concurrent_hash_map<IECore::MurmurHash, InstanceMasterPtr> Cache;
+		using Cache = tbb::concurrent_hash_map<IECore::MurmurHash, InstanceMasterPtr>;
 		Cache m_cache;
 };
 
@@ -2400,6 +2432,12 @@ InternedString g_overrideShadingMode( "as:cfg:shading_engine:override_shading:mo
 InternedString g_searchPath( "as:searchpath" );
 InternedString g_maxInteractiveRenderSamples( "as:cfg:progressive_frame_renderer:max_samples" );
 InternedString g_textureCacheSize( "as:cfg:texture_store:max_size" );
+// Appleseed 2.1 wants to be given a set of resource search paths, that
+// are distinct from the project searchpaths. At the time of writing it
+// only uses them to find `stdosl.h` for compiling shaders from source
+// on the fly. This isn't a feature we use, so we just use an empty
+// searchpath.
+foundation::SearchPaths g_resourceSearchPaths;
 
 /// The full renderer implementation as presented to the outside world.
 class AppleseedRenderer final : public AppleseedRendererBase
@@ -2407,10 +2445,11 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 	public :
 
-		AppleseedRenderer( RenderType renderType, const string &fileName )
+		AppleseedRenderer( RenderType renderType, const string &fileName, const IECore::MessageHandlerPtr &messageHandler )
 			:	AppleseedRendererBase( renderType , fileName, 0.0f, 0.0f )
 			,	m_environmentEDFVisible( false )
 			,	m_maxInteractiveRenderSamples( 0 )
+			,	m_messageHandler( messageHandler )
 		{
 			// Create the renderer controller.
 			m_rendererController = new RendererController();
@@ -2424,6 +2463,8 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		void option( const InternedString &name, const Object *value ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			if( name == g_cameraOptionName )
 			{
 				if( value == nullptr )
@@ -2640,7 +2681,7 @@ class AppleseedRenderer final : public AppleseedRendererBase
 						}
 					}
 					return;
-				 }
+				}
 
 				// general case.
 				const IECore::Data *dataValue = IECore::runTimeCast<const IECore::Data>( value );
@@ -2799,6 +2840,8 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		void output( const InternedString &name, const Output *output ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			if( output == nullptr )
 			{
 				// Reset display / image output related params and recreate the frame.
@@ -2846,7 +2889,7 @@ class AppleseedRenderer final : public AppleseedRendererBase
 				}
 				else
 				{
-					msg( Msg::Warning, "AppleseedRenderer::output", boost::format( "Unknown AOV \"%s\"." ) % aov->get_name() );
+					msg( Msg::Warning, "AppleseedRenderer::output", boost::format( "Unknown AOV \"%s\"." ) % output->getData() );
 					return;
 				}
 			}
@@ -2892,6 +2935,8 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		ObjectInterfacePtr camera( const string &name, const Camera *camera, const AttributesInterface *attributes ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			// Check if this is the active camera.
 			if( name == m_cameraName )
 			{
@@ -2908,6 +2953,8 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		ObjectInterfacePtr light( const string &name, const Object *object, const AttributesInterface *attributes ) override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			// For now we only do area lights using OSL emission().
 			if( object == nullptr )
 			{
@@ -2941,6 +2988,8 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		void render() override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			// Clear unused shaders.
 			m_shaderCache->clearUnused();
 
@@ -3009,6 +3058,8 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		void pause() override
 		{
+			IECore::MessageHandler::Scope s( m_messageHandler.get() );
+
 			m_rendererController->set_status( asr::IRendererController::AbortRendering );
 
 			if( m_renderThread.joinable() )
@@ -3025,7 +3076,13 @@ class AppleseedRenderer final : public AppleseedRendererBase
 			m_rendererController->set_status( asr::IRendererController::ContinueRendering );
 
 			// Logging.
-			ScopedLogTarget logTarget;
+			ScopedLogTarget cortexLogTarget;
+			if( m_messageHandler )
+			{
+				asf::auto_release_ptr<asf::ILogTarget> l( new CortexLogTarget( m_messageHandler.get() ) );
+				cortexLogTarget.setLogTarget( asf::auto_release_ptr<asf::ILogTarget>( l.release() ) );
+			}
+			ScopedLogTarget fileLogTarget;
 			if( !m_logFileName.empty() )
 			{
 				// Create the file log target and make sure it's open.
@@ -3038,7 +3095,7 @@ class AppleseedRenderer final : public AppleseedRendererBase
 					return;
 				}
 
-				logTarget.setLogTarget( asf::auto_release_ptr<asf::ILogTarget>( l.release() ) );
+				fileLogTarget.setLogTarget( asf::auto_release_ptr<asf::ILogTarget>( l.release() ) );
 			}
 
 			// Render progress logging.
@@ -3056,7 +3113,11 @@ class AppleseedRenderer final : public AppleseedRendererBase
 			// Create the master renderer.
 			asr::Configuration *cfg = m_project->configurations().get_by_name( "final" );
 			const asr::ParamArray &params = cfg->get_parameters();
+#if APPLESEED_VERSION >= 20100
+			m_renderer.reset( new asr::MasterRenderer( *m_project, params, g_resourceSearchPaths, tileCallbackFactoryPtr ) );
+#else
 			m_renderer.reset( new asr::MasterRenderer( *m_project, params, m_rendererController, tileCallbackFactoryPtr ) );
+#endif
 
 			// Render!.
 			RENDERER_LOG_INFO( "rendering frame..." );
@@ -3065,7 +3126,11 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 			try
 			{
+#if APPLESEED_VERSION >= 20100
+				m_renderer->render( *m_rendererController );
+#else
 				m_renderer->render();
+#endif
 			}
 			catch( const exception &e )
 			{
@@ -3089,13 +3154,6 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		void interactiveRender()
 		{
-			// Enable console logging.
-			ScopedLogTarget logTarget;
-			{
-				asf::auto_release_ptr<asf::ILogTarget> l( asf::create_console_log_target( stderr ) );
-				logTarget.setLogTarget( l );
-			}
-
 			// Reset the renderer controller.
 			m_rendererController->set_status( asr::IRendererController::ContinueRendering );
 
@@ -3105,7 +3163,11 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 			if( !m_renderer.get() )
 			{
+#if APPLESEED_VERSION >= 20100
+				m_renderer.reset( new asr::MasterRenderer( *m_project, params, g_resourceSearchPaths ) );
+#else
 				m_renderer.reset( new asr::MasterRenderer( *m_project, params, m_rendererController ) );
+#endif
 			}
 			else
 			{
@@ -3119,9 +3181,21 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		void interactiveRenderThreadFun()
 		{
+			ScopedLogTarget logTarget;
+			{
+				asf::auto_release_ptr<asf::ILogTarget> l(
+					m_messageHandler ? new CortexLogTarget( m_messageHandler.get() ) : asf::create_console_log_target( stderr )
+				);
+				logTarget.setLogTarget( l );
+			}
+
 			try
 			{
+#if APPLESEED_VERSION >= 20100
+				m_renderer->render( *m_rendererController );
+#else
 				m_renderer->render();
+#endif
 			}
 			catch( const exception &e )
 			{
@@ -3206,6 +3280,7 @@ class AppleseedRenderer final : public AppleseedRendererBase
 
 		int m_maxInteractiveRenderSamples;
 		boost::thread m_renderThread;
+		IECore::MessageHandlerPtr m_messageHandler;
 
 		// Registration with factory
 

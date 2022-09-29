@@ -44,15 +44,16 @@
 
 #include "Gaffer/Dot.h"
 #include "Gaffer/MetadataAlgo.h"
+#include "Gaffer/Process.h"
 #include "Gaffer/ScriptNode.h"
 #include "Gaffer/StringPlug.h"
 #include "Gaffer/UndoScope.h"
 
 #include "IECoreGL/GL.h"
-#include "IECoreGL/Selector.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace Gaffer;
@@ -88,28 +89,31 @@ DotNodeGadget::~DotNodeGadget()
 {
 }
 
-void DotNodeGadget::doRenderLayer( Layer layer, const Style *style ) const
+Box3f DotNodeGadget::bound() const
 {
+	// Take base class bound, but make it square, since we always render as a perfect circle
+	Box3f b = StandardNodeGadget::bound();
+	const V3f s = b.size();
+	V3f c = b.center();
+	const float radius = std::min( s.x, s.y ) / 2.0f;
+	V3f offset( radius, radius, 0.0f );
+	return Box3f( c - offset, c + offset );
+}
+
+void DotNodeGadget::renderLayer( Layer layer, const Style *style, RenderReason reason ) const
+{
+	StandardNodeGadget::renderLayer( layer, style, reason );
+
 	if( layer != GraphLayer::Nodes )
 	{
-		return NodeGadget::doRenderLayer( layer, style );
+		if( !m_label.empty() && !isSelectionRender( reason ) )
+		{
+			glPushMatrix();
+			IECoreGL::glTranslate( m_labelPosition );
+			style->renderText( Style::LabelText, m_label );
+			glPopMatrix();
+		}
 	}
-
-	Style::State state = getHighlighted() ? Style::HighlightedState : Style::NormalState;
-
-	const Box3f b = bound();
-	const V3f s = b.size();
-	style->renderNodeFrame( Box2f( V2f( 0 ), V2f( 0 ) ), std::min( s.x, s.y ) / 2.0f, state, userColor() );
-
-	if( !m_label.empty() && !IECoreGL::Selector::currentSelector() )
-	{
-		glPushMatrix();
-		IECoreGL::glTranslate( m_labelPosition );
-		style->renderText( Style::LabelText, m_label );
-		glPopMatrix();
-	}
-
-	NodeGadget::doRenderLayer( layer, style );
 }
 
 Gaffer::Dot *DotNodeGadget::dotNode()
@@ -164,23 +168,30 @@ void DotNodeGadget::updateLabel()
 {
 	const Dot *dot = dotNode();
 
-	const Dot::LabelType labelType = (Dot::LabelType)dot->labelTypePlug()->getValue();
-	if( labelType == Dot::None )
+	try
 	{
-		m_label.clear();
+		const Dot::LabelType labelType = (Dot::LabelType)dot->labelTypePlug()->getValue();
+		if( labelType == Dot::None )
+		{
+			m_label.clear();
+		}
+		else if( labelType == Dot::NodeName )
+		{
+			m_label = dot->getName();
+		}
+		else if( labelType == Dot::UpstreamNodeName )
+		{
+			const Node *n = upstreamNode();
+			m_label = n ? n->getName() : "";
+		}
+		else
+		{
+			m_label = dot->labelPlug()->getValue();
+		}
 	}
-	else if( labelType == Dot::NodeName )
+	catch( const Gaffer::ProcessException &e )
 	{
-		m_label = dot->getName();
-	}
-	else if( labelType == Dot::UpstreamNodeName )
-	{
-		const Node *n = upstreamNode();
-		m_label = n ? n->getName() : "";
-	}
-	else
-	{
-		m_label = dot->labelPlug()->getValue();
+		m_label = "Error";
 	}
 
 	Edge labelEdge = RightEdge;
@@ -210,7 +221,7 @@ void DotNodeGadget::updateLabel()
 		);
 	}
 
-	requestRender();
+	dirty( DirtyType::Render );
 }
 
 bool DotNodeGadget::dragEnter( const DragDropEvent &event )

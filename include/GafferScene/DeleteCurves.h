@@ -64,7 +64,10 @@ class GAFFERSCENE_API DeleteCurves : public Deformer
 		Gaffer::BoolPlug *invertPlug();
 		const Gaffer::BoolPlug *invertPlug() const;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::DeleteCurves, DeleteCurvesTypeId, Deformer );
+		Gaffer::BoolPlug *ignoreMissingVariablePlug();
+		const Gaffer::BoolPlug *ignoreMissingVariablePlug() const;
+
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::DeleteCurves, DeleteCurvesTypeId, Deformer );
 
 	protected :
 
@@ -83,4 +86,3 @@ IE_CORE_DECLAREPTR( DeleteCurves )
 } // namespace GafferScene
 
 #endif // GAFFERSCENE_DELETECURVES_H
-

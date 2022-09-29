@@ -97,7 +97,10 @@ class PathChooserWidget( GafferUI.Widget ) :
 					parenting = { "expand" : True }
 				) as splitContainer :
 
-					self.__directoryListing = GafferUI.PathListingWidget( tmpPath, allowMultipleSelection=allowMultipleSelection )
+					self.__directoryListing = GafferUI.PathListingWidget(
+						tmpPath,
+						selectionMode = GafferUI.PathListingWidget.SelectionMode.Rows if allowMultipleSelection else GafferUI.PathListingWidget.SelectionMode.Row
+					)
 					self.__directoryListing.displayModeChangedSignal().connect( Gaffer.WeakMethod( self.__displayModeChanged ), scoped = False )
 					if len( previewTypes ) :
 						self.__previewWidget = GafferUI.CompoundPathPreview( tmpPath, childTypes=previewTypes )
@@ -108,7 +111,7 @@ class PathChooserWidget( GafferUI.Widget ) :
 					splitContainer.setSizes( [ 2, 1 ] ) # give priority to the listing over the preview
 
 				# filter section
-				self.__filterFrame = GafferUI.Frame( borderWidth=4, borderStyle=GafferUI.Frame.BorderStyle.None )
+				self.__filterFrame = GafferUI.Frame( borderWidth=4, borderStyle=GafferUI.Frame.BorderStyle.None_ )
 				self.__filter = None
 
 			# path
@@ -155,9 +158,15 @@ class PathChooserWidget( GafferUI.Widget ) :
 			self.__previewWidget.setPath( self.__path )
 
 		# set up the signals we need to keep everything glued together
-		self.__pathChangedConnection = self.__path.pathChangedSignal().connect( Gaffer.WeakMethod( self.__pathChanged ) )
-		self.__dirPathChangedConnection = self.__dirPath.pathChangedSignal().connect( Gaffer.WeakMethod( self.__dirPathChanged ) )
-		self.__listingPathChangedConnection = self.__listingPath.pathChangedSignal().connect( Gaffer.WeakMethod( self.__listingPathChanged ) )
+		self.__pathChangedConnection = self.__path.pathChangedSignal().connect(
+			Gaffer.WeakMethod( self.__pathChanged ), scoped = True
+		)
+		self.__dirPathChangedConnection = self.__dirPath.pathChangedSignal().connect(
+			Gaffer.WeakMethod( self.__dirPathChanged ), scoped = True
+		)
+		self.__listingPathChangedConnection = self.__listingPath.pathChangedSignal().connect(
+			Gaffer.WeakMethod( self.__listingPathChanged ), scoped = True
+		)
 
 		self.__updateFilter()
 		self.__pathChanged( self.__path )
@@ -200,7 +209,7 @@ class PathChooserWidget( GafferUI.Widget ) :
 		if selection.isEmpty() :
 			return
 
-		with Gaffer.BlockedConnection( self.__pathChangedConnection ) :
+		with Gaffer.Signals.BlockedConnection( self.__pathChangedConnection ) :
 			self.__path.setFromString( selection.paths()[0] )
 
 	# This slot is connected to the pathSelectedSignals of the children and just forwards
@@ -230,7 +239,7 @@ class PathChooserWidget( GafferUI.Widget ) :
 		# the new filter, but with the additional removal
 		# of leaf paths. block the signal because otherwise
 		# we'd end up truncating the main path in __dirPathChanged.
-		with Gaffer.BlockedConnection( self.__dirPathChangedConnection ) :
+		with Gaffer.Signals.BlockedConnection( self.__dirPathChangedConnection ) :
 			if newFilter is not None :
 				self.__dirPath.setFilter(
 					Gaffer.CompoundPathFilter(
@@ -264,7 +273,7 @@ class PathChooserWidget( GafferUI.Widget ) :
 			if pathCopy.isLeaf() :
 				del pathCopy[-1]
 			pathCopy.truncateUntilValid()
-			with Gaffer.BlockedConnection( ( self.__dirPathChangedConnection, self.__listingPathChangedConnection ) ) :
+			with Gaffer.Signals.BlockedConnection( ( self.__dirPathChangedConnection, self.__listingPathChangedConnection ) ) :
 				self.__dirPath.setFromPath( pathCopy )
 				self.__listingPath.setFromPath( pathCopy )
 		else :
@@ -282,7 +291,7 @@ class PathChooserWidget( GafferUI.Widget ) :
 		# update the main path and the listing path
 		dirPathCopy = dirPath.copy()
 		dirPathCopy.truncateUntilValid()
-		with Gaffer.BlockedConnection( ( self.__pathChangedConnection, self.__listingPathChangedConnection ) ) :
+		with Gaffer.Signals.BlockedConnection( ( self.__pathChangedConnection, self.__listingPathChangedConnection ) ) :
 			self.__path.setFromPath( dirPathCopy )
 			self.__listingPath.setFromPath( dirPathCopy )
 
@@ -291,7 +300,7 @@ class PathChooserWidget( GafferUI.Widget ) :
 		assert( listingPath.isSame( self.__listingPath ) )
 
 		# update the directory path and the main path
-		with Gaffer.BlockedConnection( ( self.__pathChangedConnection, self.__dirPathChangedConnection ) ) :
+		with Gaffer.Signals.BlockedConnection( ( self.__pathChangedConnection, self.__dirPathChangedConnection ) ) :
 			self.__dirPath[:] = listingPath[:]
 			self.__path[:] = listingPath[:]
 

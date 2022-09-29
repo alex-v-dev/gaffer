@@ -39,6 +39,8 @@
 
 #include "GafferArnold/ParameterHandler.h"
 
+#include "GafferOSL/OSLShader.h"
+
 #include "Gaffer/CompoundNumericPlug.h"
 #include "Gaffer/NumericPlug.h"
 #include "Gaffer/StringPlug.h"
@@ -50,7 +52,7 @@
 
 #include "boost/format.hpp"
 
-#include "ai.h"
+#include "ai_metadata.h"
 
 using namespace std;
 using namespace boost;
@@ -59,8 +61,18 @@ using namespace IECore;
 using namespace GafferScene;
 using namespace GafferArnold;
 using namespace Gaffer;
+using namespace GafferOSL;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( ArnoldShader );
+namespace
+{
+
+// This is to allow Arnold Shaders to be connected to OSL Shaders
+const bool g_oslRegistration = OSLShader::registerCompatibleShader( "ai:surface" );
+const InternedString g_inputParameterName( "input" );
+
+} // namespace
+
+GAFFER_NODE_DEFINE_TYPE( ArnoldShader );
 
 ArnoldShader::ArnoldShader( const std::string &name )
 	:	GafferScene::Shader( name )
@@ -140,6 +152,9 @@ void ArnoldShader::loadShader( const std::string &shaderName, bool keepExistingV
 		case AI_NODE_COLOR_MANAGER :
 			type = "ai:color_manager";
 			break;
+		case AI_NODE_DRIVER :
+			type = "ai:imager";
+			break;
 		default :
 			type = "ai:surface";
 			break;
@@ -163,6 +178,62 @@ void ArnoldShader::loadShader( const std::string &shaderName, bool keepExistingV
 	ParameterHandler::setupPlug( "out", aiOutputType, this, Plug::Out );
 }
 
+bool ArnoldShader::acceptsInput( const Plug *plug, const Plug *inputPlug ) const
+{
+	if( !Shader::acceptsInput( plug, inputPlug ) )
+	{
+		return false;
+	}
+
+	if( !inputPlug )
+	{
+		return true;
+	}
+
+	if( !parametersPlug()->isAncestorOf( plug ) )
+	{
+		return true;
+	}
+
+	const Plug *sourcePlug = inputPlug->source();
+	auto *sourceShader = runTimeCast<const GafferScene::Shader>( sourcePlug->node() );
+	if( !sourceShader )
+	{
+		return true;
+	}
+
+	const Plug *sourceShaderOutPlug = sourceShader->outPlug();
+	if( !sourceShaderOutPlug )
+	{
+		return true;
+	}
+
+	if( sourcePlug != sourceShaderOutPlug && !sourceShaderOutPlug->isAncestorOf( sourcePlug ) )
+	{
+		return true;
+	}
+
+	// We're now looking at a connection from an output parameter into
+	// an input parameter. Check that Arnold would accept it.
+
+	if( typePlug()->getValue() == "ai:imager" )
+	{
+		// Imager connections are limited to chaining via the `input`
+		// parameter. Everything else is disallowed.
+		return
+			sourceShader != this &&
+			plug == parametersPlug()->getChild( g_inputParameterName ) &&
+			sourceShader->typePlug()->getValue() == "ai:imager"
+		;
+	}
+	else
+	{
+		/// \todo Use Arnold's `linkable` metadata.
+	}
+
+	return true;
+}
+
 //////////////////////////////////////////////////////////////////////////
 // Metadata loading code
 //////////////////////////////////////////////////////////////////////////
@@ -173,7 +244,7 @@ namespace {
 	const AtString g_shaderTypeArnoldString( "shaderType" );
 }
 
-static IECore::ConstCompoundDataPtr metadataGetter( const std::string &key, size_t &cost )
+static IECore::ConstCompoundDataPtr metadataGetter( const std::string &key, size_t &cost, const IECore::Canceller *canceller )
 {
 	IECoreArnold::UniverseBlock arnoldUniverse( /* writable = */ false );
 
@@ -209,7 +280,7 @@ static IECore::ConstCompoundDataPtr metadataGetter( const std::string &key, size
 	return metadata;
 }
 
-typedef IECorePreview::LRUCache<std::string, IECore::ConstCompoundDataPtr> MetadataCache;
+using MetadataCache = IECorePreview::LRUCache<std::string, IECore::ConstCompoundDataPtr>;
 MetadataCache g_arnoldMetadataCache( metadataGetter, 10000 );
 
 const IECore::CompoundData *ArnoldShader::metadata() const

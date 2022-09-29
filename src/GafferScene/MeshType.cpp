@@ -38,7 +38,7 @@
 
 #include "Gaffer/StringPlug.h"
 
-#include "IECoreScene/MeshNormalsOp.h"
+#include "IECoreScene/MeshAlgo.h"
 #include "IECoreScene/MeshPrimitive.h"
 
 using namespace IECore;
@@ -46,7 +46,7 @@ using namespace IECoreScene;
 using namespace Gaffer;
 using namespace GafferScene;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( MeshType );
+GAFFER_NODE_DEFINE_TYPE( MeshType );
 
 size_t MeshType::g_firstPlugIndex = 0;
 
@@ -119,7 +119,7 @@ IECore::ConstObjectPtr MeshType::computeProcessedObject( const ScenePath &path, 
 		return inputObject;
 	}
 
-    std::string meshType = meshTypePlug()->getValue();
+	std::string meshType = meshTypePlug()->getValue();
 	if( meshType == "" )
 	{
 		// unchanged
@@ -153,10 +153,7 @@ IECore::ConstObjectPtr MeshType::computeProcessedObject( const ScenePath &path, 
 
 	if( doNormals )
 	{
-		IECoreScene::MeshNormalsOpPtr normalOp = new IECoreScene::MeshNormalsOp();
-		normalOp->inputParameter()->setValue( result );
-		normalOp->copyParameter()->setTypedValue( false );
-		normalOp->operate();
+		result->variables[ "N" ] = MeshAlgo::calculateNormals( result.get(), PrimitiveVariable::Interpolation::Vertex, "P", context->canceller() );
 	}
 
 	return result;

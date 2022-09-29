@@ -58,7 +58,7 @@ class GAFFERSCENEUI_API RotateTool : public TransformTool
 		RotateTool( SceneView *view, const std::string &name = defaultName<RotateTool>() );
 		~RotateTool() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferSceneUI::RotateTool, RotateToolTypeId, TransformTool );
+		GAFFER_NODE_DECLARE_TYPE( GafferSceneUI::RotateTool, RotateToolTypeId, TransformTool );
 
 		Gaffer::IntPlug *orientationPlug();
 		const Gaffer::IntPlug *orientationPlug() const;
@@ -98,7 +98,7 @@ class GAFFERSCENEUI_API RotateTool : public TransformTool
 
 				// Initialised lazily when we first
 				// acquire the transform plug.
-				mutable boost::optional<Imath::Eulerf> m_originalRotation; // Radians
+				mutable std::optional<Imath::Eulerf> m_originalRotation; // Radians
 
 		};
 
@@ -119,7 +119,7 @@ class GAFFERSCENEUI_API RotateTool : public TransformTool
 		bool buttonPress( const GafferUI::ButtonEvent &event );
 
 		void setTargetedMode( bool targeted );
-		inline bool getTargetedMode() const { return m_targetedMode; }
+		bool getTargetedMode() const { return m_targetedMode; }
 		bool m_targetedMode;
 
 		std::vector<Rotation> m_drag;

@@ -64,7 +64,7 @@ class GAFFERIMAGE_API ImageReader : public ImageNode
 		ImageReader( const std::string &name=defaultName<ImageReader>() );
 		~ImageReader() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::ImageReader, ImageReaderTypeId, ImageNode );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::ImageReader, ImageReaderTypeId, ImageNode );
 
 		/// The MissingFrameMode controls how to handle missing images.
 		/// It is distinct from OpenImageIOReader::MissingFrameMode so
@@ -85,6 +85,16 @@ class GAFFERIMAGE_API ImageReader : public ImageNode
 			None = 0,
 			BlackOutside,
 			ClampToFrame,
+		};
+
+		/// Defines how we get channel names from the information stored in a file.
+		/// Because some software like Nuke fails to follow the spec, the Default
+		/// mode employs heuristics to try and guess the intention.
+		enum class ChannelInterpretation
+		{
+			Legacy,
+			Default,
+			Specification,
 		};
 
 		Gaffer::StringPlug *fileNamePlug();
@@ -112,6 +122,9 @@ class GAFFERIMAGE_API ImageReader : public ImageNode
 		Gaffer::StringPlug *colorSpacePlug();
 		const Gaffer::StringPlug *colorSpacePlug() const;
 
+		Gaffer::IntPlug *channelInterpretationPlug();
+		const Gaffer::IntPlug *channelInterpretationPlug() const;
+
 		void affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const override;
 
 		static size_t supportedExtensions( std::vector<std::string> &extensions );
@@ -119,7 +132,7 @@ class GAFFERIMAGE_API ImageReader : public ImageNode
 		/// A function which can take information about a file being read, and return the colorspace
 		/// of the data within the file. This is used whenever the colorSpace plug is at its default
 		/// value.
-		typedef std::function<const std::string ( const std::string &fileName, const std::string &fileFormat, const std::string &dataType, const IECore::CompoundData *metadata )> DefaultColorSpaceFunction;
+		using DefaultColorSpaceFunction = std::function<const std::string ( const std::string &fileName, const std::string &fileFormat, const std::string &dataType, const IECore::CompoundData *metadata )>;
 		static void setDefaultColorSpaceFunction( DefaultColorSpaceFunction f );
 		static DefaultColorSpaceFunction getDefaultColorSpaceFunction();
 
@@ -127,6 +140,9 @@ class GAFFERIMAGE_API ImageReader : public ImageNode
 
 		void hash( const Gaffer::ValuePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		void compute( Gaffer::ValuePlug *output, const Gaffer::Context *context ) const override;
+
+		void hashViewNames( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
+		IECore::ConstStringVectorDataPtr computeViewNames( const Gaffer::Context *context, const ImagePlug *parent ) const override;
 
 		void hashFormat( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		GafferImage::Format computeFormat( const Gaffer::Context *context, const ImagePlug *parent ) const override;

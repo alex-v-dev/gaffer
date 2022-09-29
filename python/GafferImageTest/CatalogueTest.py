@@ -64,6 +64,8 @@ class CatalogueTest( GafferImageTest.ImageTestCase ) :
 
 		return result
 
+	__catalogueIsRenderingMetadataKey = "gaffer:isRendering"
+
 	def testImages( self ) :
 
 		images = []
@@ -184,7 +186,11 @@ class CatalogueTest( GafferImageTest.ImageTestCase ) :
 
 		r = GafferImage.ImageReader()
 		r["fileName"].setValue( "${GAFFER_ROOT}/python/GafferImageTest/images/checker.exr" )
-		self.sendImage( r["out"], c )
+
+		driver = self.sendImage( r["out"], c, close = False )
+		self.assertEqual( c["out"]["metadata"].getValue()[ self.__catalogueIsRenderingMetadataKey ].value, True )
+		driver.close()
+		self.assertNotIn( self.__catalogueIsRenderingMetadataKey, c["out"]["metadata"].getValue() )
 
 		self.assertEqual( len( c["images"] ), 1 )
 		self.assertEqual( c["images"][0]["fileName"].getValue(), "" )
@@ -232,10 +238,12 @@ class CatalogueTest( GafferImageTest.ImageTestCase ) :
 		r = GafferImage.ImageReader()
 		r["fileName"].setValue( "${GAFFER_ROOT}/python/GafferImageTest/images/blurRange.exr" )
 		self.sendImage( r["out"], s["c"] )
-
 		self.assertEqual( len( s["c"]["images"] ), 1 )
 		self.assertEqual( os.path.dirname( s["c"]["images"][0]["fileName"].getValue() ), s["c"]["directory"].getValue() )
 		self.assertImagesEqual( s["c"]["out"], r["out"], ignoreMetadata = True, maxDifference = 0.0003 )
+
+		r["fileName"].setValue( s["c"]["images"][0]["fileName"].getValue() )
+		self.assertNotIn( self.__catalogueIsRenderingMetadataKey, r["out"]["metadata"].getValue() )
 
 		s2 = Gaffer.ScriptNode()
 		s2.execute( s.serialise() )
@@ -243,6 +251,9 @@ class CatalogueTest( GafferImageTest.ImageTestCase ) :
 		self.assertEqual( len( s2["c"]["images"] ), 1 )
 		self.assertEqual( s2["c"]["images"][0]["fileName"].getValue(), s["c"]["images"][0]["fileName"].getValue() )
 		self.assertImagesEqual( s2["c"]["out"], r["out"], ignoreMetadata = True, maxDifference = 0.0003 )
+
+		r["fileName"].setValue( s2["c"]["images"][0]["fileName"].getValue() )
+		self.assertNotIn( self.__catalogueIsRenderingMetadataKey, r["out"]["metadata"].getValue() )
 
 	def testCatalogueName( self ) :
 
@@ -453,7 +464,7 @@ class CatalogueTest( GafferImageTest.ImageTestCase ) :
 		# Arrange to generate the resulting image from C++
 		# threads whenever it is dirtied.
 
-		processTilesConnection = Gaffer.ScopedConnection( GafferImageTest.connectProcessTilesToPlugDirtiedSignal( s["merge"]["out"] ) )
+		processTilesConnection = Gaffer.Signals.ScopedConnection( GafferImageTest.connectProcessTilesToPlugDirtiedSignal( s["merge"]["out"] ) )
 
 		# Send an image to the catalogue to demonstrate that
 		# we do not deadlock on the GIL.
@@ -536,6 +547,9 @@ class CatalogueTest( GafferImageTest.ImageTestCase ) :
 
 		self.assertEqual( c["images"][1]["description"].getValue(), c["images"][0]["description"].getValue() )
 		self.assertEqual( c["images"][1]["fileName"].getValue(), c["images"][0]["fileName"].getValue() )
+
+		c["imageIndex"].setValue( 1 )
+		self.assertNotIn( self.__catalogueIsRenderingMetadataKey, c["out"]["metadata"].getValue() )
 
 	def testDeleteBeforeSaveCompletes( self ) :
 
@@ -729,6 +743,169 @@ class CatalogueTest( GafferImageTest.ImageTestCase ) :
 			fileName = os.path.join( self.temporaryDirectory(), name + ".exr" )
 			shutil.copyfile( sourceFile, fileName )
 			GafferImage.Catalogue.Image.load( fileName )
+
+	def testRenamePromotedImages( self ) :
+
+		# Create boxed Catalogue with promoted `images` plug.
+
+		box = Gaffer.Box()
+
+		box["catalogue"] = GafferImage.Catalogue()
+		box["catalogue"]["directory"].setValue( os.path.join( self.temporaryDirectory(), "catalogue" ) )
+
+		images = Gaffer.PlugAlgo.promote( box["catalogue"]["images"] )
+
+		# Send 2 images and name them using the promoted plugs.
+
+		red = GafferImage.Constant()
+		red["format"].setValue( GafferImage.Format( 64, 64 ) )
+		red["color"]["r"].setValue( 1 )
+		self.sendImage( red["out"], box["catalogue"] )
+		images[-1].setName( "Red" )
+
+		green = GafferImage.Constant()
+		green["format"].setValue( GafferImage.Format( 64, 64 ) )
+		green["color"]["g"].setValue( 1 )
+		self.sendImage( green["out"], box["catalogue"] )
+		images[-1].setName( "Green" )
+
+		# Assert that images are accessible under those names.
+
+		with Gaffer.Context() as c :
+			c["catalogue:imageName"] = "Red"
+			self.assertImagesEqual( box["catalogue"]["out"], red["out"], ignoreMetadata = True )
+			c["catalogue:imageName"] = "Green"
+			self.assertImagesEqual( box["catalogue"]["out"], green["out"], ignoreMetadata = True )
+
+		# And that invalid names generate errors.
+
+		with six.assertRaisesRegex( self, RuntimeError, 'Unknown image name "Blue"' ) :
+			with Gaffer.Context() as c :
+				c["catalogue:imageName"] = "Blue"
+				box["catalogue"]["out"].metadata()
+
+		# Assert that we can rename the images and get them under the new name.
+
+		images[0].setName( "Crimson" )
+		images[1].setName( "Emerald" )
+
+		with Gaffer.Context() as c :
+			c["catalogue:imageName"] = "Crimson"
+			self.assertImagesEqual( box["catalogue"]["out"], red["out"], ignoreMetadata = True )
+			c["catalogue:imageName"] = "Emerald"
+			self.assertImagesEqual( box["catalogue"]["out"], green["out"], ignoreMetadata = True )
+
+		# And that the old names are now invalid.
+
+		with six.assertRaisesRegex( self, RuntimeError, 'Unknown image name "Red"' ) :
+			with Gaffer.Context() as c :
+				c["catalogue:imageName"] = "Red"
+				box["catalogue"]["out"].metadata()
+
+	def testInternalImagePythonType( self ) :
+
+		c = GafferImage.Catalogue()
+		c["images"].addChild( c.Image.load( "${GAFFER_ROOT}/python/GafferImageTest/images/blurRange.exr" ) )
+
+		for g in Gaffer.GraphComponent.RecursiveRange( c ) :
+			self.assertTrue(
+				isinstance( g, Gaffer.Plug ) or
+				isinstance( g, Gaffer.Node )
+			)
+
+	def testImageName( self ) :
+
+		catalogue = GafferImage.Catalogue()
+		self.assertEqual( len( catalogue["images"] ), 0 )
+
+		constant = GafferImage.Constant()
+		constant["format"].setValue( GafferImage.Format( 64, 64 ) )
+		self.sendImage(
+			constant["out"],
+			catalogue,
+			{
+				"catalogue:imageName" : "testName",
+			}
+		)
+
+		self.assertEqual( len( catalogue["images"] ), 1 )
+		self.assertEqual( catalogue["images"][0].getName(), "testName" )
+
+		self.sendImage(
+			constant["out"],
+			catalogue,
+			{
+				"catalogue:imageName" : "!invalid&^ Name[]",
+			}
+		)
+
+		self.assertEqual( len( catalogue["images"] ), 2 )
+		self.assertEqual( catalogue["images"][0].getName(), "testName" )
+		self.assertEqual( catalogue["images"][1].getName(), "_invalid_Name_" )
+
+		self.sendImage(
+			constant["out"],
+			catalogue,
+			{
+				"catalogue:imageName" : "5IsntAValidStartingCharacter",
+			}
+		)
+
+		self.assertEqual( len( catalogue["images"] ), 3 )
+		self.assertEqual( catalogue["images"][0].getName(), "testName" )
+		self.assertEqual( catalogue["images"][1].getName(), "_invalid_Name_" )
+		self.assertEqual( catalogue["images"][2].getName(), "_IsntAValidStartingCharacter" )
+
+	def testGenerateFileName( self ):
+
+		s = Gaffer.ScriptNode()
+		s["variables"].addChild( Gaffer.NameValuePlug( "CV", Gaffer.StringPlug( "value", defaultValue = "foo" ) ) )
+		catalogue = GafferImage.Catalogue()
+		catalogue["directory"].setValue( "${CV}/dir/" )
+		s.addChild( catalogue )
+		constant1 = GafferImage.Constant()
+		constant1["format"].setValue( GafferImage.Format( imath.Box2i( imath.V2i(0), imath.V2i( 100 ) ) ) )
+
+		# Check that two images match only if identical
+		f1 = catalogue.generateFileName( constant1["out"] )
+
+		self.assertEqual( f1.split( "/" )[:2], [ "foo", "dir" ] )
+		self.assertEqual( f1.split( "." )[-1], "exr" )
+
+		constant2 = GafferImage.Constant()
+		constant2["format"].setValue( GafferImage.Format( imath.Box2i( imath.V2i(0), imath.V2i( 100 ) ) ) )
+
+		f2 = catalogue.generateFileName( constant2["out"] )
+
+		self.assertEqual( f1, f2 )
+
+		constant2["format"]["displayWindow"]["max"]["x"].setValue( 101 )
+		f2 = catalogue.generateFileName( constant2["out"] )
+
+		self.assertNotEqual( f1, f2 )
+
+		# Check that two multi-view images match only if all views are identical
+		createViews = GafferImage.CreateViews()
+		createViews["views"].addChild( Gaffer.NameValuePlug( "left", GafferImage.ImagePlug(), True, "view0", Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
+		createViews["views"].addChild( Gaffer.NameValuePlug( "right", GafferImage.ImagePlug(), True, "view1", Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
+		createViews["views"][0]["value"].setInput( constant1["out"] )
+		createViews["views"][1]["value"].setInput( constant2["out"] )
+
+		f3 = catalogue.generateFileName( createViews["out"] )
+		self.assertNotIn( f3, [f1, f2] )
+
+		constant2["format"]["displayWindow"]["max"]["x"].setValue( 102 )
+		f4 = catalogue.generateFileName( createViews["out"] )
+		self.assertNotIn( f4, [f1, f2, f3] )
+
+		constant1["format"]["displayWindow"]["max"]["x"].setValue( 101 )
+		f5 = catalogue.generateFileName( createViews["out"] )
+		self.assertNotIn( f5, [f1, f2, f3, f4] )
+
+		constant1["format"]["displayWindow"]["max"]["x"].setValue( 100 )
+		constant2["format"]["displayWindow"]["max"]["x"].setValue( 101 )
+		f6 = catalogue.generateFileName( createViews["out"] )
+		self.assertEqual( f6, f3 )
 
 if __name__ == "__main__":
 	unittest.main()

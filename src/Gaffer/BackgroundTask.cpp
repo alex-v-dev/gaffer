@@ -35,6 +35,8 @@
 //////////////////////////////////////////////////////////////////////////
 
 #include "Gaffer/BackgroundTask.h"
+
+#include "Gaffer/ApplicationRoot.h"
 #include "Gaffer/ScriptNode.h"
 #include "Gaffer/ThreadState.h"
 
@@ -44,7 +46,7 @@
 #include "boost/multi_index/hashed_index.hpp"
 #include "boost/multi_index_container.hpp"
 
-#include "tbb/task.h"
+#include "tbb/task_arena.h"
 
 using namespace IECore;
 using namespace Gaffer;
@@ -55,29 +57,6 @@ using namespace Gaffer;
 
 namespace
 {
-
-class FunctionTask : public tbb::task
-{
-	public :
-
-		typedef std::function<void ()> Function;
-
-		FunctionTask( const Function &f )
-			: m_f( f )
-		{
-		}
-
-		tbb::task *execute() override
-		{
-			m_f();
-			return nullptr;
-		}
-
-	private :
-
-		Function m_f;
-
-};
 
 const ScriptNode *scriptNode( const GraphComponent *subject )
 {
@@ -119,7 +98,7 @@ struct ActiveTask
 	ConstScriptNodePtr subject;
 };
 
-typedef boost::multi_index::multi_index_container<
+using ActiveTasks = boost::multi_index::multi_index_container<
 	ActiveTask,
 	boost::multi_index::indexed_by<
 		boost::multi_index::hashed_unique<
@@ -129,7 +108,7 @@ typedef boost::multi_index::multi_index_container<
 			boost::multi_index::member<ActiveTask, ConstScriptNodePtr, &ActiveTask::subject>
 		>
 	>
-> ActiveTasks;
+>;
 
 ActiveTasks &activeTasks()
 {
@@ -162,9 +141,9 @@ BackgroundTask::BackgroundTask( const Plug *subject, const Function &function )
 {
 	activeTasks().insert( ActiveTask{ this, scriptNode( subject ) } );
 
-	auto taskData = m_taskData;
-	tbb::task *functionTask = new( tbb::task::allocate_root() ) FunctionTask(
-		[taskData] {
+	// Enqueue task into current arena.
+	tbb::task_arena( tbb::task_arena::attach() ).enqueue(
+		[taskData = m_taskData] {
 
 			// Early out if we were cancelled before the task
 			// even started.
@@ -219,7 +198,6 @@ BackgroundTask::BackgroundTask( const Plug *subject, const Function &function )
 			taskData->conditionVariable.notify_one();
 		}
 	);
-	tbb::task::enqueue( *functionTask );
 }
 
 BackgroundTask::~BackgroundTask()
@@ -318,6 +296,21 @@ void BackgroundTask::cancelAffectedTasks( const GraphComponent *actionSubject )
 	/// \todo Investigate fancier approaches.
 
 	const ScriptNode *s = scriptNode( actionSubject );
+	if( !s )
+	{
+		if( auto application = actionSubject->ancestor<ApplicationRoot>() )
+		{
+			// No ScriptNode, but still under an ApplicationRoot, most likely
+			// on the Preferences node. Cancel _everything_, so that preferences
+			// plugs can be used as inputs to other nodes.
+			for( const auto &s : ScriptNode::Range( *application->scripts() ) )
+			{
+				cancelAffectedTasks( s.get() );
+			}
+		}
+		return;
+	}
+
 	auto range = a.get<1>().equal_range( s );
 
 	// Call cancel for everything first.

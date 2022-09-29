@@ -41,9 +41,12 @@
 #include "GafferScene/InteractiveRender.h"
 #include "GafferScene/OpenGLRender.h"
 #include "GafferScene/Private/IECoreScenePreview/CapturingRenderer.h"
+#include "GafferScene/Private/IECoreScenePreview/CompoundRenderer.h"
 #include "GafferScene/Private/IECoreScenePreview/Geometry.h"
+#include "GafferScene/Private/IECoreScenePreview/Placeholder.h"
 #include "GafferScene/Private/IECoreScenePreview/Procedural.h"
 #include "GafferScene/Private/IECoreScenePreview/Renderer.h"
+#include "GafferScene/Private/RendererAlgo.h"
 #include "GafferScene/Render.h"
 
 #include "GafferDispatchBindings/TaskNodeBinding.h"
@@ -147,6 +150,23 @@ IECoreScenePreview::Renderer::ObjectInterfacePtr rendererObject2( Renderer &rend
 	return renderer.object( name, samples, times, attributes );
 }
 
+
+IECoreScenePreview::Renderer::ObjectInterfacePtr rendererCamera1( Renderer &renderer, const std::string &name, const IECoreScene::Camera *camera, const Renderer::AttributesInterface *attributes )
+{
+	return renderer.camera( name, camera, attributes );
+}
+
+IECoreScenePreview::Renderer::ObjectInterfacePtr rendererCamera2( Renderer &renderer, const std::string &name, object pythonSamples, object pythonTimes, const Renderer::AttributesInterface *attributes )
+{
+	std::vector<const IECoreScene::Camera *> samples;
+	container_utils::extend_container( samples, pythonSamples );
+
+	std::vector<float> times;
+	container_utils::extend_container( times, pythonTimes );
+
+	return renderer.camera( name, samples, times, attributes );
+}
+
 object rendererCommand( Renderer &renderer, const IECore::InternedString name, const IECore::CompoundDataMap &parameters = IECore::CompoundDataMap() )
 {
 	return dataToPython(
@@ -178,6 +198,19 @@ void objectInterfaceLink( Renderer::ObjectInterface &objectInterface, const IECo
 	objectInterface.link( type, objectSet );
 }
 
+void render( Renderer &renderer )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	renderer.render();
+}
+
+RendererPtr compoundRendererConstructor( object pythonRenderers )
+{
+	std::vector<RendererPtr> renderers;
+	container_utils::extend_container( renderers, pythonRenderers );
+	return new CompoundRenderer( renderers );
+}
+
 class ProceduralWrapper : public IECorePython::RunTimeTypedWrapper<IECoreScenePreview::Procedural>
 {
 
@@ -191,30 +224,40 @@ class ProceduralWrapper : public IECorePython::RunTimeTypedWrapper<IECoreScenePr
 		Imath::Box3f bound() const final
 		{
 			IECorePython::ScopedGILLock gilLock;
-			boost::python::object f = this->methodOverride( "bound" );
-			if( f )
+			try
 			{
-				return extract<Imath::Box3f>( f() );
+				boost::python::object f = this->methodOverride( "bound" );
+				if( f )
+				{
+					return extract<Imath::Box3f>( f() );
+				}
 			}
-			else
+			catch( const boost::python::error_already_set &e )
 			{
-				throw IECore::Exception( "No bound method defined" );
+				IECorePython::ExceptionAlgo::translatePythonException();
 			}
+
+			throw IECore::Exception( "No bound method defined" );
 		}
 
 		void render( IECoreScenePreview::Renderer *renderer ) const final
 		{
 			IECorePython::ScopedGILLock gilLock;
-			boost::python::object f = this->methodOverride( "render" );
-			if( f )
+			try
 			{
-				f( IECoreScenePreview::RendererPtr( renderer ) );
-				return;
+				boost::python::object f = this->methodOverride( "render" );
+				if( f )
+				{
+					f( IECoreScenePreview::RendererPtr( renderer ) );
+					return;
+				}
 			}
-			else
+			catch( const boost::python::error_already_set &e )
 			{
-				throw IECore::Exception( "No render method defined" );
+				IECorePython::ExceptionAlgo::translatePythonException();
 			}
+
+			throw IECore::Exception( "No render method defined" );
 		}
 
 };
@@ -249,6 +292,26 @@ list capturedObjectCapturedSampleTimes( const CapturingRenderer::CapturedObject 
 	return result;
 }
 
+list capturedObjectCapturedTransforms( const CapturingRenderer::CapturedObject &o )
+{
+	list result;
+	for( auto s : o.capturedTransforms() )
+	{
+		result.append( s );
+	}
+	return result;
+}
+
+list capturedObjectCapturedTransformTimes( const CapturingRenderer::CapturedObject &o )
+{
+	list result;
+	for( auto t : o.capturedTransformTimes() )
+	{
+		result.append( t );
+	}
+	return result;
+}
+
 CapturingRenderer::CapturedAttributesPtr capturedObjectCapturedAttributes( const CapturingRenderer::CapturedObject &o )
 {
 	return const_cast<CapturingRenderer::CapturedAttributes *>( o.capturedAttributes() );
@@ -272,6 +335,37 @@ object capturedObjectCapturedLinks( const CapturingRenderer::CapturedObject &o, 
 		return object();
 	}
 }
+
+list objectSamplesWrapper( const Gaffer::ObjectPlug &objectPlug, const std::vector<float> &sampleTimes, bool copy )
+{
+	std::vector<IECore::ConstObjectPtr> samples;
+	{
+		IECorePython::ScopedGILRelease gilRelease;
+		GafferScene::Private::RendererAlgo::objectSamples( &objectPlug, sampleTimes, samples );
+	}
+
+	list pythonSamples;
+	for( auto &s : samples )
+	{
+		if( copy )
+		{
+			pythonSamples.append( s->copy() );
+		}
+		else
+		{
+			pythonSamples.append( boost::const_pointer_cast<IECore::Object>( s ) );
+		}
+	}
+
+	return pythonSamples;
+}
+
+void outputCamerasWrapper( const ScenePlug &scene, const IECore::CompoundObject &globals, const GafferScene::Private::RendererAlgo::RenderSets &renderSets, IECoreScenePreview::Renderer &renderer )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	GafferScene::Private::RendererAlgo::outputCameras( &scene, &globals, renderSets, &renderer );
+}
+
 
 } // namespace
 
@@ -304,6 +398,21 @@ void GafferSceneModule::bindRender()
 		object privateModule( borrowed( PyImport_AddModule( "GafferScene.Private" ) ) );
 		scope().attr( "Private" ) = privateModule;
 
+		{
+			object rendererAlgoModule( borrowed( PyImport_AddModule( "GafferScene.Private.RendererAlgo" ) ) );
+			scope().attr( "Private" ).attr( "RendererAlgo" ) = rendererAlgoModule;
+
+			scope rendererAlgomoduleScope( rendererAlgoModule );
+
+			def( "objectSamples", &objectSamplesWrapper, ( arg( "objectPlug" ), arg( "sampleTimes" ), arg( "_copy" ) = true ) );
+
+			class_<GafferScene::Private::RendererAlgo::RenderSets, boost::noncopyable>( "RenderSets" )
+				.def( init<const ScenePlug *>() )
+			;
+
+			def( "outputCameras", &outputCamerasWrapper );
+		}
+
 		object ieCoreScenePreviewModule( borrowed( PyImport_AddModule( "GafferScene.Private.IECoreScenePreview" ) ) );
 		scope().attr( "Private" ).attr( "IECoreScenePreview" ) = ieCoreScenePreviewModule;
 
@@ -327,6 +436,7 @@ void GafferSceneModule::bindRender()
 				.def( "transform", objectInterfaceTransform2 )
 				.def( "attributes", &Renderer::ObjectInterface::attributes )
 				.def( "link", &objectInterfaceLink )
+				.def( "assignID", &Renderer::ObjectInterface::assignID )
 			;
 		}
 
@@ -334,7 +444,7 @@ void GafferSceneModule::bindRender()
 
 			.def( "types", &rendererTypes )
 			.staticmethod( "types" )
-			.def( "create", &Renderer::create, ( arg( "type" ), arg( "renderType" ) = Renderer::Batch, arg( "fileName" ) = "" ) )
+			.def( "create", &Renderer::create, ( arg( "type" ), arg( "renderType" ) = Renderer::Batch, arg( "fileName" ) = "", arg( "messageHandler" ) = IECore::MessageHandlerPtr() ) )
 			.staticmethod( "create" )
 
 			.def( "name", &rendererName )
@@ -344,14 +454,15 @@ void GafferSceneModule::bindRender()
 
 			.def( "attributes", &Renderer::attributes )
 
-			.def( "camera", &Renderer::camera )
+			.def( "camera", &rendererCamera1 )
+			.def( "camera", &rendererCamera2 )
 			.def( "light", &Renderer::light )
 			.def( "lightFilter", &Renderer::lightFilter )
 
 			.def( "object", &rendererObject1 )
 			.def( "object", &rendererObject2 )
 
-			.def( "render", &Renderer::render )
+			.def( "render", render )
 			.def( "pause", &Renderer::pause )
 			.def( "command", &rendererCommand )
 
@@ -359,11 +470,14 @@ void GafferSceneModule::bindRender()
 
 		CompoundDataMapFromDict();
 
+		IECorePython::RefCountedClass<CompoundRenderer, Renderer>( "CompoundRenderer" )
+			.def( "__init__", make_constructor( compoundRendererConstructor, default_call_policies(), arg( "renderers" ) ) )
+		;
+
 		IECorePython::RunTimeTypedClass<IECoreScenePreview::Procedural, ProceduralWrapper>()
 			.def( init<>() )
 			.def( "render", (void (Procedural::*)( IECoreScenePreview::Renderer *)const)&Procedural::render )
 		;
-
 
 		IECorePython::RunTimeTypedClass<Geometry>()
 			.def(
@@ -382,8 +496,14 @@ void GafferSceneModule::bindRender()
 			.def( "parameters", (IECore::CompoundData *(Geometry::*)())&Geometry::parameters, return_value_policy<IECorePython::CastToIntrusivePtr>() )
 		;
 
+		IECorePython::RunTimeTypedClass<Placeholder>()
+			.def( init<const Box3f &>( arg( "bound" ) = Box3f() ) )
+			.def( "setBound", &Placeholder::setBound )
+			.def( "getBound", &Placeholder::getBound, return_value_policy<copy_const_reference>() )
+		;
+
 		scope capturingRendererScope = IECorePython::RefCountedClass<CapturingRenderer, Renderer>( "CapturingRenderer" )
-			.def( init<Renderer::RenderType, const std::string &>( ( arg( "renderType" ) = Renderer::RenderType::Interactive, arg( "fileName" ) = "" ) ) )
+			.def( init<Renderer::RenderType, const std::string &, const IECore::MessageHandlerPtr &>( ( arg( "renderType" ) = Renderer::RenderType::Interactive, arg( "fileName" ) = "", arg( "messageHandler") = IECore::MessageHandlerPtr() ) ) )
 			.def( "capturedObject", &capturingRendererCapturedObject )
 		;
 
@@ -394,12 +514,14 @@ void GafferSceneModule::bindRender()
 		IECorePython::RefCountedClass<CapturingRenderer::CapturedObject, Renderer::ObjectInterface>( "CapturedObject" )
 			.def( "capturedSamples", &capturedObjectCapturedSamples )
 			.def( "capturedSampleTimes", &capturedObjectCapturedSampleTimes )
+			.def( "capturedTransforms", &capturedObjectCapturedTransforms )
+			.def( "capturedTransformTimes", &capturedObjectCapturedTransformTimes )
 			.def( "capturedAttributes", &capturedObjectCapturedAttributes )
 			.def( "capturedLinks", &capturedObjectCapturedLinks )
 			.def( "numAttributeEdits", &CapturingRenderer::CapturedObject::numAttributeEdits )
 			.def( "numLinkEdits", &CapturingRenderer::CapturedObject::numLinkEdits )
+			.def( "id", &CapturingRenderer::CapturedObject::id )
 		;
-
 	}
 
 	TaskNodeClass<OpenGLRender>();

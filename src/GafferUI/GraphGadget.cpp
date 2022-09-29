@@ -50,14 +50,22 @@
 #include "GafferUI/ViewportGadget.h"
 
 #include "Gaffer/CompoundNumericPlug.h"
+#include "Gaffer/Context.h"
+#include "Gaffer/ContextProcessor.h"
 #include "Gaffer/DependencyNode.h"
+#include "Gaffer/Loop.h"
 #include "Gaffer/Metadata.h"
 #include "Gaffer/MetadataAlgo.h"
+#include "Gaffer/NameSwitch.h"
+#include "Gaffer/NameValuePlug.h"
 #include "Gaffer/NumericPlug.h"
 #include "Gaffer/RecursiveChildIterator.h"
 #include "Gaffer/ScriptNode.h"
 #include "Gaffer/StandardSet.h"
+#include "Gaffer/Switch.h"
 #include "Gaffer/TypedPlug.h"
+#include "Gaffer/ParallelAlgo.h"
+#include "Gaffer/Process.h"
 
 #include "IECore/BoxOps.h"
 #include "IECore/Export.h"
@@ -67,12 +75,14 @@ IECORE_PUSH_DEFAULT_VISIBILITY
 #include "OpenEXR/ImathPlane.h"
 IECORE_POP_DEFAULT_VISIBILITY
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
+#include "boost/unordered_set.hpp"
 #include "boost/bind/placeholders.hpp"
 
 using namespace GafferUI;
 using namespace Imath;
 using namespace IECore;
+using namespace boost::placeholders;
 using namespace std;
 
 //////////////////////////////////////////////////////////////////////////
@@ -111,6 +121,341 @@ struct CompareV2fX{
 	}
 };
 
+// Action used to set node positions during drags. This implements
+// a custom `merge()` operation to avoid excessive memory use when dragging
+// large numbers of nodes around for a significant number of substeps. The
+// standard merging implemented by `ScriptNode::CompoundAction` works great
+// until a drag increment is 0 in one of the XY axes. When that occurs,
+// the `setValue()` calls for that axis are optimised out and then
+// `CompoundAction::merge()` falls back to a brute-force version
+// that keeps all the actions for every single drag increment (because there
+// are different numbers of actions from one substep to the next).
+//
+// Alternative approaches might be :
+//
+// - Improve `CompoundAction::merge()`. When the simple merge fails we could
+//   perhaps construct a secondary map from subject to action, and then attempt
+//   to merge all the actions pertaining to the same subject. In the general
+//   case there is no guarantee of one action per subject though, so it seems
+//   the benefits might be limited to this one use case anyway.
+// - Allow `CompoundPlug::setValue()` to force all child plugs to be set, even
+//   when one or more aren't changing. This seems counter to expectations from
+//   the point of view of an observer of `plugSetSignal()` though.
+//
+// For now at least, I prefer the isolated scope of `SetPositionsAction` to the
+// more core alternatives.
+class SetPositionsAction : public Gaffer::Action
+{
+
+	public :
+
+		IE_CORE_DECLARERUNTIMETYPEDEXTENSION( SetPositionsAction, GraphGadgetSetPositionsActionTypeId, Gaffer::Action );
+
+		SetPositionsAction( Gaffer::Node *root )
+			:	m_scriptNode( root->scriptNode() )
+		{
+		}
+
+		void addOffset( Gaffer::V2fPlugPtr plug, const V2f &offset )
+		{
+			const V2f v = plug->getValue();
+			m_positions[plug] = { v, v + offset };
+		}
+
+	protected :
+
+		Gaffer::GraphComponent *subject() const override
+		{
+			return m_scriptNode;
+		}
+
+		void doAction() override
+		{
+			// The `setValue()` calls we make are themselves undoable, so we must disable
+			// undo to stop them being recorded redundantly.
+			Gaffer::UndoScope scope( m_scriptNode, Gaffer::UndoScope::Disabled );
+			for( auto &p : m_positions )
+			{
+				p.first->setValue( p.second.newPosition );
+			}
+		}
+
+		void undoAction() override
+		{
+			// The `setValue()` calls we make are themselves undoable, so we must disable
+			// undo to stop them being recorded redundantly.
+			Gaffer::UndoScope scope( m_scriptNode, Gaffer::UndoScope::Disabled );
+			for( auto &p : m_positions )
+			{
+				p.first->setValue( p.second.oldPosition );
+			}
+		}
+
+		bool canMerge( const Action *other ) const override
+		{
+			if( !Action::canMerge( other ) )
+			{
+				return false;
+			}
+
+			const auto a = runTimeCast<const SetPositionsAction>( other );
+			return a && a->m_scriptNode == m_scriptNode;
+		}
+
+		void merge( const Action *other ) override
+		{
+			auto a = static_cast<const SetPositionsAction *>( other );
+			for( auto &p : a->m_positions )
+			{
+				auto inserted = m_positions.insert( p );
+				if( !inserted.second )
+				{
+					inserted.first->second.newPosition = p.second.newPosition;
+				}
+			}
+		}
+
+	private :
+
+		Gaffer::ScriptNode *m_scriptNode;
+
+		struct Positions
+		{
+			V2f oldPosition;
+			V2f newPosition;
+		};
+
+		using PositionsMap = std::map<Gaffer::V2fPlugPtr, Positions>;
+		PositionsMap m_positions;
+
+};
+
+IE_CORE_DEFINERUNTIMETYPED( SetPositionsAction );
+IE_CORE_DECLAREPTR( SetPositionsAction )
+
+void activeWalkOutput(
+	const Gaffer::Plug *connectionStart,
+	const Gaffer::Context *context,
+	const IECore::Canceller *canceller,
+	std::unordered_set<const Gaffer::Plug*> &activePlugs,
+	std::unordered_set<const Gaffer::Node*> &activeNodes,
+	boost::unordered_set<IECore::MurmurHash> &plugContextsVisited
+);
+
+void activeWalkInput(
+	const Gaffer::Plug *connectionEnd,
+	bool recurse,
+	const Gaffer::Context *context,
+	const IECore::Canceller *canceller,
+	std::unordered_set<const Gaffer::Plug*> &activePlugs,
+	std::unordered_set<const Gaffer::Node*> &activeNodes,
+	boost::unordered_set<IECore::MurmurHash> &plugContextsVisited
+)
+{
+	if( const Gaffer::Plug *connectionStart = connectionEnd->getInput() )
+	{
+		activePlugs.insert( connectionEnd );
+		activeWalkOutput( connectionStart, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+	}
+	else if( recurse )
+	{
+		for( Gaffer::Plug::RecursiveInputIterator childPlug( connectionEnd ); !childPlug.done(); ++childPlug )
+		{
+			if( const Gaffer::Plug *connectionStart = (*childPlug)->getInput() )
+			{
+				activePlugs.insert( childPlug->get() );
+				activeWalkOutput( connectionStart, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+
+				// All children will have the same connection, we don't need to repeat the traversal
+				childPlug.prune();
+			}
+		}
+	}
+}
+
+void activeWalkOutput(
+	const Gaffer::Plug *connectionStart,
+	const Gaffer::Context *context,
+	const IECore::Canceller *canceller,
+	std::unordered_set<const Gaffer::Plug*> &activePlugs,
+	std::unordered_set<const Gaffer::Node*> &activeNodes,
+	boost::unordered_set<IECore::MurmurHash> &plugContextsVisited
+)
+{
+	// TODO - this canceller check isn't actually very useful?  The only things we do that may take a long time
+	// are plug evaluations, which respect a canceller in the context.
+	//
+	// In theory, it would be useful if we were traversing a massive hierarchy without a valid context, but
+	// that's hard to build a test for
+	Canceller::check( canceller );
+
+	// Create a hash representing this node of the active traversal
+	IECore::MurmurHash plugContextHash = context ? context->hash() : IECore::MurmurHash();
+	plugContextHash.append( (size_t)connectionStart ); // OK to just hash the pointer, we only compare within this traversal
+	if( !plugContextsVisited.insert( plugContextHash ).second )
+	{
+		return;
+	}
+
+	const Gaffer::Node *node = connectionStart->node();
+	bool firstVisit = activeNodes.insert( node ).second;
+
+	if( connectionStart->getInput() )
+	{
+		// This plug isn't computed, it's driven by an input, so follow that input ( this covers plugs
+		// like the output of a Box )
+		activeWalkInput( connectionStart, false, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+		return;
+	}
+	else
+	{
+		if( connectionStart->direction() != Gaffer::Plug::Direction::Out )
+		{
+			// The only possible connections to an input plug with no input connections is if its
+			// children are connected
+			activeWalkInput( connectionStart, true, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+			return;
+		}
+	}
+
+	std::set<const Gaffer::Plug*> handledBySpecialCase;
+	try
+	{
+		// If we don't have a valid context, then we can no longer track accurately, and must instead
+		// always use the default path, which conservatively assumes that all inputs could affect the output
+		if( context )
+		{
+			if( const Gaffer::DependencyNode *dependencyNode = runTimeCast<const Gaffer::DependencyNode>( node ) )
+			{
+				Gaffer::Context::Scope s( context );
+				const Gaffer::BoolPlug *enabledPlug = dependencyNode->enabledPlug();
+				if( enabledPlug && !enabledPlug->getValue() )
+				{
+					if( const Gaffer::Plug *active = dependencyNode->correspondingInput( connectionStart ) )
+					{
+						activeWalkInput( active, true, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+					}
+
+					activeWalkInput( enabledPlug, false, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+					return;
+				}
+			}
+
+			if( const Gaffer::Switch *switchNode = runTimeCast<const Gaffer::Switch>( node ) )
+			{
+				const Gaffer::Plug *activeOutput = nullptr;
+
+				if( const Gaffer::NameSwitch *nameSwitchNode = runTimeCast<const Gaffer::NameSwitch>( switchNode ) )
+				{
+					// The top level output plug is an NameValuePlug - track just the value part for
+					// specific traversal, since all the name inputs must be tracked anyway
+					const Gaffer::NameValuePlug *outputNameValue = runTimeCast<const Gaffer::NameValuePlug>( nameSwitchNode->outPlug() );
+					if( outputNameValue && ( connectionStart == outputNameValue || connectionStart == outputNameValue->valuePlug() || outputNameValue->valuePlug()->isAncestorOf( connectionStart ) ) )
+					{
+						activeOutput = outputNameValue->valuePlug();
+					}
+
+					// We are handling just the value inputs specially
+					for( auto &inNameValue : Gaffer::NameValuePlug::InputRange( *nameSwitchNode->inPlugs() ) )
+					{
+						handledBySpecialCase.insert( inNameValue->valuePlug() );
+					}
+				}
+				else
+				{
+					if( connectionStart == switchNode->outPlug() || switchNode->outPlug()->isAncestorOf( connectionStart ) )
+					{
+						activeOutput = switchNode->outPlug();
+					}
+
+					for( auto &inSourcePlug : Gaffer::Plug::InputRange( *switchNode->inPlugs() ) )
+					{
+						handledBySpecialCase.insert( inSourcePlug.get() );
+					}
+				}
+
+				const Gaffer::Plug *active = nullptr;
+				if( activeOutput )
+				{
+					Gaffer::Context::Scope s( context );
+					active = switchNode->activeInPlug( activeOutput );
+				}
+
+				// Track the active input plug
+				if( active )
+				{
+					activeWalkInput( active, true, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+				}
+			}
+			else if( const Gaffer::ContextProcessor *contextProcessorNode = runTimeCast<const Gaffer::ContextProcessor>( node ) )
+			{
+				if( connectionStart == contextProcessorNode->outPlug() || contextProcessorNode->outPlug()->isAncestorOf( connectionStart ) )
+				{
+					Gaffer::Context::Scope s( context );
+					const Gaffer::ContextPtr newContext = contextProcessorNode->inPlugContext();
+					activeWalkInput( contextProcessorNode->inPlug(), true, newContext.get(), canceller, activePlugs, activeNodes, plugContextsVisited );
+				}
+				handledBySpecialCase.insert( contextProcessorNode->inPlug() );
+			}
+		}
+
+		if( const Gaffer::Loop *loopNode = runTimeCast<const Gaffer::Loop>( node ) )
+		{
+			if(
+				!firstVisit &&
+				( connectionStart == loopNode->previousPlug() ||  connectionStart->parent() == loopNode->previousPlug() )
+			)
+			{
+				// In any normal circumstance, if we've already visited this loop, that means we will
+				// have already done all needed traversal, and just stop here.
+				//
+				// Stopping here avoids leaking out the traversal from inside the loop where we don't
+				// know the context.
+				//
+				// There are some weird cases where this might not be totally accurate - it's technically
+				// possible to make a graph that uses the inner nodes of a loop both through the loop, and
+				// also through manually using a ContextVariables node to set loop:index - this is a very
+				// rare special case though
+				return;
+			}
+
+			// The input plug of the loop is a normal input, and will be handled below
+
+			// The next plug of the loop is evaluated in many different contexts - instead of evaluating all
+			// of them, pass a null context which will trigger a conservative evaluation of all possible inputs
+			activeWalkInput( loopNode->nextPlug(), true, nullptr, canceller, activePlugs, activeNodes, plugContextsVisited );
+			handledBySpecialCase.insert( loopNode->nextPlug() );
+		}
+	}
+	catch( const Gaffer::ProcessException &e )
+	{
+		// If there's an error in the graph, we can't figure out specifically which nodes contribute,
+		// fall back to showing all possible inputs as active
+		context = nullptr;
+		handledBySpecialCase.clear();
+
+		IECore::msg( IECore::Msg::Warning, "Gaffer", std::string( "Error during graph active state visualisation: " ) + e.what() );
+	}
+
+	// For default nodes
+	for( Gaffer::Plug::RecursiveInputIterator inSourcePlug( node ); !inSourcePlug.done(); ++inSourcePlug )
+	{
+		if( handledBySpecialCase.count( inSourcePlug->get() ) )
+		{
+			inSourcePlug.prune();
+			continue;
+		}
+
+		activeWalkInput( inSourcePlug->get(), false, context, canceller, activePlugs, activeNodes, plugContextsVisited );
+
+		if( (*inSourcePlug)->getInput() )
+		{
+			// All children will have the same connection, we don't need to repeat the traversal
+			inSourcePlug.prune();
+		}
+	}
+}
+
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
@@ -120,7 +465,7 @@ struct CompareV2fX{
 GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( GraphGadget );
 
 GraphGadget::GraphGadget( Gaffer::NodePtr root, Gaffer::SetPtr filter )
-	:	m_dragStartPosition( 0 ), m_lastDragPosition( 0 ), m_dragMode( None ), m_dragReconnectCandidate( nullptr ), m_dragReconnectSrcNodule( nullptr ), m_dragReconnectDstNodule( nullptr )
+	:	m_dragStartPosition( 0 ), m_lastDragPosition( 0 ), m_dragMode( None ), m_dragReconnectCandidate( nullptr ), m_dragReconnectSrcNodule( nullptr ), m_dragReconnectDstNodule( nullptr ), m_dragMergeGroupId( 0 ), m_activeStateDirty( false )
 {
 	keyPressSignal().connect( boost::bind( &GraphGadget::keyPressed, this, ::_1,  ::_2 ) );
 	buttonPressSignal().connect( boost::bind( &GraphGadget::buttonPress, this, ::_1,  ::_2 ) );
@@ -145,6 +490,10 @@ GraphGadget::GraphGadget( Gaffer::NodePtr root, Gaffer::SetPtr filter )
 GraphGadget::~GraphGadget()
 {
 	removeChild( auxiliaryConnectionsGadget() );
+	if( m_activeStateTask )
+	{
+		m_activeStateTask->cancelAndWait();
+	}
 }
 
 Gaffer::Node *GraphGadget::getRoot()
@@ -191,12 +540,20 @@ void GraphGadget::setRoot( Gaffer::NodePtr root, Gaffer::SetPtr filter )
 			m_selectionMemberRemovedConnection = m_scriptNode->selection()->memberRemovedSignal().connect(
 				boost::bind( &GraphGadget::selectionMemberRemoved, this, ::_1, ::_2 )
 			);
+			m_focusChangedConnection = m_scriptNode->focusChangedSignal().connect(
+				boost::bind( &GraphGadget::focusChanged, this )
+			);
+			m_scriptContextChangedConnection = m_scriptNode->context()->changedSignal().connect(
+				boost::bind( &GraphGadget::scriptContextChanged, this, ::_1, ::_2 )
+			);
 		}
 		else
 		{
 			m_selectionMemberAddedConnection.disconnect();
 			m_selectionMemberAddedConnection.disconnect();
+			m_focusChangedConnection.disconnect();
 		}
+		updateFocusPlugDirtiedConnection();
 	}
 
 	if( filter != m_filter )
@@ -212,6 +569,7 @@ void GraphGadget::setRoot( Gaffer::NodePtr root, Gaffer::SetPtr filter )
 	if( rootChanged )
 	{
 		m_rootChangedSignal( this, previousRoot.get() );
+		dirtyActive();
 	}
 }
 
@@ -245,8 +603,8 @@ void GraphGadget::setFilter( Gaffer::SetPtr filter )
 	}
 	else
 	{
-		m_filterMemberAddedConnection = boost::signals::connection();
-		m_filterMemberRemovedConnection = boost::signals::connection();
+		m_filterMemberAddedConnection = Gaffer::Signals::Connection();
+		m_filterMemberRemovedConnection = Gaffer::Signals::Connection();
 	}
 
 	updateGraph();
@@ -314,7 +672,7 @@ size_t GraphGadget::connectionGadgets( const Gaffer::Plug *plug, std::vector<con
 
 size_t GraphGadget::connectionGadgets( const Gaffer::Node *node, std::vector<ConnectionGadget *> &connections, const Gaffer::Set *excludedNodes )
 {
-	for( Gaffer::RecursivePlugIterator it( node ); !it.done(); ++it )
+	for( Gaffer::Plug::RecursiveIterator it( node ); !it.done(); ++it )
 	{
 		this->connectionGadgets( it->get(), connections, excludedNodes );
 	}
@@ -324,7 +682,7 @@ size_t GraphGadget::connectionGadgets( const Gaffer::Node *node, std::vector<Con
 
 size_t GraphGadget::connectionGadgets( const Gaffer::Node *node, std::vector<const ConnectionGadget *> &connections, const Gaffer::Set *excludedNodes ) const
 {
-	for( Gaffer::RecursivePlugIterator it( node ); !it.done(); ++it )
+	for( Gaffer::Plug::RecursiveIterator it( node ); !it.done(); ++it )
 	{
 		this->connectionGadgets( it->get(), connections, excludedNodes );
 	}
@@ -415,7 +773,7 @@ void GraphGadget::connectedNodeGadgetsWalk( NodeGadget *gadget, std::set<NodeGad
 		return;
 	}
 
-	for( Gaffer::RecursivePlugIterator it( gadget->node() ); !it.done(); ++it )
+	for( Gaffer::Plug::RecursiveIterator it( gadget->node() ); !it.done(); ++it )
 	{
 		Gaffer::Plug *plug = it->get();
 		if( ( direction != Gaffer::Plug::Invalid ) && ( plug->direction() != direction ) )
@@ -570,10 +928,8 @@ NodeGadget *GraphGadget::nodeGadgetAt( const IECore::LineSegment3f &lineInGadget
 {
 	const ViewportGadget *viewportGadget = ancestor<ViewportGadget>();
 
-	std::vector<GadgetPtr> gadgetsUnderMouse;
-	viewportGadget->gadgetsAt(
-		viewportGadget->gadgetToRasterSpace( lineInGadgetSpace.p0, this ),
-		gadgetsUnderMouse
+	std::vector<Gadget*> gadgetsUnderMouse = viewportGadget->gadgetsAt(
+		viewportGadget->gadgetToRasterSpace( lineInGadgetSpace.p0, this )
 	);
 
 	if( !gadgetsUnderMouse.size() )
@@ -581,7 +937,7 @@ NodeGadget *GraphGadget::nodeGadgetAt( const IECore::LineSegment3f &lineInGadget
 		return nullptr;
 	}
 
-	NodeGadget *nodeGadget = runTimeCast<NodeGadget>( gadgetsUnderMouse[0].get() );
+	NodeGadget *nodeGadget = runTimeCast<NodeGadget>( gadgetsUnderMouse[0] );
 	if( !nodeGadget )
 	{
 		nodeGadget = gadgetsUnderMouse[0]->ancestor<NodeGadget>();
@@ -594,15 +950,16 @@ ConnectionGadget *GraphGadget::connectionGadgetAt( const IECore::LineSegment3f &
 {
 	const ViewportGadget *viewportGadget = ancestor<ViewportGadget>();
 
-	std::vector<GadgetPtr> gadgetsUnderMouse;
-	viewportGadget->gadgetsAt( viewportGadget->gadgetToRasterSpace( lineInGadgetSpace.p0, this ), gadgetsUnderMouse );
+	std::vector<Gadget*> gadgetsUnderMouse = viewportGadget->gadgetsAt(
+		viewportGadget->gadgetToRasterSpace( lineInGadgetSpace.p0, this )
+	);
 
 	if ( !gadgetsUnderMouse.size() )
 	{
 		return nullptr;
 	}
 
-	ConnectionGadget *connectionGadget = runTimeCast<ConnectionGadget>( gadgetsUnderMouse[0].get() );
+	ConnectionGadget *connectionGadget = runTimeCast<ConnectionGadget>( gadgetsUnderMouse[0] );
 	if ( !connectionGadget )
 	{
 		connectionGadget = gadgetsUnderMouse[0]->ancestor<ConnectionGadget>();
@@ -613,44 +970,206 @@ ConnectionGadget *GraphGadget::connectionGadgetAt( const IECore::LineSegment3f &
 
 ConnectionGadget *GraphGadget::reconnectionGadgetAt( const NodeGadget *gadget, const IECore::LineSegment3f &lineInGadgetSpace ) const
 {
-	std::vector<GadgetPtr> gadgetsUnderMouse;
-
+	const ViewportGadget *viewportGadget = ancestor<ViewportGadget>();
 	Imath::V3f center = gadget->transformedBound( this ).center();
-	const Imath::V3f corner0 = center - Imath::V3f( 2, 2, 1 );
-	const Imath::V3f corner1 = center + Imath::V3f( 2, 2, 1 );
 
-	std::vector<IECoreGL::HitRecord> selection;
+	Box2f rasterRegion;
+	rasterRegion.extendBy( viewportGadget->gadgetToRasterSpace( center - Imath::V3f( 2, 2, 1 ), this ) );
+	rasterRegion.extendBy( viewportGadget->gadgetToRasterSpace( center + Imath::V3f( 2, 2, 1 ), this ) );
+
+	std::vector<Gadget*> gadgetsUnderMouse = viewportGadget->gadgetsAt(
+		rasterRegion, GraphLayer::Connections
+	);
+	for( Gadget* g : gadgetsUnderMouse )
 	{
-		ViewportGadget::SelectionScope selectionScope( corner0, corner1, this, selection, IECoreGL::Selector::IDRender );
-
-		for ( ChildContainer::const_iterator it = children().begin(); it != children().end(); ++it )
+		if( ConnectionGadget *c = IECore::runTimeCast<ConnectionGadget>( g ) )
 		{
-			if ( ConnectionGadget *c = IECore::runTimeCast<ConnectionGadget>( it->get() ) )
+			if(
+				c->srcNodule() &&
+				gadget->node() != c->srcNodule()->plug()->node() &&
+				gadget->node() != c->dstNodule()->plug()->node()
+			)
 			{
-				// don't consider the node's own connections, or connections without a source nodule
-				if ( c->srcNodule() && gadget->node() != c->srcNodule()->plug()->node() && gadget->node() != c->dstNodule()->plug()->node() )
-				{
-					c->render();
-				}
+				return c;
 			}
-		}
-	}
-
-	for ( std::vector<IECoreGL::HitRecord>::const_iterator it = selection.begin(); it != selection.end(); ++it )
-	{
-		GadgetPtr gadget = Gadget::select( it->name );
-		if ( gadget )
-		{
-			return runTimeCast<ConnectionGadget>( gadget.get() );
 		}
 	}
 
 	return nullptr;
 }
 
-void GraphGadget::doRenderLayer( Layer layer, const Style *style ) const
+void GraphGadget::dirtyActive()
 {
-	Gadget::doRenderLayer( layer, style );
+	if( m_activeStateTask )
+	{
+		m_activeStateTask->cancelAndWait();
+		m_activeStateTask.reset();
+	}
+	m_activeStateDirty = true;
+	dirty( DirtyType::Render );
+}
+
+void GraphGadget::updateActive()
+{
+	if( m_activeStateTask )
+	{
+		m_activeStateTask->cancelAndWait();
+		m_activeStateTask.reset();
+	}
+
+	const Gaffer::Node *focusNode = m_scriptNode->getFocus();
+	std::vector<Gaffer::ConstPlugPtr> focusPlugs;
+	if( focusNode )
+	{
+		Gaffer::ConstPlugPtr hiddenFocusPlug = nullptr;
+		for( auto &plug : Gaffer::Plug::OutputRange( *focusNode ) )
+		{
+			const std::string &n = plug->getName();
+			if( n.size() >= 2 && n[0] == '_' && n[1] == '_' )
+			{
+				if( !hiddenFocusPlug )
+				{
+					hiddenFocusPlug = plug;
+				}
+				continue;
+			}
+
+			focusPlugs.push_back( plug );
+		}
+
+		if( !focusPlugs.size() && hiddenFocusPlug )
+		{
+			// If we couldn't find any visible output plug, take the hidden one
+			focusPlugs.push_back( hiddenFocusPlug );
+		}
+	}
+
+	if( !focusPlugs.size() )
+	{
+		applyActive( nullptr, nullptr );
+		return;
+	}
+
+	m_activeStateTask = Gaffer::ParallelAlgo::callOnBackgroundThread(
+		// TODO - if we make cancellation for graph edits more granular ( instead of for the whole graph ),
+		// we may need to somehow pass all focusPlugs as the subject
+		focusPlugs[0].get(),
+		// Must hold a reference to stop us dying before our UI thread call is scheduled.
+		[focusPlugs, thisRef = GraphGadgetPtr( this ) ] {
+
+			std::shared_ptr< std::unordered_set<const Gaffer::Plug*> > activePlugs( new std::unordered_set<const Gaffer::Plug*> );
+			std::shared_ptr< std::unordered_set<const Gaffer::Node*> > activeNodes( new std::unordered_set<const Gaffer::Node*> );
+
+			Canceller::check( Gaffer::Context::current()->canceller() );
+
+			const Gaffer::ScriptNode *script = focusPlugs[0]->ancestor<Gaffer::ScriptNode>();
+			// Take the context from the script, which has various variables set, including the correct frame.
+			// But take the canceller from the current context, which has been set by the BackgroundTask
+
+			Gaffer::ContextPtr context;
+			if( script && script->context() )
+			{
+				context = new Gaffer::Context( *script->context(), *Gaffer::Context::current()->canceller() );
+			}
+			else
+			{
+				context = new Gaffer::Context( Gaffer::Context(), *Gaffer::Context::current()->canceller() );
+			}
+
+			for( const Gaffer::ConstPlugPtr &focusPlug : focusPlugs )
+			{
+				activePlugsAndNodes(
+					focusPlug.get(), context.get(),
+					*activePlugs, *activeNodes
+				);
+			}
+
+			Gaffer::ParallelAlgo::callOnUIThread(
+				[thisRef, activePlugs, activeNodes] {
+					thisRef->applyActive( activePlugs, activeNodes );
+				}
+			);
+		}
+	);
+
+}
+
+void GraphGadget::applyActive(
+	std::shared_ptr< std::unordered_set<const Gaffer::Plug*> > activePlugs,
+	std::shared_ptr< std::unordered_set<const Gaffer::Node*> > activeNodes
+)
+{
+	if( activePlugs && activeNodes )
+	{
+		for( auto &g : children() )
+		{
+			if( ConnectionGadget *c = runTimeCast<ConnectionGadget>( g.get() ) )
+			{
+				c->activeForFocusNode( activePlugs->count( c->dstNodule()->plug() ) );
+			}
+			else if( NodeGadget *n = runTimeCast<NodeGadget>( g.get() ) )
+			{
+				n->activeForFocusNode( activeNodes->count( n->node() ) );
+			}
+		}
+	}
+	else
+	{
+		// If we haven't got a focus node to trigger active state visualisation, just show everything active
+		for( auto &g : children() )
+		{
+			if( ConnectionGadget *c = runTimeCast<ConnectionGadget>( g.get() ) )
+			{
+				c->activeForFocusNode( true );
+			}
+			else if( NodeGadget *n = runTimeCast<NodeGadget>( g.get() ) )
+			{
+				n->activeForFocusNode( true );
+			}
+		}
+	}
+
+	m_activeStateDirty = false;
+
+	if( m_activeStateTask )
+	{
+		// This is probably unnecessary, since launching this function in a UI thread is the last thing activeStateTask
+		// does - it should definitely be finished by now, but seems safer to cancelAndWait before resetting.
+		m_activeStateTask->cancelAndWait();
+
+		// Clear the task, so that a new task will run next time activeStateDirty is set
+		m_activeStateTask.reset();
+	}
+
+	// TODO - this const_cast is pretty ugly
+	const_cast< GraphGadget*>( this )->dirty( DirtyType::Render );
+}
+
+void GraphGadget::activePlugsAndNodes(
+	const Gaffer::Plug *plug,
+	const Gaffer::Context *context,
+	std::unordered_set<const Gaffer::Plug*> &activePlugs,
+	std::unordered_set<const Gaffer::Node*> &activeNodes
+)
+{
+	// TODO - we seem to be prefering std::unordered_set.  We should probably add
+	// a specialization of std::hash to include/IECore/MurmurHash.h so that we can
+	// use it here
+	boost::unordered_set<IECore::MurmurHash> plugContextsVisited;
+	activeWalkOutput( plug, context, context->canceller(), activePlugs, activeNodes, plugContextsVisited );
+}
+
+void GraphGadget::renderLayer( Layer layer, const Style *style, RenderReason reason ) const
+{
+	if(
+		m_activeStateDirty &&
+		!( m_activeStateTask && ( m_activeStateTask->status() != Gaffer::BackgroundTask::Cancelled ) )
+	)
+	{
+		// It's slightly naughty to trigger updateActive from the const renderLayer - it could be moved to
+		// anything that gets called regularly on the UI thread
+		const_cast< GraphGadget*>( this )->updateActive();
+	}
 
 	glDisable( GL_DEPTH_TEST );
 
@@ -707,9 +1226,22 @@ void GraphGadget::doRenderLayer( Layer layer, const Style *style ) const
 
 }
 
+unsigned GraphGadget::layerMask() const
+{
+	return GraphLayer::Connections | GraphLayer::Overlay;
+}
+
+Box3f GraphGadget::renderBound() const
+{
+	// We only have one graph gadget, so we don't need to worry about the exact extents for render culling
+	Box3f b;
+	b.makeInfinite();
+	return b;
+}
+
 bool GraphGadget::keyPressed( GadgetPtr gadget, const KeyEvent &event )
 {
-	if( event.key == "D" )
+	if( event.key == "D" && !event.modifiers )
 	{
 		/// \todo This functionality would be better provided by a config file,
 		/// rather than being hardcoded in here. For that to be done easily we
@@ -729,6 +1261,7 @@ bool GraphGadget::keyPressed( GadgetPtr gadget, const KeyEvent &event )
 				}
 			}
 		}
+		return true;
 	}
 	return false;
 }
@@ -743,6 +1276,10 @@ void GraphGadget::rootChildAdded( Gaffer::GraphComponent *root, Gaffer::GraphCom
 			if( NodeGadget *g = addNodeGadget( node ) )
 			{
 				addConnectionGadgets( g );
+
+				// Needed in case there is no focus node, where we set all nodes as active
+				// and can't rely on the focus node being dirtied to update active state
+				dirtyActive();
 			}
 		}
 	}
@@ -776,6 +1313,42 @@ void GraphGadget::selectionMemberRemoved( Gaffer::Set *set, IECore::RunTimeTyped
 		{
 			nodeGadget->setHighlighted( false );
 		}
+	}
+}
+
+void GraphGadget::updateFocusPlugDirtiedConnection()
+{
+	if( Gaffer::Node *node = m_scriptNode->getFocus() )
+	{
+		m_focusPlugDirtiedConnection = node->plugDirtiedSignal().connect(
+			boost::bind( &GraphGadget::focusPlugDirtied, this, ::_1 )
+		);
+	}
+	else
+	{
+		m_focusPlugDirtiedConnection.disconnect();
+	}
+}
+
+void GraphGadget::focusChanged()
+{
+	updateFocusPlugDirtiedConnection();
+	dirtyActive();
+}
+
+
+void GraphGadget::focusPlugDirtied( Gaffer::Plug *plug )
+{
+	dirtyActive();
+}
+
+void GraphGadget::scriptContextChanged( const Gaffer::Context *context, const IECore::InternedString & )
+{
+	IECore::MurmurHash newHash = context->hash();
+	if( newHash != m_scriptContextHash )
+	{
+		m_scriptContextHash = newHash;
+		dirtyActive();
 	}
 }
 
@@ -855,7 +1428,7 @@ void GraphGadget::plugSet( Gaffer::Plug *plug )
 void GraphGadget::noduleAdded( Nodule *nodule )
 {
 	addConnectionGadgets( nodule );
-	for( RecursiveNoduleIterator it( nodule ); !it.done(); ++it )
+	for( Nodule::RecursiveIterator it( nodule ); !it.done(); ++it )
 	{
 		addConnectionGadgets( it->get() );
 	}
@@ -864,7 +1437,7 @@ void GraphGadget::noduleAdded( Nodule *nodule )
 void GraphGadget::noduleRemoved( Nodule *nodule )
 {
 	removeConnectionGadgets( nodule );
-	for( RecursiveNoduleIterator it( nodule ); !it.done(); ++it )
+	for( Nodule::RecursiveIterator it( nodule ); !it.done(); ++it )
 	{
 		removeConnectionGadgets( it->get() );
 	}
@@ -913,10 +1486,8 @@ bool GraphGadget::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 
 		ViewportGadget *viewportGadget = ancestor<ViewportGadget>();
 
-		std::vector<GadgetPtr> gadgetsUnderMouse;
-		viewportGadget->gadgetsAt(
-			viewportGadget->gadgetToRasterSpace( event.line.p0, this ),
-			gadgetsUnderMouse
+		std::vector<Gadget*> gadgetsUnderMouse = viewportGadget->gadgetsAt(
+			viewportGadget->gadgetToRasterSpace( event.line.p0, this )
 		);
 
 		if( !gadgetsUnderMouse.size() || gadgetsUnderMouse[0] == this )
@@ -930,7 +1501,7 @@ bool GraphGadget::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 			return true;
 		}
 
-		NodeGadget *nodeGadget = runTimeCast<NodeGadget>( gadgetsUnderMouse[0].get() );
+		NodeGadget *nodeGadget = runTimeCast<NodeGadget>( gadgetsUnderMouse[0] );
 		if( !nodeGadget )
 		{
 			nodeGadget = gadgetsUnderMouse[0]->ancestor<NodeGadget>();
@@ -1065,17 +1636,10 @@ bool GraphGadget::dragEnter( GadgetPtr gadget, const DragDropEvent &event )
 	if( m_dragMode == Moving )
 	{
 		calculateDragSnapOffsets( m_scriptNode->selection() );
-
-		V2f pos = V2f( i.x, i.y );
-		offsetNodes( m_scriptNode->selection(), pos - m_lastDragPosition );
-		m_lastDragPosition = pos;
- 		requestRender();
 		return true;
 	}
 	else if( m_dragMode == Selecting )
 	{
-		m_lastDragPosition = V2f( i.x, i.y );
- 		requestRender();
 		return true;
 	}
 
@@ -1139,8 +1703,10 @@ bool GraphGadget::dragMove( GadgetPtr gadget, const DragDropEvent &event )
 		vector<V2f>::const_iterator pIt = upper_bound( snapPoints.begin(), snapPoints.end(), pOffset - V2f( snapThresh ), CompareV2fX() );
 		for( ; pIt != pEnd; pIt++ )
 		{
-			if( fabs( pOffset[1] - (*pIt)[1] ) < snapThresh &&
-			    fabs( pOffset[0] - (*pIt)[0] ) < snapThresh )
+			if(
+				fabs( pOffset[1] - (*pIt)[1] ) < snapThresh &&
+				fabs( pOffset[0] - (*pIt)[0] ) < snapThresh
+			)
 			{
 				pos = *pIt + m_dragStartPosition;
 				break;
@@ -1148,10 +1714,11 @@ bool GraphGadget::dragMove( GadgetPtr gadget, const DragDropEvent &event )
 		}
 
 		// move all the nodes using the snapped offset
+		Gaffer::UndoScope undoScope( m_scriptNode, Gaffer::UndoScope::Enabled, dragMergeGroup() );
 		offsetNodes( m_scriptNode->selection(), pos - m_lastDragPosition );
 		m_lastDragPosition = pos;
 		updateDragReconnectCandidate( event );
- 		requestRender();
+		dirty( DirtyType::Render );
 		return true;
 	}
 	else
@@ -1159,7 +1726,7 @@ bool GraphGadget::dragMove( GadgetPtr gadget, const DragDropEvent &event )
 		// we're drag selecting
 		m_lastDragPosition = V2f( i.x, i.y );
 		updateDragSelection( false, event.modifiers );
- 		requestRender();
+		dirty( DirtyType::Render );
 		return true;
 	}
 
@@ -1203,7 +1770,7 @@ void GraphGadget::updateDragReconnectCandidate( const DragDropEvent &event )
 	// and if so, stash what we need into our m_dragReconnect member
 	// variables for use in dragEnd.
 
-	for( Gaffer::RecursiveOutputPlugIterator it( node ); !it.done(); ++it )
+	for( Gaffer::Plug::RecursiveOutputIterator it( node ); !it.done(); ++it )
 	{
 		// See if the output has a corresponding input, and that
 		// the resulting in/out plug pair can be inserted into the
@@ -1283,20 +1850,22 @@ bool GraphGadget::dragEnd( GadgetPtr gadget, const DragDropEvent &event )
 		return false;
 	}
 
-	if( dragMode == Moving && m_dragReconnectCandidate )
+	if( dragMode == Moving )
 	{
-		Gaffer::UndoScope undoScope( m_scriptNode );
-
-		m_dragReconnectDstNodule->plug()->setInput( m_dragReconnectCandidate->srcNodule()->plug() );
-		m_dragReconnectCandidate->dstNodule()->plug()->setInput( m_dragReconnectSrcNodule->plug() );
-
+		if( m_dragReconnectCandidate )
+		{
+			Gaffer::UndoScope undoScope( m_scriptNode, Gaffer::UndoScope::Enabled, dragMergeGroup() );
+			m_dragReconnectDstNodule->plug()->setInput( m_dragReconnectCandidate->srcNodule()->plug() );
+			m_dragReconnectCandidate->dstNodule()->plug()->setInput( m_dragReconnectSrcNodule->plug() );
+		}
 		m_dragReconnectCandidate = nullptr;
- 		requestRender();
+		m_dragMergeGroupId++;
+		dirty( DirtyType::Render );
 	}
 	else if( dragMode == Selecting )
 	{
 		updateDragSelection( true, event.modifiers );
- 		requestRender();
+		dirty( DirtyType::Render );
 	}
 
 	return true;
@@ -1432,6 +2001,7 @@ void GraphGadget::calculateDragSnapOffsets( Gaffer::Set *nodes )
 
 void GraphGadget::offsetNodes( Gaffer::Set *nodes, const Imath::V2f &offset )
 {
+	SetPositionsActionPtr action = new SetPositionsAction( m_root.get() );
 	for( size_t i = 0, e = nodes->size(); i < e; i++ )
 	{
 		Gaffer::Node *node = runTimeCast<Gaffer::Node>( nodes->member( i ) );
@@ -1444,9 +2014,15 @@ void GraphGadget::offsetNodes( Gaffer::Set *nodes, const Imath::V2f &offset )
 		if( gadget )
 		{
 			Gaffer::V2fPlug *p = nodePositionPlug( node, /* createIfMissing = */ true );
-			p->setValue( p->getValue() + offset );
+			action->addOffset( p, offset );
 		}
 	}
+	Gaffer::Action::enact( action );
+}
+
+std::string GraphGadget::dragMergeGroup() const
+{
+	return boost::str( boost::format( "GraphGadget%1%%2%" ) % this % m_dragMergeGroupId );
 }
 
 void GraphGadget::updateDragSelection( bool dragEnd, ModifiableEvent::Modifiers modifiers )
@@ -1502,7 +2078,7 @@ void GraphGadget::updateGraph()
 	}
 
 	// now make sure we have gadgets for all the nodes we're meant to display
-	for( Gaffer::NodeIterator it( m_root.get() ); !it.done(); ++it )
+	for( Gaffer::Node::Iterator it( m_root.get() ); !it.done(); ++it )
 	{
 		if( !m_filter || m_filter->contains( it->get() ) )
 		{
@@ -1529,6 +2105,21 @@ NodeGadget *GraphGadget::addNodeGadget( Gaffer::Node *node )
 	{
 		return nullptr;
 	}
+
+	// The call to `addChild( nodeGadget )` will uniquefy the name
+	// with respect to all our other NodeGadgets. This can have
+	// significant overhead when graphs get large, which we can
+	// avoid by making sure the name is unique already. The node
+	// name fits the bill, and is already conveniently available
+	// in `InternedString` form. Note that we are deliberately not
+	// synchronising the names in the case of them changing in the
+	// future, and provide no guarantees about NodeGadget names in
+	// general.
+	// \todo It may be better to modify GraphComponent to allow nameless
+	// children and then use them here. This would let us avoid _all_
+	// uniquefication overhead and would also be useful for ArrayPlug
+	// and Spreadsheet::RowsPlug children.
+	nodeGadget->setName( node->getName() );
 
 	addChild( nodeGadget );
 
@@ -1579,7 +2170,7 @@ void GraphGadget::updateNodeGadgetTransform( NodeGadget *nodeGadget )
 	if( Gaffer::V2fPlug *p = nodePositionPlug( node, /* createIfMissing = */ false ) )
 	{
 		const V2f t = p->getValue();
-	 	m.translate( V3f( t[0], t[1], 0 ) );
+		m.translate( V3f( t[0], t[1], 0 ) );
 	}
 
 	nodeGadget->setTransform( m );
@@ -1587,7 +2178,7 @@ void GraphGadget::updateNodeGadgetTransform( NodeGadget *nodeGadget )
 
 void GraphGadget::addConnectionGadgets( NodeGadget *nodeGadget )
 {
-	for( RecursiveNoduleIterator it( nodeGadget ); !it.done(); ++it )
+	for( Nodule::RecursiveIterator it( nodeGadget ); !it.done(); ++it )
 	{
 		addConnectionGadgets( it->get() );
 	}
@@ -1648,11 +2239,15 @@ void GraphGadget::addConnectionGadget( Nodule *dstNodule )
 	addChild( connection );
 
 	m_connectionGadgets[dstNodule] = connection.get();
+
+	// Needed in case there is no focus node, where we set all nodes as active
+	// and can't rely on the focus node being dirtied to update active state
+	dirtyActive();
 }
 
 void GraphGadget::removeConnectionGadgets( const NodeGadget *nodeGadget )
 {
-	for( RecursiveNoduleIterator it( nodeGadget ); !it.done(); ++it )
+	for( Nodule::RecursiveIterator it( nodeGadget ); !it.done(); ++it )
 	{
 		removeConnectionGadgets( it->get() );
 	}

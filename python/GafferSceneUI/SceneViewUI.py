@@ -47,19 +47,33 @@ import GafferUI
 import GafferScene
 import GafferSceneUI
 
+from ._SceneViewInspector import _SceneViewInspector
+
+def __rendererPlugActivator( plug ) :
+
+	if plug.getName() == "name" :
+		return True
+
+	# Plug is the parent for some renderer-specific
+	# settings. Only show it if has some worthwhile settings
+	# and it is for the current renderer.
+
+	if plug.keys() == [ "enabled" ] :
+		return False
+
+	return plug.parent()["name"].getValue().lower() == plug.getName().lower()
+
 Gaffer.Metadata.registerNode(
 
 	GafferSceneUI.SceneView,
 
-	# We want our EditScopePlugValueWidget and _StateWidget to be grouped on the
-	# right, and we want our other settings to be grouped in the centre. To achieve
-	# this we use _LeftSpacer to occupy the same amount of space on the left as the
-	# right hand group does on the right. Then we use CenterLeftSpacer and
-	# CenterRightSpacer to sandwich the centre group, pushing it into the middle.
+	"toolbarLayout:customWidget:StateWidget:widgetType", "GafferSceneUI.SceneViewUI._StateWidget",
+	"toolbarLayout:customWidget:StateWidget:section", "Top",
+	"toolbarLayout:customWidget:StateWidget:index", 0,
 
-	"toolbarLayout:customWidget:LeftSpacer:widgetType", "GafferSceneUI.SceneViewUI._LeftSpacer",
-	"toolbarLayout:customWidget:LeftSpacer:section", "Top",
-	"toolbarLayout:customWidget:LeftSpacer:index", 0,
+	"toolbarLayout:customWidget:EditScopeBalancingSpacer:widgetType", "GafferSceneUI.SceneViewUI._EditScopeBalancingSpacer",
+	"toolbarLayout:customWidget:EditScopeBalancingSpacer:section", "Top",
+	"toolbarLayout:customWidget:EditScopeBalancingSpacer:index", 1,
 
 	"toolbarLayout:customWidget:CenterLeftSpacer:widgetType", "GafferSceneUI.SceneViewUI._Spacer",
 	"toolbarLayout:customWidget:CenterLeftSpacer:section", "Top",
@@ -67,18 +81,54 @@ Gaffer.Metadata.registerNode(
 
 	"toolbarLayout:customWidget:CenterRightSpacer:widgetType", "GafferSceneUI.SceneViewUI._Spacer",
 	"toolbarLayout:customWidget:CenterRightSpacer:section", "Top",
-	"toolbarLayout:customWidget:CenterRightSpacer:index", -3,
+	"toolbarLayout:customWidget:CenterRightSpacer:index", -2,
 
-	"toolbarLayout:customWidget:StateWidget:widgetType", "GafferSceneUI.SceneViewUI._StateWidget",
-	"toolbarLayout:customWidget:StateWidget:section", "Top",
-	"toolbarLayout:customWidget:StateWidget:index", -1,
+	"nodeToolbar:right:type", "GafferUI.StandardNodeToolbar.right",
+
+	"toolbarLayout:customWidget:InspectorTopSpacer:widgetType", "GafferSceneUI.SceneViewUI._InspectorTopSpacer",
+	"toolbarLayout:customWidget:InspectorTopSpacer:section", "Right",
+
+	"toolbarLayout:activator:inspectorVisible", lambda node : node["inspector"]["visible"].getValue(),
+	"toolbarLayout:customWidget:Inspector:widgetType", "GafferSceneUI.SceneViewUI._SceneViewInspector",
+	"toolbarLayout:customWidget:Inspector:section", "Right",
+	"toolbarLayout:customWidget:Inspector:visibilityActivator", "inspectorVisible",
+
+	"toolbarLayout:customWidget:InspectorBottomSpacer:widgetType", "GafferSceneUI.SceneViewUI._InspectorBottomSpacer",
+	"toolbarLayout:customWidget:InspectorBottomSpacer:section", "Right",
 
 	plugs = {
 
 		"editScope" : [
 
-			"toolbarLayout:index", -2,
+			"toolbarLayout:index", -1,
 			"plugValueWidget:type", "GafferUI.EditScopeUI.EditScopePlugValueWidget",
+
+		],
+
+		"renderer" : [
+
+			"plugValueWidget:type", "GafferUI.LayoutPlugValueWidget",
+			"layoutPlugValueWidget:orientation", "horizontal",
+			"toolbarLayout:index", 1,
+			"toolbarLayout:label", "",
+			"toolbarLayout:width", 100,
+
+		],
+
+		"renderer.name" : [
+
+			"plugValueWidget:type", "GafferUI.PresetsPlugValueWidget",
+			"layout:label", "",
+			"presetNames", lambda plug : IECore.StringVectorData( GafferSceneUI.SceneView.registeredRenderers() ),
+			"presetValues", lambda plug : IECore.StringVectorData( GafferSceneUI.SceneView.registeredRenderers() ),
+
+		],
+
+		"renderer.*" : [
+
+			"plugValueWidget:type", "GafferSceneUI.SceneViewUI._RendererSettingsPlugValueWidget",
+			"layout:visibilityActivator", __rendererPlugActivator,
+			"layout:label", "",
 
 		],
 
@@ -132,6 +182,22 @@ Gaffer.Metadata.registerNode(
 			"toolbarLayout:divider", True,
 			"toolbarLayout:label", "",
 			"layout:activator:hidden", lambda plug : False,
+			"layout:activator:lookThroughEnabled", lambda plug : plug["lookThroughEnabled"].getValue(),
+			"layout:activator:lookThroughDisabled", lambda plug : not plug["lookThroughEnabled"].getValue(),
+			"layout:activator:cameraIsFreePerspective", lambda plug : not plug["lookThroughEnabled"].getValue() and plug["freeCamera"].getValue() == "perspective",
+			"layout:section:Free Camera:collapsed", False,
+			"layout:section:Light Look Through:collapsed", False,
+
+		],
+
+		"camera.freeCamera" : [
+
+			"description",
+			"""
+			Chooses the default camera to be used when `camera.lookThroughEnabled` is off.
+			""",
+
+			"layout:visibilityActivator", "hidden"
 
 		],
 
@@ -142,6 +208,9 @@ Gaffer.Metadata.registerNode(
 			The field of view for the viewport's default perspective camera.
 			""",
 
+			"layout:section", "Free Camera",
+			"layout:activator", "cameraIsFreePerspective",
+
 		],
 
 		"camera.clippingPlanes" : [
@@ -151,6 +220,34 @@ Gaffer.Metadata.registerNode(
 			The near and far clipping planes for the viewport's default perspective camera.
 			""",
 
+			"layout:section", "Free Camera",
+			"layout:activator", "lookThroughDisabled",
+
+		],
+
+		"camera.lightLookThroughDefaultDistantAperture" : [
+			"layout:section", "Light Look Through",
+			"layout:activator", "lookThroughEnabled",
+			"label", "Default Distant Aperture",
+			"description",
+			"""
+			The orthographic aperture used when converting distant lights
+			( which are theoretically infinite in extent ).  May be overridden
+			by the visualisation setting on the light.
+			""",
+		],
+
+		"camera.lightLookThroughDefaultClippingPlanes" : [
+			"layout:section", "Light Look Through",
+			"layout:activator", "lookThroughEnabled",
+			"label", "Default Clipping Planes",
+			"description",
+			"""
+			Clipping planes for cameras implied by lights.  When creating a perspective camera, a near clip
+			<= 0 is invalid, and will be replaced with 0.01.  Also, certain lights only start casting
+			light at some distance - if near clip is less than this, it will be increased.  May be overridden
+			by the visualisation setting on the light.
+			""",
 		],
 
 		"camera.lookThroughEnabled" : [
@@ -191,9 +288,55 @@ Gaffer.Metadata.registerNode(
 
 		],
 
+		"inspector" : [
+
+			"plugValueWidget:type", "",
+
+		],
+
+		"fps" : [
+
+			"plugValueWidget:type", "",
+
+		]
+
 	}
 
 )
+
+##########################################################################
+# _RendererSettingsPlugValueWidget
+##########################################################################
+
+class _RendererSettingsPlugValueWidget( GafferUI.PlugValueWidget ) :
+
+	def __init__( self, plug, **kw ) :
+
+		button = GafferUI.Button( image = "tabScrollMenu.png", hasFrame = False )
+		GafferUI.PlugValueWidget.__init__( self, button, plug, **kw )
+
+		self.__window = None
+
+		button.clickedSignal().connect( Gaffer.WeakMethod( self.__clicked ), scoped = False )
+
+	def _updateFromPlug( self ) :
+
+		pass
+
+	def __clicked( self, button ) :
+
+		if self.__window is None :
+			with GafferUI.PopupWindow( IECore.CamelCase.toSpaced( self.getPlug().getName() + "Settings" ) ) as self.__window :
+				GafferUI.PlugLayout( self.getPlug(), rootSection = "Settings" )
+			self.__window.resizeToFitChild()
+
+		bound = self.bound()
+		self.__window.popup(
+			center = imath.V2i(
+				bound.center().x,
+				bound.max().y + self.__window.bound().size().y / 2 + 8,
+			)
+		)
 
 ##########################################################################
 # _DrawingModePlugValueWidget
@@ -506,6 +649,7 @@ class _SelectionMaskPlugValueWidget( GafferUI.PlugValueWidget ) :
 	def __menuDefinition( self ) :
 
 		currentTypes = set().union( *[ _leafTypes( t ) for t in self.getPlug().getValue() ] )
+		defaultTypes = set().union( *[ _leafTypes( t ) for t in self.getPlug().defaultValue() ] )
 
 		result = IECore.MenuDefinition()
 		for label, types, invert in self.__menuItems() :
@@ -519,6 +663,15 @@ class _SelectionMaskPlugValueWidget( GafferUI.PlugValueWidget ) :
 				else :
 					checked = currentTypes.issuperset( types )
 					newTypes = currentTypes | types if not checked else currentTypes - types
+
+				if newTypes == defaultTypes :
+					# We generate `newTypes` using leaf typeIds, because it makes
+					# addition and removal easier. But when `newTypes` is equivalent
+					# to the default value (which uses base types), we want to collapse
+					# them back to the default value. This results in a call to
+					# `SceneGadget.setSelectionMask( nullptr )`, which puts us on the
+					# fast path where we don't use a mask at all.
+					newTypes = self.getPlug().defaultValue()
 
 				result.append(
 					label,
@@ -550,9 +703,9 @@ class _CameraPlugValueWidget( GafferUI.PlugValueWidget ) :
 
 		self.__settingsWindow = None
 
-		# Must connect with group 0 so we get called before PlugValueWidget's default handlers
-		self.dragEnterSignal().connect( 0, Gaffer.WeakMethod( self.__dragEnter ), scoped = False )
-		self.dropSignal().connect( 0, Gaffer.WeakMethod( self.__drop ), scoped = False )
+		# Must connect at front so we get called before PlugValueWidget's default handlers
+		self.dragEnterSignal().connectFront( Gaffer.WeakMethod( self.__dragEnter ), scoped = False )
+		self.dropSignal().connectFront( Gaffer.WeakMethod( self.__drop ), scoped = False )
 
 		self._updateFromPlug()
 
@@ -573,22 +726,33 @@ class _CameraPlugValueWidget( GafferUI.PlugValueWidget ) :
 		m = IECore.MenuDefinition()
 
 		if self.getPlug()["lookThroughEnabled"].getValue() :
+			currentFree = None
 			currentLookThrough = self.getPlug()["lookThroughCamera"].getValue()
 		else :
+			currentFree = self.getPlug()["freeCamera"].getValue()
 			currentLookThrough = None
 
-		m.append(
-			"/Default",
-			{
-				"checkBox" : currentLookThrough is None,
-				"command" : functools.partial( Gaffer.WeakMethod( self.__lookThrough ), None )
-			}
-		)
+		for freeCamera in [
+			"perspective",
+			"top",
+			"front",
+			"side"
+		] :
+
+			m.append(
+				"/" + freeCamera.title(),
+				{
+					"checkBox" : freeCamera == currentFree,
+					"command" : functools.partial( Gaffer.WeakMethod( self.__free ), freeCamera )
+				}
+			)
+
+		m.append( "/FreeCameraDivider", { "divider" : True } )
 
 		m.append(
 			"/Render Camera",
 			{
-				"checkBox" : currentLookThrough is "",
+				"checkBox" : currentLookThrough == "",
 				"command" : functools.partial( Gaffer.WeakMethod( self.__lookThrough ), "" )
 			}
 		)
@@ -626,10 +790,15 @@ class _CameraPlugValueWidget( GafferUI.PlugValueWidget ) :
 
 		return m
 
+	def __free( self, freeCamera, *unused ) :
+
+		self.getPlug()["lookThroughEnabled"].setValue( False )
+		self.getPlug()["freeCamera"].setValue( freeCamera )
+
 	def __lookThrough( self, path, *unused ) :
 
-		self.getPlug()["lookThroughEnabled"].setValue( path is not None )
-		self.getPlug()["lookThroughCamera"].setValue( path or "" )
+		self.getPlug()["lookThroughEnabled"].setValue( True )
+		self.getPlug()["lookThroughCamera"].setValue( path )
 
 	def __browse( self ) :
 
@@ -659,7 +828,7 @@ class _CameraPlugValueWidget( GafferUI.PlugValueWidget ) :
 			self.__settingsWindow = GafferUI.Window( title = "Camera Settings" )
 			with self.__settingsWindow :
 				with GafferUI.ListContainer() :
-					with GafferUI.Frame( borderStyle = GafferUI.Frame.BorderStyle.None, borderWidth = 4 ) :
+					with GafferUI.Frame( borderStyle = GafferUI.Frame.BorderStyle.None_, borderWidth = 4 ) :
 						layout = GafferUI.PlugLayout( self.getPlug() )
 					GafferUI.Spacer( imath.V2i( 0 ), parenting = { "expand" : True } )
 
@@ -818,6 +987,23 @@ class _GridPlugValueWidget( GafferUI.PlugValueWidget ) :
 			}
 		)
 
+		m.append(
+			"/Show Inspector",
+			{
+				"checkBox" : self.getPlug().node()["inspector"]["visible"].getValue(),
+				"command" : self.getPlug().node()["inspector"]["visible"].setValue,
+				"shortCut" : "I"
+			}
+		)
+
+		m.append(
+			"/Show FPS",
+			{
+				"checkBox" : self.getPlug().node()["fps"]["visible"].getValue(),
+				"command" : self.getPlug().node()["fps"]["visible"].setValue,
+			}
+		)
+
 		return m
 
 ##########################################################################
@@ -828,9 +1014,7 @@ def __fitClippingPlanes( view, toSelection = False ) :
 
 	viewportGadget = view.viewportGadget()
 	sceneGadget = viewportGadget.getPrimaryChild()
-	viewportGadget.fitClippingPlanes(
-		sceneGadget.bound() if not toSelection else sceneGadget.selectionBound()
-	)
+	viewportGadget.fitClippingPlanes( sceneGadget.bound( toSelection ) )
 
 def __appendClippingPlaneMenuItems( menuDefinition, prefix, view, parentWidget ) :
 
@@ -899,15 +1083,18 @@ GafferUI.PlugValueWidget.popupMenuSignal().connect( __plugValueWidgetContextMenu
 # _Spacers
 ##########################################################################
 
-class _LeftSpacer( GafferUI.Spacer ) :
+class _EditScopeBalancingSpacer( GafferUI.Spacer ) :
 
 	def __init__( self, sceneView, **kw ) :
+
+		# EditScope width - pause button - spacer - spinner - renderer
+		width = 200 - 25 - 4 - 20 - 100
 
 		GafferUI.Spacer.__init__(
 			self,
 			imath.V2i( 0 ), # Minimum
-			maximumSize = imath.V2i( 250, 1 ),
-			preferredSize = imath.V2i( 250, 1 )
+			preferredSize = imath.V2i( width, 1 ),
+			maximumSize = imath.V2i( width, 1 )
 		)
 
 class _Spacer( GafferUI.Spacer ) :
@@ -915,6 +1102,22 @@ class _Spacer( GafferUI.Spacer ) :
 	def __init__( self, sceneView, **kw ) :
 
 		GafferUI.Spacer.__init__( self, imath.V2i( 0 ) )
+
+class _InspectorTopSpacer( GafferUI.Spacer ) :
+
+	def __init__( self, sceneView, **kw ) :
+
+		GafferUI.Spacer.__init__( self, imath.V2i( 1, 26 ) )
+
+class _InspectorBottomSpacer( GafferUI.Spacer ) :
+
+	def __init__( self, sceneView, **kw ) :
+
+		GafferUI.Spacer.__init__(
+			self,
+			imath.V2i( 0 ), # Minimum
+			preferredSize = imath.V2i( 1, 30 )
+		)
 
 ##########################################################################
 # _StateWidget
@@ -932,8 +1135,8 @@ class _StateWidget( GafferUI.Widget ) :
 
 		with row :
 
-			self.__busyWidget = GafferUI.BusyWidget( size = 20 )
 			self.__button = GafferUI.Button( hasFrame = False )
+			self.__busyWidget = GafferUI.BusyWidget( size = 20 )
 
 		self.__sceneGadget = sceneView.viewportGadget().getPrimaryChild()
 

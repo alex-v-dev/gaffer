@@ -54,6 +54,14 @@ class GAFFERIMAGE_API OpenColorIOTransform : public ColorProcessor
 
 		~OpenColorIOTransform() override;
 
+		/// Defines values for use in `direction` plugs
+		/// created by derived classes.
+		enum Direction
+		{
+			Forward = 0,
+			Inverse
+		};
+
 		/// Fills the vector will the available color spaces,
 		/// as defined by the current OpenColorIO config.
 		static void availableColorSpaces( std::vector<std::string> &colorSpaces );
@@ -66,7 +74,15 @@ class GAFFERIMAGE_API OpenColorIOTransform : public ColorProcessor
 		Gaffer::CompoundDataPlug *contextPlug();
 		const Gaffer::CompoundDataPlug *contextPlug() const;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::OpenColorIOTransform, OpenColorIOTransformTypeId, ColorProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::OpenColorIOTransform, OpenColorIOTransformTypeId, ColorProcessor );
+
+		/// Returns the OCIO processor for this node, taking into account
+		/// the current Gaffer context and the OCIO context specified by
+		/// `contextPlug()`. Returns nullptr if this node is a no-op.
+		OCIO_NAMESPACE::ConstProcessorRcPtr processor() const;
+		/// Returns a hash that uniquely represents the result of calling
+		/// `processor()` in the current context.
+		IECore::MurmurHash processorHash() const;
 
 	protected :
 
@@ -99,11 +115,11 @@ class GAFFERIMAGE_API OpenColorIOTransform : public ColorProcessor
 		/// Derived classes must implement this to return a valid OpenColorIO
 		/// Transform which can be used by an OpenColorIO Processor or a null
 		/// pointer if no processing should take place.
-		virtual OpenColorIO::ConstTransformRcPtr transform() const = 0;
+		virtual OCIO_NAMESPACE::ConstTransformRcPtr transform() const = 0;
 
 	private :
 
-		OpenColorIO::ConstContextRcPtr ocioContext( OpenColorIO::ConstConfigRcPtr config ) const;
+		OCIO_NAMESPACE::ConstContextRcPtr ocioContext( OCIO_NAMESPACE::ConstConfigRcPtr config ) const;
 
 		static size_t g_firstPlugIndex;
 		bool m_hasContextPlug;

@@ -97,7 +97,7 @@ class HierarchyViewFilter : public Gaffer::PathFilter
 			if( m_scene )
 			{
 				node = const_cast<Node *>( m_scene->node() );
-				for( ValuePlugIterator it( m_scene.get() ); !it.done(); ++it )
+				for( ValuePlug::Iterator it( m_scene.get() ); !it.done(); ++it )
 				{
 					sceneDirtied( it->get() );
 				}
@@ -146,9 +146,9 @@ class HierarchyViewFilter : public Gaffer::PathFilter
 			m_context->names( names );
 			for( vector<InternedString>::const_iterator it = names.begin(), eIt = names.end(); it != eIt; ++it )
 			{
-				const Data *newValue = m_context->get<Data>( *it );
-				const Data *oldValue = oldContext->get<Data>( *it, nullptr );
-				if( !oldValue || !newValue->isEqualTo( oldValue ) )
+				IECore::DataPtr newValue = m_context->getAsData( *it );
+				IECore::DataPtr oldValue = oldContext->getAsData( *it, nullptr );
+				if( !oldValue || !newValue->isEqualTo( oldValue.get() ) )
 				{
 					contextChanged( *it );
 				}
@@ -159,7 +159,7 @@ class HierarchyViewFilter : public Gaffer::PathFilter
 			oldContext->names( names );
 			for( vector<InternedString>::const_iterator it = names.begin(), eIt = names.end(); it != eIt; ++it )
 			{
-				if( !m_context->get<Data>( *it, nullptr ) )
+				if( !m_context->getAsData( *it, nullptr ) )
 				{
 					contextChanged( *it );
 				}
@@ -198,8 +198,8 @@ class HierarchyViewFilter : public Gaffer::PathFilter
 		ConstScenePlugPtr m_scene;
 		ConstContextPtr m_context;
 
-		boost::signals::scoped_connection m_plugDirtiedConnection;
-		boost::signals::scoped_connection m_contextChangedConnection;
+		Signals::ScopedConnection m_plugDirtiedConnection;
+		Signals::ScopedConnection m_contextChangedConnection;
 
 };
 
@@ -271,7 +271,7 @@ class HierarchyViewSetFilter : public HierarchyViewFilter
 			}
 		}
 
-		void doFilter( vector<Gaffer::PathPtr> &paths ) const override
+		void doFilter( vector<Gaffer::PathPtr> &paths, const IECore::Canceller *canceller ) const override
 		{
 			if( paths.empty() )
 			{
@@ -414,7 +414,7 @@ class HierarchyViewSearchFilter : public HierarchyViewFilter
 			}
 		}
 
-		void doFilter( vector<Gaffer::PathPtr> &paths ) const override
+		void doFilter( vector<Gaffer::PathPtr> &paths, const IECore::Canceller *canceller ) const override
 		{
 			if( m_matchPattern.empty() || paths.empty() )
 			{

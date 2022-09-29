@@ -43,7 +43,7 @@ using namespace IECore;
 using namespace Gaffer;
 using namespace GafferScene;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Prune );
+GAFFER_NODE_DEFINE_TYPE( Prune );
 
 size_t Prune::g_firstPlugIndex = 0;
 
@@ -52,6 +52,11 @@ Prune::Prune( const std::string &name )
 {
 	storeIndexOfNextChild( g_firstPlugIndex );
 	addChild( new BoolPlug( "adjustBounds", Plug::In, false ) );
+
+	// Our `out.bound -> out.childBounds -> out.bound` dependency cycle
+	// is legitimate, because `childBounds` evaluates `out.bound` in a
+	// different context (at child locations).
+	outPlug()->childBoundsPlug()->setFlags( Plug::AcceptsDependencyCycles, true );
 
 	// Direct pass-throughs
 	outPlug()->transformPlug()->setInput( inPlug()->transformPlug() );
@@ -79,51 +84,31 @@ void Prune::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs 
 {
 	FilteredSceneProcessor::affects( input, outputs );
 
-	const ScenePlug *in = inPlug();
-	if( input->parent<ScenePlug>() == in )
-	{
-		outputs.push_back( outPlug()->getChild<ValuePlug>( input->getName() ) );
-	}
-	else if( input == filterPlug() )
-	{
-		outputs.push_back( outPlug()->childNamesPlug() );
-		outputs.push_back( outPlug()->setPlug() );
-	}
-	else if( input == adjustBoundsPlug() )
+	if(
+		input == adjustBoundsPlug() ||
+		input == filterPlug() ||
+		input == outPlug()->childBoundsPlug() ||
+		input == inPlug()->boundPlug()
+	)
 	{
 		outputs.push_back( outPlug()->boundPlug() );
 	}
-}
 
-bool Prune::acceptsInput( const Gaffer::Plug *plug, const Gaffer::Plug *inputPlug ) const
-{
-	if( !FilteredSceneProcessor::acceptsInput( plug, inputPlug ) )
+	if(
+		input == filterPlug() ||
+		input == inPlug()->childNamesPlug()
+	)
 	{
-		return false;
+		outputs.push_back( outPlug()->childNamesPlug() );
 	}
 
-	if( plug == filterPlug() )
+	if(
+		input == inPlug()->setPlug() ||
+		input == filterPlug()
+	)
 	{
-		if(
-			filterPlug()->sceneAffectsMatch( inPlug(), inPlug()->boundPlug() ) ||
-			filterPlug()->sceneAffectsMatch( inPlug(), inPlug()->transformPlug() ) ||
-			filterPlug()->sceneAffectsMatch( inPlug(), inPlug()->attributesPlug() ) ||
-			filterPlug()->sceneAffectsMatch( inPlug(), inPlug()->objectPlug() ) ||
-			filterPlug()->sceneAffectsMatch( inPlug(), inPlug()->childNamesPlug() )
-		)
-		{
-			// We make a single call to filterHash() in hashSet(), to account for
-			// the fact that the filter is used in remapping sets. This wouldn't
-			// work for filter types which actually vary based on data within the
-			// scene hierarchy, because then multiple calls would be necessary.
-			// We could make more calls here, but that would be expensive.
-			/// \todo In an ideal world we'd be able to compute a hash for the
-			/// filter across a whole hierarchy.
-			return false;
-		}
+		outputs.push_back( outPlug()->setPlug() );
 	}
-
-	return true;
 }
 
 void Prune::hashBound( const ScenePath &path, const Gaffer::Context *context, const ScenePlug *parent, IECore::MurmurHash &h ) const
@@ -132,7 +117,10 @@ void Prune::hashBound( const ScenePath &path, const Gaffer::Context *context, co
 	{
 		if( filterValue( context ) & IECore::PathMatcher::DescendantMatch )
 		{
-			h = hashOfTransformedChildBounds( path, outPlug() );
+			FilteredSceneProcessor::hashBound( path, context, parent, h );
+			inPlug()->childNamesPlug()->hash( h );
+			outPlug()->childBoundsPlug()->hash( h );
+			inPlug()->boundPlug()->hash( h );
 			return;
 		}
 	}
@@ -147,7 +135,20 @@ Imath::Box3f Prune::computeBound( const ScenePath &path, const Gaffer::Context *
 	{
 		if( filterValue( context ) & IECore::PathMatcher::DescendantMatch )
 		{
-			return unionOfTransformedChildBounds( path, outPlug() );
+			if( inPlug()->childNamesPlug()->getValue()->readable().size() )
+			{
+				return outPlug()->childBoundsPlug()->getValue();
+			}
+			else
+			{
+				// Filter claims there is a descendant match, but there can't be
+				// because we have no children. This can happen if a PathFilter
+				// contains `...` or a reference to a path that doesn't exist.
+				// Since we have no children, and we ourselves are not pruned
+				// (we can't be, because it is forbidden to compute a location
+				// that doesn't exist), we can pass through the input bound.
+				return inPlug()->boundPlug()->getValue();
+			}
 		}
 	}
 
@@ -177,7 +178,7 @@ void Prune::hashChildNames( const ScenePath &path, const Gaffer::Context *contex
 		for( vector<InternedString>::const_iterator it = inputChildNames.begin(), eIt = inputChildNames.end(); it != eIt; ++it )
 		{
 			childPath[path.size()] = *it;
-			sceneScope.set( ScenePlug::scenePathContextName, childPath );
+			sceneScope.set( ScenePlug::scenePathContextName, &childPath );
 			filterPlug()->hash( h );
 		}
 	}
@@ -212,7 +213,7 @@ IECore::ConstInternedStringVectorDataPtr Prune::computeChildNames( const ScenePa
 		for( vector<InternedString>::const_iterator it = inputChildNames.begin(), eIt = inputChildNames.end(); it != eIt; ++it )
 		{
 			childPath[path.size()] = *it;
-			sceneScope.set( ScenePlug::scenePathContextName, childPath );
+			sceneScope.set( ScenePlug::scenePathContextName, &childPath );
 			if( !(filterPlug()->getValue() & IECore::PathMatcher::ExactMatch) )
 			{
 				outputChildNames.push_back( *it );
@@ -267,7 +268,7 @@ IECore::ConstPathMatcherDataPtr Prune::computeSet( const IECore::InternedString 
 
 	for( PathMatcher::RawIterator pIt = inputSet.begin(), peIt = inputSet.end(); pIt != peIt; )
 	{
-		sceneScope.set( ScenePlug::scenePathContextName, *pIt );
+		sceneScope.set( ScenePlug::scenePathContextName, &(*pIt) );
 		const int m = filterPlug()->getValue();
 		if( m & ( IECore::PathMatcher::ExactMatch | IECore::PathMatcher::AncestorMatch ) )
 		{

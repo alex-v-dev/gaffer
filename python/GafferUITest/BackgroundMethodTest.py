@@ -34,8 +34,8 @@
 #
 ##########################################################################
 
-import thread
 import time
+import six
 
 import IECore
 
@@ -46,7 +46,7 @@ import GafferUITest
 
 class BackgroundMethodTest( GafferUITest.TestCase ) :
 
-	class TestWidget( GafferUI.NumericWidget ) :
+	class __TestWidget( GafferUI.NumericWidget ) :
 
 		def __init__( self, **kw ) :
 
@@ -68,7 +68,7 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 
 			self.numBackgroundCalls += 1
 			self.backgroundCallArg = arg
-			self.backgroundCallThreadId = thread.get_ident()
+			self.backgroundCallThreadId = six.moves._thread.get_ident()
 
 			canceller = Gaffer.Context.current().canceller()
 
@@ -88,7 +88,7 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 		def __updateInBackgroundPreCall( self ) :
 
 			self.numPreCalls += 1
-			self.preCallThreadId = thread.get_ident()
+			self.preCallThreadId = six.moves._thread.get_ident()
 
 			self.setEnabled( False )
 
@@ -97,7 +97,7 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 
 			self.postCallArg = value
 			self.numPostCalls += 1
-			self.postCallThreadId = thread.get_ident()
+			self.postCallThreadId = six.moves._thread.get_ident()
 
 			self.setValue( value if isinstance( value, int ) else -1 )
 			self.setEnabled( True )
@@ -107,23 +107,24 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 
 			return self.__script["n"]["sum"]
 
-	class WaitingSlot( GafferTest.CapturingSlot ) :
+	class __SetValueWaitingSlot( GafferTest.CapturingSlot ) :
 
-		def __init__( self, signal ) :
+		def __init__( self, valueWidget ) :
 
-			GafferTest.CapturingSlot.__init__( self, signal )
+			GafferTest.CapturingSlot.__init__( self, valueWidget.valueChangedSignal() )
 
 		def wait( self ) :
 
-			while len( self ) == 0 :
+			while not any( e[1] == GafferUI.NumericWidget.ValueChangedReason.SetValue for e in self ) :
 				GafferUI.EventLoop.waitForIdle()
 
 	def test( self ) :
 
 		with GafferUI.Window() as window :
-			w = self.TestWidget()
+			w = self.__TestWidget()
 
 		window.setVisible( True )
+		self.waitForIdle( 1 )
 
 		self.assertFalse( w.updateInBackground.running( w ) )
 		self.assertEqual( w.numPreCalls, 0 )
@@ -132,7 +133,7 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 
 		w.node()["op1"].setValue( 1 )
 
-		ws = self.WaitingSlot( w.valueChangedSignal() )
+		ws = self.__SetValueWaitingSlot( w )
 
 		w.updateInBackground( 100 )
 		self.assertEqual( w.getEnabled(), False )
@@ -152,18 +153,19 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 		self.assertEqual( w.postCallArg, 1 )
 		self.assertEqual( w.backgroundCallArg, 100 )
 
-		self.assertNotEqual( w.backgroundCallThreadId, thread.get_ident() )
-		self.assertEqual( w.preCallThreadId, thread.get_ident() )
-		self.assertEqual( w.postCallThreadId, thread.get_ident() )
+		self.assertNotEqual( w.backgroundCallThreadId, six.moves._thread.get_ident() )
+		self.assertEqual( w.preCallThreadId, six.moves._thread.get_ident() )
+		self.assertEqual( w.postCallThreadId, six.moves._thread.get_ident() )
 
 	def testCancelWhenHidden( self ) :
 
 		with GafferUI.Window() as window :
-			w = self.TestWidget()
+			w = self.__TestWidget()
 
 		window.setVisible( True )
+		self.waitForIdle( 1 )
 
-		ws = self.WaitingSlot( w.valueChangedSignal() )
+		ws = self.__SetValueWaitingSlot( w )
 		w.updateInBackground( 1 )
 		window.setVisible( False )
 
@@ -184,12 +186,13 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 	def testExceptions( self ) :
 
 		with GafferUI.Window() as window :
-			w = self.TestWidget()
+			w = self.__TestWidget()
 			w.throw = True
 
 		window.setVisible( True )
+		self.waitForIdle( 1 )
 
-		ws = self.WaitingSlot( w.valueChangedSignal() )
+		ws = self.__SetValueWaitingSlot( w )
 		w.updateInBackground( 1000 )
 
 		ws.wait()
@@ -204,13 +207,14 @@ class BackgroundMethodTest( GafferUITest.TestCase ) :
 	def testSecondCallSupercedesFirst( self ) :
 
 		with GafferUI.Window() as window :
-			w = self.TestWidget()
+			w = self.__TestWidget()
 
 		window.setVisible( True )
+		self.waitForIdle( 1 )
 
 		w.node()["op1"].setValue( 2 )
 
-		ws = self.WaitingSlot( w.valueChangedSignal() )
+		ws = self.__SetValueWaitingSlot( w )
 
 		w.updateInBackground( 10 )
 		w.updateInBackground( 11 )

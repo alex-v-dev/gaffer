@@ -37,10 +37,13 @@
 #ifndef IECORESCENEPREVIEW_RENDERER_H
 #define IECORESCENEPREVIEW_RENDERER_H
 
+#include "GafferScene/Export.h"
+
 #include "IECoreScene/Camera.h"
 #include "IECoreScene/Output.h"
 
 #include "IECore/CompoundObject.h"
+#include "IECore/MessageHandler.h"
 
 #include "boost/unordered_set.hpp"
 
@@ -69,12 +72,12 @@ namespace IECoreScenePreview
 /// - Change the python bindings so that the lifetime of the object
 ///   handles and the renderer are tied together, or have the object
 ///   handles keep the renderer alive on the C++ side anyway.
-class IECORESCENE_API Renderer : public IECore::RefCounted
+class GAFFERSCENE_API Renderer : public IECore::RefCounted
 {
 
 	public :
 
-		enum RenderType
+		enum GAFFERSCENE_API RenderType
 		{
 			/// Locations are emitted to the renderer immediately
 			/// and not retained for later editing.
@@ -89,8 +92,12 @@ class IECORESCENE_API Renderer : public IECore::RefCounted
 		IE_CORE_DECLAREMEMBERPTR( Renderer )
 
 		static const std::vector<IECore::InternedString> &types();
-		/// Filename is only used if the renderType is SceneDescription.
-		static Ptr create( const IECore::InternedString &type, RenderType renderType = Batch, const std::string &fileName = "" );
+		/// fileName is only used if the renderType is SceneDescription.
+		/// messageHandler may be provided by the owner of the renderer. If so, all in-render messages should be
+		/// passed to this handler. Message contexts can be left blank if no applicable information is available.
+		/// The renderer must scope the supplied handler before calling out to other code that makes use of static
+		/// IECore::msg logging.
+		static Ptr create( const IECore::InternedString &type, RenderType renderType = Batch, const std::string &fileName = "", const IECore::MessageHandlerPtr &messageHandler = IECore::MessageHandlerPtr() );
 
 		/// Returns the name of this renderer, for instance "OpenGL" or "Arnold".
 		virtual IECore::InternedString name() const = 0;
@@ -114,7 +121,7 @@ class IECORESCENE_API Renderer : public IECore::RefCounted
 		/// A handle to a block of attributes. Currently all
 		/// AttributesInterfaces _must_ be destroyed prior
 		/// to destruction of the renderer itself.
-		class AttributesInterface : public IECore::RefCounted
+		class GAFFERSCENE_API AttributesInterface : public IECore::RefCounted
 		{
 
 			public :
@@ -162,7 +169,7 @@ class IECORESCENE_API Renderer : public IECore::RefCounted
 		///
 		/// Currently all ObjectInterfaces _must_ be destroyed prior to destruction
 		/// of the renderer itself.
-		class ObjectInterface : public IECore::RefCounted
+		class GAFFERSCENE_API ObjectInterface : public IECore::RefCounted
 		{
 
 			public :
@@ -196,6 +203,9 @@ class IECORESCENE_API Renderer : public IECore::RefCounted
 				/// - "lightFilters" : specifies the set of light filters that should
 				///   be applied to a light.
 				virtual void link( const IECore::InternedString &type, const ConstObjectSetPtr &objects ) = 0;
+				/// Assigns an integer ID that should be made available via a `uint id`
+				/// AOV that can be referenced via `output()`.
+				virtual void assignID( uint32_t id ) = 0;
 
 			protected :
 
@@ -248,22 +258,32 @@ class IECORESCENE_API Renderer : public IECore::RefCounted
 		/// "shutter", V2fData
 		/// The time interval for which the shutter is open - this is used in conjunction with the
 		/// times passed to motionBegin() to specify motion blur. Defaults to 0,0 if unspecified.
+		///
+		/// May return a nullptr if the camera definition is not supported by the renderer.
 		virtual ObjectInterfacePtr camera( const std::string &name, const IECoreScene::Camera *camera, const AttributesInterface *attributes ) = 0;
+		/// As above, but allowing animated camera parameters to be specified. A default implementation
+		/// that calls `camera( name, samples[0], attributes )` is provided for renderers which don't
+		/// support animated cameras. Renderers that do support animated cameras should implement a suitable
+		/// override.
+		virtual ObjectInterfacePtr camera( const std::string &name, const std::vector<const IECoreScene::Camera *> &samples, const std::vector<float> &times, const AttributesInterface *attributes );
 
 		/// Adds a named light with the initially supplied set of attributes, which are expected
 		/// to provide at least a light shader. Object may be non-null to specify arbitrary geometry
 		/// for a geometric area light, or null to indicate that the light shader specifies its own
 		/// geometry internally (or is non-geometric in nature).
+		/// May return a nullptr if the light definition is not supported by the renderer.
 		/// \todo Should object be typed as Primitive?
 		virtual ObjectInterfacePtr light( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) = 0;
 
 		/// Adds a named light filter with the initially supplied set of attributes, which are expected
 		/// to provide at least a light filter shader.
+		/// May return a nullptr if the light filter definition is not supported by the renderer.
 		virtual ObjectInterfacePtr lightFilter( const std::string &name, const IECore::Object *object, const AttributesInterface *attributes ) = 0;
 
 		/// Adds a named object to the render with the initally supplied set of attributes.
 		/// The attributes may subsequently be edited in interactive mode using
 		/// ObjectInterface::attributes().
+		/// May return a nullptr if the object definition is not supported by the renderer.
 		/// \todo Rejig class hierarchy so we can have something less generic than
 		/// Object here, but still pass CoordinateSystems. Or should
 		/// coordinate systems have their own dedicated calls?
@@ -305,16 +325,16 @@ class IECORESCENE_API Renderer : public IECore::RefCounted
 
 			private :
 
-				static Ptr creator( RenderType renderType, const std::string &fileName )
+				static Ptr creator( RenderType renderType, const std::string &fileName, const IECore::MessageHandlerPtr &messageHandler )
 				{
-					return new T( renderType, fileName );
+					return new T( renderType, fileName, messageHandler );
 				}
 
 		};
 
 	private :
 
-		static void registerType( const IECore::InternedString &typeName, Ptr (*creator)( RenderType, const std::string & ) );
+		static void registerType( const IECore::InternedString &typeName, Ptr (*creator)( RenderType, const std::string &, const IECore::MessageHandlerPtr & ) );
 
 
 };

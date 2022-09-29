@@ -38,8 +38,11 @@
 
 #include "GafferImageTest/ContextSanitiser.h"
 
+#include "GafferTest/ContextTest.h"
+
 #include "GafferImage/ImageAlgo.h"
 #include "GafferImage/ImagePlug.h"
+#include "GafferImage/Format.h"
 
 #include "Gaffer/Node.h"
 
@@ -66,12 +69,20 @@ struct TilesEvaluateFunctor
 void processTiles( const GafferImage::ImagePlug *imagePlug )
 {
 	TilesEvaluateFunctor f;
-	ImageAlgo::parallelProcessTiles(
-		imagePlug, imagePlug->channelNamesPlug()->getValue()->readable(),
-		f,
-		imagePlug->dataWindowPlug()->getValue(),
-		ImageAlgo::TopToBottom
-	);
+
+	IECore::ConstStringVectorDataPtr viewNames = imagePlug->viewNames();
+	ImagePlug::ViewScope viewScope( Context::current() );
+
+	for( const std::string &viewName : viewNames->readable() )
+	{
+		viewScope.setViewName( &viewName );
+		ImageAlgo::parallelProcessTiles(
+			imagePlug, imagePlug->channelNamesPlug()->getValue()->readable(),
+			f,
+			imagePlug->dataWindowPlug()->getValue(),
+			ImageAlgo::TopToBottom
+		);
+	}
 }
 
 void processTilesOnDirty( const Gaffer::Plug *dirtiedPlug, ConstImagePlugPtr image )
@@ -88,7 +99,7 @@ void processTilesWrapper( GafferImage::ImagePlug *imagePlug )
 	processTiles( imagePlug );
 }
 
-boost::signals::connection connectProcessTilesToPlugDirtiedSignal( GafferImage::ConstImagePlugPtr image )
+Signals::Connection connectProcessTilesToPlugDirtiedSignal( GafferImage::ConstImagePlugPtr image )
 {
 	const Node *node = image->node();
 	if( !node )
@@ -97,6 +108,14 @@ boost::signals::connection connectProcessTilesToPlugDirtiedSignal( GafferImage::
 	}
 
 	return const_cast<Node *>( node )->plugDirtiedSignal().connect( boost::bind( &processTilesOnDirty, ::_1, image ) );
+}
+
+void testEditableScopeForFormat()
+{
+	GafferTest::testEditableScopeTyped<FormatData>(
+		Format( Imath::Box2i( Imath::V2i( 1, 2 ), Imath::V2i( 1, 2 ) ), 1 ),
+		Format( Imath::Box2i( Imath::V2i( 3, 5 ), Imath::V2i( 1920, 1080 ) ), 1.6 )
+	);
 }
 
 } // namespace
@@ -109,4 +128,5 @@ BOOST_PYTHON_MODULE( _GafferImageTest )
 
 	def( "processTiles", &processTilesWrapper );
 	def( "connectProcessTilesToPlugDirtiedSignal", &connectProcessTilesToPlugDirtiedSignal );
+	def( "testEditableScopeForFormat", &testEditableScopeForFormat );
 }

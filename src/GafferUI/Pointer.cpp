@@ -42,29 +42,32 @@ using namespace GafferUI;
 
 static ConstPointerPtr g_current;
 
-typedef std::map<std::string, ConstPointerPtr> Registry;
+using Registry = std::map<std::string, ConstPointerPtr>;
 static Registry &registry()
 {
 	static Registry r;
 	if( !r.size() )
 	{
 		// register standard pointers
-		r["move"] = new Pointer( "move.png", Imath::V2i( 10, 10 ) );
-		r["moveDiagonallyUp"] = new Pointer( "moveDiagonallyUp.png", Imath::V2i( 7 ) );
-		r["moveDiagonallyDown"] = new Pointer( "moveDiagonallyDown.png", Imath::V2i( 7 ) );
-		r["moveHorizontally"] = new Pointer( "moveHorizontally.png", Imath::V2i( 9, 5 ) );
-		r["moveVertically"] = new Pointer( "moveVertically.png", Imath::V2i( 5, 9 ) );
-		r["nodes"] = new Pointer( "nodes.png", Imath::V2i( 11, 8 ) );
-		r["objects"] = new Pointer( "objects.png", Imath::V2i( 18 ) );
-		r["plug"] = new Pointer( "plug.png", Imath::V2i( 9 ) );
-		r["rgba"] = new Pointer( "rgba.png", Imath::V2i( 12, 7 ) );
-		r["values"] = new Pointer( "values.png", Imath::V2i( 19, 14 ) );
-		r["paths"] = new Pointer( "paths.png", Imath::V2i( 8 ) );
+		r["move"] = new Pointer( "move.png", Imath::V2i( 10 ) );
+		r["moveDiagonallyUp"] = new Pointer( "moveDiagonallyUp.png", Imath::V2i( 10 ) );
+		r["moveDiagonallyDown"] = new Pointer( "moveDiagonallyDown.png", Imath::V2i( 10 ) );
+		r["moveHorizontally"] = new Pointer( "moveHorizontally.png", Imath::V2i( 10 ) );
+		r["moveVertically"] = new Pointer( "moveVertically.png", Imath::V2i( 10 ) );
+		r["nodes"] = new Pointer( "nodes.png", Imath::V2i( 10, 5 ) );
+		r["objects"] = new Pointer( "objects.png", Imath::V2i( 53, 14 ) );
+		r["plug"] = new Pointer( "plug.png", Imath::V2i( 8, 7 ) );
+		r["rgba"] = new Pointer( "rgba.png", Imath::V2i( 11, 5 ) );
+		r["values"] = new Pointer( "values.png", Imath::V2i( 18, 11 ) );
+		r["paths"] = new Pointer( "paths.png", Imath::V2i( 7, 6 ) );
 		r["contextMenu"] = new Pointer( "pointerContextMenu.png", Imath::V2i( 1 ) );
-		r["tab"] = new Pointer( "pointerTab.png", Imath::V2i( 12, 15 ) );
-		r["detachedPanel"] = new Pointer( "pointerDetachedPanel.png", Imath::V2i( 12, 15 ) );
-		r["target"] = new Pointer( "pointerTarget.png", Imath::V2i( 12, 12 ) );
-		r["crossHair"] = new Pointer( "pointerCrossHair.png", Imath::V2i( 8, 8 ) );
+		r["tab"] = new Pointer( "pointerTab.png", Imath::V2i( 12, 13 ) );
+		r["detachedPanel"] = new Pointer( "pointerDetachedPanel.png", Imath::V2i( 12, 13 ) );
+		r["target"] = new Pointer( "pointerTarget.png", Imath::V2i( 14 ) );
+		r["crossHair"] = new Pointer( "pointerCrossHair.png", Imath::V2i( 14 ) );
+		r["add"] = new Pointer( "pointerAdd.png", Imath::V2i( 18, 11 ) );
+		r["remove"] = new Pointer( "pointerRemove.png", Imath::V2i( 18, 11 ) );
+		r["rotate"] = new Pointer( "pointerRotate.png", Imath::V2i( 10 ) );
 	}
 	return r;
 }
@@ -110,9 +113,10 @@ void Pointer::setCurrent( ConstPointerPtr pointer )
 	{
 		return;
 	}
-	if( pointer && g_current &&
-	    pointer->image()->isEqualTo( g_current->image() ) &&
-	    pointer->hotspot() == g_current->hotspot()
+	if(
+		pointer && g_current &&
+		pointer->image()->isEqualTo( g_current->image() ) &&
+		pointer->hotspot() == g_current->hotspot()
 	)
 	{
 		return;

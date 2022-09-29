@@ -35,6 +35,7 @@
 ##########################################################################
 
 import os
+import six
 import imath
 
 import IECore
@@ -59,7 +60,7 @@ class Image( GafferUI.Widget ) :
 		# the same size.
 		self._qtWidget().setSizePolicy( QtWidgets.QSizePolicy( QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed ) )
 
-		if isinstance( imagePrimitiveOrFileName, basestring ) :
+		if isinstance( imagePrimitiveOrFileName, six.string_types ) :
 			pixmap = self._qtPixmapFromFile( str( imagePrimitiveOrFileName ) )
 		else :
 			pixmap = self._qtPixmapFromImagePrimitive( imagePrimitiveOrFileName )
@@ -104,9 +105,14 @@ class Image( GafferUI.Widget ) :
 			graphicsView.render(
 				painter,
 				QtCore.QRectF(),
+				# Note the silly off-by-one issue here that requires a -1.  From the Qt docs:
+				# "There is a third constructor that creates a QRect using the top-left and bottom-right
+				# coordinates, but we recommend that you avoid using it. The rationale is that for historical
+				# reasons the values returned by the bottom() and right() functions deviate from the true
+				# bottom-right corner of the rectangle."
 				QtCore.QRect(
 					graphicsView.mapFromScene( pixmapItem.boundingRect().topLeft() ),
-					graphicsView.mapFromScene( pixmapItem.boundingRect().bottomRight() )
+					graphicsView.mapFromScene( pixmapItem.boundingRect().bottomRight() ) - QtCore.QPoint(1,1)
 				)
 			)
 			del painter # must delete painter before image
@@ -142,9 +148,14 @@ class Image( GafferUI.Widget ) :
 			graphicsView.render(
 				painter,
 				QtCore.QRectF(),
+				# Note the silly off-by-one issue here that requires a -1.  From the Qt docs:
+				# "There is a third constructor that creates a QRect using the top-left and bottom-right
+				# coordinates, but we recommend that you avoid using it. The rationale is that for historical
+				# reasons the values returned by the bottom() and right() functions deviate from the true
+				# bottom-right corner of the rectangle."
 				QtCore.QRect(
 					graphicsView.mapFromScene( pixmapItem.boundingRect().topLeft() ),
-					graphicsView.mapFromScene( pixmapItem.boundingRect().bottomRight() )
+					graphicsView.mapFromScene( pixmapItem.boundingRect().bottomRight() ) - QtCore.QPoint(1,1)
 				)
 			)
 			del painter # must delete painter before image
@@ -152,6 +163,14 @@ class Image( GafferUI.Widget ) :
 			self.__pixmapDisabled = QtGui.QPixmap( image )
 
 		return self.__pixmapDisabled
+
+	# Qt's built-in disabled state generation doesn't work well with dark schemes.
+	# This convenience method provides a QIcon, preconfigured with our own disabled pixmap rendering.
+	def _qtIcon( self, highlighted = False ) :
+
+		icon = QtGui.QIcon( self._qtPixmapHighlighted() if highlighted else self._qtPixmap() )
+		icon.addPixmap( self._qtPixmapDisabled(), QtGui.QIcon.Disabled )
+		return icon
 
 	@staticmethod
 	def _qtPixmapFromImagePrimitive( image ) :

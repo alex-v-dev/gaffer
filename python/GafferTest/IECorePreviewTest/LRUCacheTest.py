@@ -106,14 +106,29 @@ class LRUCacheTest( GafferTest.TestCase ) :
 		GafferTest.testLRUCacheContentionForOneItem( "serial" )
 
 	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testContentionForOneItemSerialWithCanceller( self ) :
+
+		GafferTest.testLRUCacheContentionForOneItem( "serial", withCanceller = True )
+
+	@GafferTest.TestRunner.PerformanceTestMethod()
 	def testContentionForOneItemParallel( self ) :
 
 		GafferTest.testLRUCacheContentionForOneItem( "parallel" )
 
 	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testContentionForOneItemParallelWithCanceller( self ) :
+
+		GafferTest.testLRUCacheContentionForOneItem( "parallel", withCanceller = True )
+
+	@GafferTest.TestRunner.PerformanceTestMethod()
 	def testContentionForOneItemTaskParallel( self ) :
 
 		GafferTest.testLRUCacheContentionForOneItem( "taskParallel" )
+
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testContentionForOneItemTaskParallelWithCanceller( self ) :
+
+		GafferTest.testLRUCacheContentionForOneItem( "taskParallel", withCanceller = True )
 
 	def testRecursionSerial( self ) :
 
@@ -182,6 +197,38 @@ class LRUCacheTest( GafferTest.TestCase ) :
 	def testCancellationTaskParallel( self ) :
 
 		GafferTest.testLRUCacheCancellation( "taskParallel" )
+
+	def testCancellationOfSecondGetParallel( self ) :
+
+		GafferTest.testLRUCacheCancellationOfSecondGet( "parallel" )
+
+	def testCancellationOfSecondGetTaskParallel( self ) :
+
+		GafferTest.testLRUCacheCancellationOfSecondGet( "taskParallel" )
+
+	def testUncacheableItemSerial( self ) :
+
+		GafferTest.testLRUCacheUncacheableItem( "serial" )
+
+	def testUncacheableItemParallel( self ) :
+
+		GafferTest.testLRUCacheUncacheableItem( "parallel" )
+
+	def testUncacheableItemTaskParallel( self ) :
+
+		GafferTest.testLRUCacheUncacheableItem( "taskParallel" )
+
+	def testGetIfCachedSerial( self ) :
+
+		GafferTest.testLRUCacheGetIfCached( "serial" )
+
+	def testGetIfCachedParallel( self ) :
+
+		GafferTest.testLRUCacheGetIfCached( "parallel" )
+
+	def testGetIfCachedTaskParallel( self ) :
+
+		GafferTest.testLRUCacheGetIfCached( "taskParallel" )
 
 if __name__ == "__main__":
 	unittest.main()

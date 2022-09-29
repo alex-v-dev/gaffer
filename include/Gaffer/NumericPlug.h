@@ -53,7 +53,7 @@ class GAFFER_API NumericPlug : public ValuePlug
 
 	public :
 
-		typedef T ValueType;
+		using ValueType = T;
 
 		GAFFER_PLUG_DECLARE_TEMPLATE_TYPE( NumericPlug<T>, ValuePlug );
 
@@ -91,35 +91,19 @@ class GAFFER_API NumericPlug : public ValuePlug
 
 	private :
 
-		typedef IECore::TypedData<T> DataType;
-		typedef typename DataType::Ptr DataTypePtr;
+		using DataType = IECore::TypedData<T>;
+		using DataTypePtr = typename DataType::Ptr;
 
 		T m_minValue;
 		T m_maxValue;
 
 };
 
-typedef NumericPlug<float> FloatPlug;
-typedef NumericPlug<int> IntPlug;
+using FloatPlug = NumericPlug<float>;
+using IntPlug = NumericPlug<int>;
 
 IE_CORE_DECLAREPTR( FloatPlug );
 IE_CORE_DECLAREPTR( IntPlug );
-
-typedef FilteredChildIterator<PlugPredicate<Plug::Invalid, FloatPlug> > FloatPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::In, FloatPlug> > InputFloatPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::Out, FloatPlug> > OutputFloatPlugIterator;
-
-typedef FilteredChildIterator<PlugPredicate<Plug::Invalid, IntPlug> > IntPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::In, IntPlug> > InputIntPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::Out, IntPlug> > OutputIntPlugIterator;
-
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Invalid, FloatPlug>, PlugPredicate<> > RecursiveFloatPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::In, FloatPlug>, PlugPredicate<> > RecursiveInputFloatPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Out, FloatPlug>, PlugPredicate<> > RecursiveOutputFloatPlugIterator;
-
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Invalid, IntPlug>, PlugPredicate<> > RecursiveIntPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::In, IntPlug>, PlugPredicate<> > RecursiveInputIntPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Out, IntPlug>, PlugPredicate<> > RecursiveOutputIntPlugIterator;
 
 } // namespace Gaffer
 

@@ -93,15 +93,10 @@ class GAFFERUI_API NoduleLayout : public Gadget
 		Gadget *customGadget( const std::string &name );
 		const Gadget *customGadget( const std::string &name ) const;
 
-		typedef std::function<GadgetPtr ( Gaffer::GraphComponentPtr )> CustomGadgetCreator;
+		using CustomGadgetCreator = std::function<GadgetPtr ( Gaffer::GraphComponentPtr )>;
 		/// Registers a custom gadget type that can be added to the layout using
 		/// "noduleLayout:customGadget:*"" metadata entries.
 		static void registerCustomGadget( const std::string &gadgetType, CustomGadgetCreator creator );
-
-
-	protected :
-
-		bool hasLayer( Layer layer ) const override;
 
 	private :
 
@@ -118,20 +113,20 @@ class GAFFERUI_API NoduleLayout : public Gadget
 			GadgetPtr gadget;
 		};
 		// Either a plug or the name of a custom widget
-		typedef boost::variant<const Gaffer::Plug *, IECore::InternedString> GadgetKey;
+		using GadgetKey = boost::variant<const Gaffer::Plug *, IECore::InternedString>;
 		// Map from plugs and custom gadget names to the gadgets
 		// that represent them.
-		typedef std::map<GadgetKey, TypeAndGadget> GadgetMap;
+		using GadgetMap = std::map<GadgetKey, TypeAndGadget>;
 		GadgetMap m_gadgets;
 
 		void childAdded( Gaffer::GraphComponent *child );
 		void childRemoved( Gaffer::GraphComponent *child );
 
-		void plugMetadataChanged( IECore::TypeId nodeTypeId, const IECore::StringAlgo::MatchPattern &plugPath, IECore::InternedString key, const Gaffer::Plug *plug );
-		void nodeMetadataChanged( IECore::TypeId nodeTypeId, IECore::InternedString key, const Gaffer::Node *node );
+		void plugMetadataChanged( const Gaffer::Plug *plug, IECore::InternedString key );
+		void nodeMetadataChanged( const Gaffer::Node *node, IECore::InternedString key );
 
 		std::vector<GadgetKey> layoutOrder();
-		void updateLayout();
+		void updateNoduleLayout();
 		void updateSpacing();
 		void updateDirection();
 		void updateOrientation();
@@ -142,9 +137,6 @@ class GAFFERUI_API NoduleLayout : public Gadget
 };
 
 IE_CORE_DECLAREPTR( NoduleLayout )
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<NoduleLayout> > NoduleLayoutIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<NoduleLayout> > RecursiveNoduleLayoutIterator;
 
 } // namespace GafferUI
 

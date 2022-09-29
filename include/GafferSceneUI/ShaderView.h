@@ -59,7 +59,7 @@ class GAFFERSCENEUI_API ShaderView : public GafferImageUI::ImageView
 		ShaderView( const std::string &name = defaultName<ShaderView>() );
 		~ShaderView() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferSceneUI::ShaderView, ShaderViewTypeId, GafferImageUI::ImageView );
+		GAFFER_NODE_DECLARE_TYPE( GafferSceneUI::ShaderView, ShaderViewTypeId, GafferImageUI::ImageView );
 
 		Gaffer::StringPlug *scenePlug();
 		const Gaffer::StringPlug *scenePlug() const;
@@ -71,23 +71,24 @@ class GAFFERSCENEUI_API ShaderView : public GafferImageUI::ImageView
 		Gaffer::Node *scene();
 		const Gaffer::Node *scene() const;
 
-		typedef boost::signal<void ( ShaderView * )> SceneChangedSignal;
+		using SceneChangedSignal = Gaffer::Signals::Signal<void ( ShaderView * )>;
 		SceneChangedSignal &sceneChangedSignal();
 
 		void setContext( Gaffer::ContextPtr context ) override;
 
-		typedef std::function<GafferScene::InteractiveRenderPtr ()> RendererCreator;
+		using RendererCreator = std::function<GafferScene::InteractiveRenderPtr ()>;
 		static void registerRenderer( const std::string &shaderPrefix, RendererCreator rendererCreator );
+		static void deregisterRenderer( const std::string &shaderPrefix );
 
-		typedef std::function<Gaffer::NodePtr ()> SceneCreator;
+		using SceneCreator = std::function<Gaffer::NodePtr ()>;
 		static void registerScene( const std::string &shaderPrefix, const std::string &name, SceneCreator sceneCreator );
 		static void registerScene( const std::string &shaderPrefix, const std::string &name, const std::string &referenceFileName );
 		static void registeredScenes( const std::string &shaderPrefix, std::vector<std::string> &names );
 
 	private :
 
-		typedef std::pair<std::string, std::string> PrefixAndName;
-		typedef std::map<PrefixAndName, Gaffer::NodePtr> Scenes;
+		using PrefixAndName = std::pair<std::string, std::string>;
+		using Scenes = std::map<PrefixAndName, Gaffer::NodePtr>;
 
 		GafferImage::Display *display();
 		const GafferImage::Display *display() const;
@@ -97,6 +98,7 @@ class GAFFERSCENEUI_API ShaderView : public GafferImageUI::ImageView
 		void plugSet( Gaffer::Plug *plug );
 		void plugDirtied( Gaffer::Plug *plug );
 		void sceneRegistrationChanged( const PrefixAndName &prefixAndName );
+		void rendererRegistrationChanged();
 
 		void idleUpdate();
 		void updateRenderer();
@@ -104,13 +106,14 @@ class GAFFERSCENEUI_API ShaderView : public GafferImageUI::ImageView
 		void updateRendererState();
 		void updateScene();
 		void preRender();
+		void imageGadgetStateChanged();
 
 		void driverCreated( IECoreImage::DisplayDriver *driver, const IECore::CompoundData *parameters );
 
 		bool m_framed;
 		Gaffer::NodePtr m_imageConverter;
 
-		boost::signals::scoped_connection m_idleConnection;
+		Gaffer::Signals::ScopedConnection m_idleConnection;
 
 		GafferScene::InteractiveRenderPtr m_renderer;
 		std::string m_rendererShaderPrefix;

@@ -36,6 +36,7 @@
 
 import types
 import imath
+import functools
 
 import IECore
 
@@ -43,6 +44,7 @@ import Gaffer
 import GafferUI
 
 import GafferScene
+import GafferSceneUI
 
 ##########################################################################
 # Metadata
@@ -58,7 +60,7 @@ Gaffer.Metadata.registerNode(
 	paths.
 	""",
 
-	"ui:spreadsheet:activeRowNamesConnection", "paths",
+	"ui:spreadsheet:enabledRowNamesConnection", "paths",
 	"ui:spreadsheet:selectorValue", "${scene:path}",
 
 	plugs = {
@@ -68,30 +70,32 @@ Gaffer.Metadata.registerNode(
 			"description",
 			"""
 			The list of paths to the locations to be matched by the filter.
-			A path is formed by a sequence of names separated by '/', and
+			A path is formed by a sequence of names separated by `/`, and
 			specifies the hierarchical position of a location within the scene.
 			Paths may use Gaffer's standard wildcard characters to match
 			multiple locations.
 
-			The '*' wildcard matches any sequence of characters within
+			The `*` wildcard matches any sequence of characters within
 			an individual name, but never matches across names separated
-			by a '/'.
+			by a `/`.
 
-			 - /robot/*Arm matches /robot/leftArm, /robot/rightArm and
-			   /robot/Arm. But does not match /robot/limbs/leftArm or
-			   /robot/arm.
+			 - `/robot/*Arm` matches `/robot/leftArm`, `/robot/rightArm` and
+			   `/robot/Arm`. But does not match `/robot/limbs/leftArm` or
+			   `/robot/arm`.
 
-			The "..." wildcard matches any sequence of names, and can be
+			The `...` wildcard matches any sequence of names, and can be
 			used to match locations no matter where they are parented in
 			the hierarchy.
 
-			 - /.../house matches /house, /street/house and /city/street/house.
+			 - `/.../house` matches `/house`, `/street/house` and `/city/street/house`.
 			""",
 
 			"nodule:type", "",
 			"ui:scene:acceptsPaths", True,
 
 			"vectorDataPlugValueWidget:dragPointer", "objects",
+
+			"plugValueWidget:type", "GafferSceneUI.PathFilterUI._PathsPlugValueWidget",
 
 		],
 
@@ -115,14 +119,60 @@ Gaffer.Metadata.registerNode(
 )
 
 ##########################################################################
+# VectorDataPlugValueWidget customisation
+###########################################################################
+
+class _PathsPlugValueWidget( GafferUI.VectorDataPlugValueWidget ) :
+
+	def __init__( self, plug, **kw ) :
+
+		GafferUI.VectorDataPlugValueWidget.__init__( self, plug, **kw )
+
+		self.vectorDataWidget().dataMenuSignal().connect( Gaffer.WeakMethod( self.__dataMenu ), scoped = False )
+
+	def __dataMenu( self, vectorDataWidget, menuDefinition ) :
+
+		selectedIndices = vectorDataWidget.selectedIndices()
+
+		menuDefinition.append( "/selectDivider", { "divider" : True } )
+		menuDefinition.append(
+			"/Select Affected Objects",
+			{
+				"command" : functools.partial( Gaffer.WeakMethod( self.__selectAffected ), selectedIndices ),
+				"active" : len( selectedIndices ) > 0,
+			}
+		)
+
+	def __selectAffected( self, selectedIndices ) :
+
+		filterNode = self.getPlug().node()
+
+		filterData = self.vectorDataWidget().getData()[0]
+
+		pathMatcher = IECore.PathMatcher()
+		for column, row in selectedIndices :
+			pathMatcher.addPath( filterData[row] )
+
+		scenes = [ n["in"] for n in GafferScene.SceneAlgo.filteredNodes( filterNode ) ]
+		scenes = [ s[0] if isinstance( s, Gaffer.ArrayPlug ) else s for s in scenes ]
+
+		result = IECore.PathMatcher()
+		context = filterNode.ancestor( Gaffer.ScriptNode ).context()
+		with context :
+			for scene in scenes :
+				GafferScene.SceneAlgo.matchingPaths( pathMatcher, scene, result )
+
+		GafferSceneUI.ContextAlgo.setSelectedPaths( context, result )
+
+##########################################################################
 # NodeGadget drop handler
 ##########################################################################
 
-GafferUI.Pointer.registerPointer( "addObjects", GafferUI.Pointer( "addObjects.png", imath.V2i( 36, 18 ) ) )
-GafferUI.Pointer.registerPointer( "removeObjects", GafferUI.Pointer( "removeObjects.png", imath.V2i( 36, 18 ) ) )
-GafferUI.Pointer.registerPointer( "replaceObjects", GafferUI.Pointer( "replaceObjects.png", imath.V2i( 36, 18 ) ) )
+GafferUI.Pointer.registerPointer( "addObjects", GafferUI.Pointer( "addObjects.png", imath.V2i( 53, 14 ) ) )
+GafferUI.Pointer.registerPointer( "removeObjects", GafferUI.Pointer( "removeObjects.png", imath.V2i( 53, 14 ) ) )
+GafferUI.Pointer.registerPointer( "replaceObjects", GafferUI.Pointer( "replaceObjects.png", imath.V2i( 53, 14 ) ) )
 
-__DropMode = IECore.Enum.create( "None", "Add", "Remove", "Replace" )
+__DropMode = IECore.Enum.create( "None_", "Add", "Remove", "Replace" )
 
 __originalDragPointer = None
 
@@ -143,7 +193,7 @@ def __dropMode( nodeGadget, event ) :
 		if filter is None :
 			return __DropMode.Replace
 		elif not isinstance( filter, GafferScene.PathFilter ) :
-			return __DropMode.None
+			return __DropMode.None_
 
 	if event.modifiers & event.Modifiers.Shift :
 		return __DropMode.Add
@@ -190,7 +240,7 @@ def __dragEnter( nodeGadget, event ) :
 	if not event.data[0].startswith( "/" ) :
 		return False
 
-	if __dropMode( nodeGadget, event ) == __DropMode.None :
+	if __dropMode( nodeGadget, event ) == __DropMode.None_ :
 		return False
 
 	global __originalDragPointer
@@ -248,9 +298,6 @@ def __drop( nodeGadget, event ) :
 			pathFilter = GafferScene.PathFilter()
 			nodeGadget.node().parent().addChild( pathFilter )
 			nodeGadget.node()["filter"].setInput( pathFilter["out"] )
-
-			graphGadget = nodeGadget.ancestor( GafferUI.GraphGadget )
-			graphGadget.getLayout().positionNode( graphGadget, pathFilter )
 
 			pathsPlug = pathFilter["paths"]
 

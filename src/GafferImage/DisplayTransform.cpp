@@ -43,7 +43,7 @@ using namespace IECore;
 using namespace Gaffer;
 using namespace GafferImage;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( DisplayTransform );
+GAFFER_NODE_DEFINE_TYPE( DisplayTransform );
 
 size_t DisplayTransform::g_firstPlugIndex = 0;
 
@@ -112,7 +112,7 @@ void DisplayTransform::hashTransform( const Gaffer::Context *context, IECore::Mu
 	h.append( view );
 }
 
-OpenColorIO::ConstTransformRcPtr DisplayTransform::transform() const
+OCIO_NAMESPACE::ConstTransformRcPtr DisplayTransform::transform() const
 {
 	std::string colorSpace = inputColorSpacePlug()->getValue();
 	std::string display = displayPlug()->getValue();
@@ -122,11 +122,11 @@ OpenColorIO::ConstTransformRcPtr DisplayTransform::transform() const
 	// have valid inputs
 	if( colorSpace.empty() || display.empty() || view.empty() )
 	{
-		return OpenColorIO::DisplayTransformRcPtr();
+		return OCIO_NAMESPACE::ConstTransformRcPtr();
 	}
 
-	OpenColorIO::DisplayTransformRcPtr result = OpenColorIO::DisplayTransform::Create();
-	result->setInputColorSpaceName( colorSpace.c_str() );
+	OCIO_NAMESPACE::DisplayViewTransformRcPtr result = OCIO_NAMESPACE::DisplayViewTransform::Create();
+	result->setSrc( colorSpace.c_str() );
 	result->setDisplay( display.c_str() );
 	result->setView( view.c_str() );
 

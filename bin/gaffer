@@ -122,6 +122,8 @@ prependToPath "$GAFFER_ROOT/glsl" IECOREGL_SHADER_INCLUDE_PATHS
 prependToPath "$GAFFER_ROOT/fonts" IECORE_FONT_PATHS
 prependToPath "$HOME/gaffer/ops:$GAFFER_ROOT/ops" IECORE_OP_PATHS
 
+prependToPath "$GAFFER_ROOT/resources/IECoreUSD" PXR_PLUGINPATH_NAME
+
 prependToPath "$HOME/gaffer/opPresets:$GAFFER_ROOT/opPresets" IECORE_OP_PRESET_PATHS
 prependToPath "$HOME/gaffer/procedurals:$GAFFER_ROOT/procedurals" IECORE_PROCEDURAL_PATHS
 prependToPath "$HOME/gaffer/proceduralPresets:$GAFFER_ROOT/proceduralPresets" IECORE_PROCEDURAL_PRESET_PATHS
@@ -155,19 +157,12 @@ fi
 # Get python set up properly
 ##########################################################################
 
-# Make sure PYTHONHOME is pointing to our internal python build.
-# We only do this if Gaffer has been built with an internal version
-# of python - otherwise we assume the existing environment is providing
-# the right value.
-
+# Unset PYTHONHOME to make sure our internal Python build is used in preference
+# to anything in the external environment. We only do this if Gaffer has been
+# built with an internal version of Python - otherwise we assume the existing
+# environment is providing the right value.
 if [[ -e $GAFFER_ROOT/bin/python ]] ; then
-
-	if [[ `uname` = "Linux" ]] ; then
-		export PYTHONHOME="$GAFFER_ROOT"
-	else
-		export PYTHONHOME="$GAFFER_ROOT/lib/Python.framework/Versions/Current"
-	fi
-
+	unset PYTHONHOME
 fi
 
 # Get python module path set up
@@ -189,9 +184,18 @@ else
 	prependToPath /System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/ImageIO.framework/Resources/ DYLD_LIBRARY_PATH
 fi
 
+# Set up Qt
+##########################################################################
+
 if [[ -e $GAFFER_ROOT/qt/plugins ]] ; then
 	export QT_QPA_PLATFORM_PLUGIN_PATH="$GAFFER_ROOT/qt/plugins"
 fi
+
+# Work around issue with Qt 5.12+ when using a wacom tablet on linux.
+#   See https://bugreports.qt.io/browse/QTBUG-77826
+# This can hopefully be removed once this patch is in:
+#   https://codereview.qt-project.org/c/qt/qtbase/+/284141
+export QT_XCB_TABLET_LEGACY_COORDINATES=1
 
 # Get the executable path set up, for running child processes from Gaffer
 ##########################################################################
@@ -228,12 +232,35 @@ if [[ $APPLESEED ]] ; then
 
 fi
 
+# Set up Cycles
+##########################################################################
+
+if [[ -n $GAFFERCYCLES_FEATURE_PREVIEW ]] ; then
+
+	if [[ -z $CYCLES_ROOT && -d $GAFFER_ROOT/cycles ]] ; then
+
+		export CYCLES_ROOT="$GAFFER_ROOT/cycles"
+
+	fi
+
+	if [[ $CYCLES_ROOT ]] ; then
+
+		prependToPath "$CYCLES_ROOT/bin" PATH
+
+	fi
+
+else
+
+	unset CYCLES_ROOT
+
+fi
+
 # Set up Arnold
 ##########################################################################
 
-prependToPath "$GAFFER_ROOT/arnold/plugins" ARNOLD_PLUGIN_PATH
-
 if [[ $ARNOLD_ROOT ]] ; then
+
+	# Put Arnold's own libs and binaries on the appropriate paths.
 
 	if [[ `uname` = "Linux" ]] ; then
 		appendToPath "$ARNOLD_ROOT/bin" LD_LIBRARY_PATH
@@ -243,6 +270,25 @@ if [[ $ARNOLD_ROOT ]] ; then
 
 	appendToPath "$ARNOLD_ROOT/bin" PATH
 	appendToPath "$ARNOLD_ROOT/python" PYTHONPATH
+
+	# Figure out the Arnold version, and set up the matching Gaffer extension.
+
+	if [[ -f "$ARNOLD_ROOT/include/ai_version.h" ]] ; then
+
+		arnoldVersion=`awk \
+			'$1=="#define" && $2=="AI_VERSION_ARCH_NUM"{arch = $3}; \$1=="#define" && $2=="AI_VERSION_MAJOR_NUM"{print arch "." $3}' \
+			"$ARNOLD_ROOT/include/ai_version.h"`
+
+		if [[ -d "$GAFFER_ROOT/arnold/$arnoldVersion" ]] ; then
+			prependToPath "$GAFFER_ROOT/arnold/$arnoldVersion" GAFFER_EXTENSION_PATHS
+			prependToPath "$ARNOLD_ROOT/plugins:$GAFFER_ROOT/arnold/$arnoldVersion/arnoldPlugins" ARNOLD_PLUGIN_PATH
+		else
+			echo "WARNING : GafferArnold extension not available for Arnold $arnoldVersion" >&2
+		fi
+
+	else
+		echo "WARNING : Unable to determine Arnold version" >&2
+	fi
 
 fi
 
@@ -291,6 +337,15 @@ for extension in $GAFFER_EXTENSION_PATHS; do
 
 done
 unset IFS
+
+# Set up jemalloc
+##########################################################################
+
+if [[ $GAFFER_JEMALLOC != "0" ]] ; then
+	if [[ `uname` = "Linux" ]] ; then
+		appendToPath "$GAFFER_ROOT/lib/libjemalloc.so" LD_PRELOAD
+	fi
+fi
 
 # Run gaffer itself
 ##########################################################################

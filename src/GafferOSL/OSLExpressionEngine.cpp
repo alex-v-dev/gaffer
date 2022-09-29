@@ -35,6 +35,12 @@
 //////////////////////////////////////////////////////////////////////////
 
 #include "GafferOSL/Private/CapturingErrorHandler.h"
+// `OpenImageIO/strutil.h` includes `OpenImageIO/detail/farmhash.h`, and
+// that leaks all sorts of macros, including one for `fmix` which breaks
+// the definition of Cortex's perfectly well namespaced `IECore::fmix()`
+// in `IECore/MurmurHash.inl`. So we must undefine the offending macro.
+// See https://github.com/OpenImageIO/oiio/issues/3000.
+#undef fmix
 
 #include "Gaffer/CompoundNumericPlug.h"
 #include "Gaffer/Context.h"
@@ -79,6 +85,7 @@ struct RenderState
 	const vector<ustring> *inParameters;
 	const Gaffer::Context *context;
 	const vector<const Gaffer::ValuePlug *> *inPlugs;
+	std::exception_ptr exception;
 
 };
 
@@ -126,16 +133,23 @@ class RendererServices : public OSL::RendererServices
 				return false;
 			}
 
-			const Data *data = renderState->context->get<Data>( name.c_str(), nullptr );
+			// TODO - might be nice if there was some way to speed this up by directly querying the type matching
+			// the TypeDesc, instead of getting as a generic Data?
+			const DataPtr data = renderState->context->getAsData( name.c_str(), nullptr );
 			if( !data )
 			{
 				return false;
 			}
 
-			IECoreImage::OpenImageIOAlgo::DataView dataView( data, /* createUStrings = */ true );
+			if( derivatives )
+			{
+				memset( (char*)value + type.size(), 0, 2 * type.size() );
+			}
+
+			IECoreImage::OpenImageIOAlgo::DataView dataView( data.get(), /* createUStrings = */ true );
 			if( !dataView.data )
 			{
-				if( auto b = runTimeCast<const BoolData>( data ) )
+				if( auto b = runTimeCast<BoolData>( data.get() ) )
 				{
 					// BoolData isn't supported by `DataView` because `OIIO::TypeDesc` doesn't
 					// have a boolean type. We could work around this in `DataView` by casting to
@@ -160,7 +174,7 @@ class RendererServices : public OSL::RendererServices
 		// So we implement it to search for an appropriate input plug and get its value.
 		bool get_userdata( bool derivatives, ustring name, TypeDesc type, OSL::ShaderGlobals *sg, void *value ) override
 		{
-			const RenderState *renderState = sg ? static_cast<RenderState *>( sg->renderstate ) : nullptr;
+			RenderState *renderState = sg ? static_cast<RenderState *>( sg->renderstate ) : nullptr;
 			if( !renderState )
 			{
 				return false;
@@ -173,36 +187,51 @@ class RendererServices : public OSL::RendererServices
 
 			if( value )
 			{
-				const size_t index = it - renderState->inParameters->begin();
-				const ValuePlug *plug = (*renderState->inPlugs)[index];
-				switch( (Gaffer::TypeId)plug->typeId() )
+				if( derivatives )
 				{
-					case BoolPlugTypeId :
-						*(int *)value = static_cast<const BoolPlug *>( plug )->getValue();
-						return true;
-					case FloatPlugTypeId :
-						*(float *)value = static_cast<const FloatPlug *>( plug )->getValue();
-						return true;
-					case IntPlugTypeId :
-						*(int *)value = static_cast<const IntPlug *>( plug )->getValue();
-						return true;
-					case Color3fPlugTypeId :
-						*(Color3f *)value = static_cast<const Color3fPlug *>( plug )->getValue();
-						return true;
-					case V3fPlugTypeId :
-						*(V3f *)value = static_cast<const V3fPlug *>( plug )->getValue();
-						return true;
-					case M44fPlugTypeId :
-						*(M44f *)value = static_cast<const M44fPlug *>( plug )->getValue();
-						return true;
-					case StringPlugTypeId :
+					memset( (char*)value + type.size(), 0, 2 * type.size() );
+				}
+
+				try
+				{
+					const size_t index = it - renderState->inParameters->begin();
+					const ValuePlug *plug = (*renderState->inPlugs)[index];
+					switch( (Gaffer::TypeId)plug->typeId() )
 					{
-						ustring s( static_cast<const StringPlug *>( plug )->getValue() );
-						*(const char **)value = s.c_str();
-						return true;
+						case BoolPlugTypeId :
+							*(int *)value = static_cast<const BoolPlug *>( plug )->getValue();
+							return true;
+						case FloatPlugTypeId :
+							*(float *)value = static_cast<const FloatPlug *>( plug )->getValue();
+							return true;
+						case IntPlugTypeId :
+							*(int *)value = static_cast<const IntPlug *>( plug )->getValue();
+							return true;
+						case Color3fPlugTypeId :
+							*(Color3f *)value = static_cast<const Color3fPlug *>( plug )->getValue();
+							return true;
+						case V3fPlugTypeId :
+							*(V3f *)value = static_cast<const V3fPlug *>( plug )->getValue();
+							return true;
+						case M44fPlugTypeId :
+							*(M44f *)value = static_cast<const M44fPlug *>( plug )->getValue();
+							return true;
+						case StringPlugTypeId :
+						{
+							ustring s( static_cast<const StringPlug *>( plug )->getValue() );
+							*(const char **)value = s.c_str();
+							return true;
+						}
+						default :
+							return false;
 					}
-					default :
-						return false;
+				}
+				catch( ... )
+				{
+					// We need to catch this exception so that OSL doesn't trigger a termination.
+					// Cache the exception so we can throw it from the expression execute()
+					renderState->exception = std::current_exception();
+					return false;
 				}
 			}
 			return false;
@@ -219,11 +248,31 @@ class RendererServices : public OSL::RendererServices
 // OSLExpressionEngine
 //////////////////////////////////////////////////////////////////////////
 
-typedef pair<string, string> Replacement;
+namespace
+{
+
+using Replacement = pair<string, string>;
 bool replacementGreater( const Replacement &lhs, const Replacement &rhs )
 {
 	return lhs.first.size() > rhs.first.size();
 }
+
+// Note : the content of `replacements` is modified by this function, in order
+// to avoid unnecessary reallocations.
+void replaceAll( std::string &s, vector<Replacement> &replacements )
+{
+	// Sort the replacements so that we'll replace the longest identifier first.
+	// Otherwise a shorter replacement can be used inadvertently if it is a prefix
+	// of a longer one.
+	sort( replacements.begin(), replacements.end(), replacementGreater );
+
+	for( const auto &r : replacements )
+	{
+		replace_all( s, r.first, r.second );
+	}
+}
+
+} // namespace
 
 class OSLExpressionEngine : public Gaffer::Expression::Engine
 {
@@ -331,10 +380,11 @@ class OSLExpressionEngine : public Gaffer::Expression::Engine
 		IECore::ConstObjectVectorPtr execute( const Gaffer::Context *context, const std::vector<const Gaffer::ValuePlug *> &proxyInputs ) const override
 		{
 			ShadingSystem *s = shadingSystem();
-			OSL::ShadingContext *shadingContext = s->get_context();
+			OSL::PerThreadInfo *threadInfo = s->create_thread_info();
+			OSL::ShadingContext *shadingContext = s->get_context( threadInfo );
 
-		    OSL::ShaderGlobals shaderGlobals;
-			memset( &shaderGlobals, 0, sizeof( ShaderGlobals ) );
+			OSL::ShaderGlobals shaderGlobals;
+			memset( (void *)&shaderGlobals, 0, sizeof( ShaderGlobals ) );
 
 			if( m_needsTime )
 			{
@@ -391,7 +441,20 @@ class OSLExpressionEngine : public Gaffer::Expression::Engine
 			}
 
 			s->release_context( shadingContext );
+			s->destroy_thread_info( threadInfo );
+
+			if( renderState.exception )
+			{
+				// Rethrow any exception that occurred in the internals like get_userdata
+				std::rethrow_exception( renderState.exception );
+			}
+
 			return result;
+		}
+
+		ValuePlug::CachePolicy executeCachePolicy() const override
+		{
+			return ValuePlug::CachePolicy::Legacy;
 		}
 
 		void apply( Gaffer::ValuePlug *proxyOutput, const Gaffer::ValuePlug *topLevelProxyOutput, const IECore::Object *value ) const override
@@ -508,17 +571,8 @@ class OSLExpressionEngine : public Gaffer::Expression::Engine
 				replacements.push_back( Replacement( identifier( node, *oldIt ), replacement ) );
 			}
 
-			// Sort the replacements so that we'll replace the longest identifier first.
-			// Otherwise a shorter replacement can be used inadvertently if it is a prefix
-			// of a longer one.
-			sort( replacements.begin(), replacements.end(), replacementGreater );
-
-			string result = expression;
-			for( vector<Replacement>::const_iterator it = replacements.begin(), eIt = replacements.end(); it != eIt; ++it )
-			{
-				replace_all( result, it->first, it->second );
-			}
-
+			std::string result = expression;
+			replaceAll( result, replacements );
 			return result;
 		}
 
@@ -716,6 +770,8 @@ class OSLExpressionEngine : public Gaffer::Expression::Engine
 			// but we want OSL just to see a flat list of parameters. So we must rename
 			// the parameters and the references to them.
 
+			vector<Replacement> replacements;
+
 			for( int i = 0, e = inPlugPaths.size(); i < e; ++i )
 			{
 				string parameter = inPlugPaths[i];
@@ -724,7 +780,7 @@ class OSLExpressionEngine : public Gaffer::Expression::Engine
 					parameter = "_" + parameter;
 				}
 				replace_all( parameter, ".", "_" );
-				replace_all( result, "parent." + inPlugPaths[i], parameter );
+				replacements.push_back( { "parent." + inPlugPaths[i], parameter } );
 				inParameters.push_back( ustring( parameter ) );
 			}
 
@@ -736,15 +792,17 @@ class OSLExpressionEngine : public Gaffer::Expression::Engine
 					parameter = "_" + parameter;
 				}
 				replace_all( parameter, ".", "_" );
-				replace_all( result, "parent." + outPlugPaths[i], parameter );
+				replacements.push_back( { "parent." + outPlugPaths[i], parameter } );
 				outParameters.push_back( ustring( parameter ) );
 			}
+
+			replaceAll( result, replacements );
 
 			// Now we can generate our unique shader name based on the source, and
 			// prepend it to the source.
 
 			shaderName = "oslExpression" + MurmurHash().append( result ).toString();
- 			result = "#include \"GafferOSL/Expression.h\"\n\nshader " + shaderName + " " + result;
+			result = "#include \"GafferOSL/Expression.h\"\n\nshader " + shaderName + " " + result;
 
 			return result;
 		}
@@ -756,7 +814,7 @@ class OSLExpressionEngine : public Gaffer::Expression::Engine
 			// just return it. OSL won't let us load the same shader
 			// again via LoadMemoryCompiledShader anyway.
 
-			typedef map<string, OSL::ShaderGroupRef> ShaderGroups;
+			using ShaderGroups = map<string, OSL::ShaderGroupRef>;
 			static ShaderGroups g_shaderGroups;
 			const ShaderGroups::const_iterator it = g_shaderGroups.find( shaderName );
 			if( it != g_shaderGroups.end() )

@@ -125,6 +125,18 @@ class {name}( Gaffer.SubGraph ) :
 
 {constructor}
 
+		self.__removeDynamicFlags()
+
+	# Remove dynamic flags using the same logic used by the Reference node.
+	## \todo : Create the plugs without the flags in the first place.
+	def __removeDynamicFlags( self ) :
+
+		for plug in Gaffer.Plug.Range( self ) :
+			plug.setFlags( Gaffer.Plug.Flags.Dynamic, False )
+			if not isinstance( plug, ( Gaffer.SplineffPlug, Gaffer.SplinefColor3fPlug, Gaffer.SplinefColor4fPlug ) ) :
+				for plug in Gaffer.Plug.RecursiveRange( plug ) :
+					plug.setFlags( Gaffer.Plug.Flags.Dynamic, False )
+
 IECore.registerRunTimeTyped( {name}, typeName = "{extension}::{name}" )
 """
 
@@ -142,7 +154,7 @@ def __nodeDefinition( box, extension ) :
 	with Gaffer.Context() as context :
 		context["serialiser:includeVersionMetadata"] = IECore.BoolData( False )
 		context["serialiser:protectParentNamespace"] = IECore.BoolData( False )
-		context["valuePlugSerialiser:resetParentPlugDefaults"] = IECore.BoolData( True )
+		context["valuePlugSerialiser:omitParentNodePlugValues"] = IECore.BoolData( True )
 		context["plugSerialiser:includeParentPlugMetadata"] = IECore.BoolData( False )
 		constructor = Gaffer.Serialisation( box, "self", children ).result()
 
@@ -225,4 +237,3 @@ def __plugMetadata( box ) :
 		return "plugs = {\n\n" + __indent( "\n".join( items ), 1 ) + "\n}\n"
 	else :
 		return ""
-

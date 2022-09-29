@@ -218,7 +218,7 @@ class DispatcherTest( GafferTest.TestCase ) :
 
 			return False
 
-		preConnection = GafferDispatch.Dispatcher.preDispatchSignal().connect( onlyRunOnce )
+		preConnection = GafferDispatch.Dispatcher.preDispatchSignal().connect( onlyRunOnce, scoped = True )
 		connection = GafferTest.CapturingSlot( GafferDispatch.Dispatcher.dispatchSignal() )
 
 		dispatcher = GafferDispatch.Dispatcher.create( "testDispatcher" )
@@ -246,7 +246,7 @@ class DispatcherTest( GafferTest.TestCase ) :
 
 			def __init__( self, signal ) :
 
-				self.__connection = signal.connect( Gaffer.WeakMethod( self.__slot ) )
+				self.__connection = signal.connect( Gaffer.WeakMethod( self.__slot ), scoped = True )
 
 			def __slot( self, *args ) :
 
@@ -272,7 +272,7 @@ class DispatcherTest( GafferTest.TestCase ) :
 		with IECore.CapturingMessageHandler() as mh :
 			dispatcher.dispatch( [ s["n1"] ] )
 		self.assertEqual( len( mh.messages ), 1 )
-		self.assertRegexpMatches( mh.messages[0].message, "bad slot!" )
+		six.assertRegex( self, mh.messages[0].message, "bad slot!" )
 		self.assertEqual( len( badConnection ), 1 )
 		self.assertEqual( len( s["n1"].log ), 1 )
 		self.assertEqual( len( cs ), 1 )
@@ -285,7 +285,7 @@ class DispatcherTest( GafferTest.TestCase ) :
 		with IECore.CapturingMessageHandler() as mh :
 			dispatcher.dispatch( [ s["n1"] ] )
 		self.assertEqual( len( mh.messages ), 1 )
-		self.assertRegexpMatches( mh.messages[0].message, "bad slot!" )
+		six.assertRegex( self, mh.messages[0].message, "bad slot!" )
 		self.assertEqual( len( badConnection ), 1 )
 		self.assertEqual( len( s["n1"].log ), 2 )
 		self.assertEqual( len( cs ), 2 )
@@ -417,7 +417,7 @@ class DispatcherTest( GafferTest.TestCase ) :
 		with IECore.CapturingMessageHandler() as mh :
 			s["n1"]["preTasks"][0].setInput( s["n4"]["task"] )
 		self.assertEqual( len( mh.messages ), 1 )
-		self.assertRegexpMatches( mh.messages[0].message, "Cycle detected between ScriptNode.n1.preTasks.preTask0 and ScriptNode.n1.task" )
+		six.assertRegex( self, mh.messages[0].message, "Cycle detected between ScriptNode.n1.preTasks.preTask0 and ScriptNode.n1.task" )
 
 		self.assertNotEqual( s["n1"]["task"].hash(), s["n2"]["task"].hash() )
 		self.assertNotEqual( s["n2"]["task"].hash(), s["n3"]["task"].hash() )
@@ -1084,7 +1084,7 @@ class DispatcherTest( GafferTest.TestCase ) :
 		with IECore.CapturingMessageHandler() as mh :
 			s["t"]["preTasks"][0].setInput( s["t"]["task"] )
 		self.assertEqual( len( mh.messages ), 1 )
-		self.assertRegexpMatches( mh.messages[0].message, "Cycle detected between ScriptNode.t.preTasks.preTask0 and ScriptNode.t.task" )
+		six.assertRegex( self, mh.messages[0].message, "Cycle detected between ScriptNode.t.preTasks.preTask0 and ScriptNode.t.task" )
 
 		dispatcher = GafferDispatch.Dispatcher.create( "testDispatcher" )
 		six.assertRaisesRegex( self, RuntimeError, "cannot have cyclic dependencies", dispatcher.dispatch, [ s["t"] ] )
@@ -1449,14 +1449,16 @@ class DispatcherTest( GafferTest.TestCase ) :
 		d["framesMode"].setValue( d.FramesMode.CustomRange )
 		d["frameRange"].setValue( "1-1000" )
 
-		t = time.clock()
+		clock = time.process_time if six.PY3 else time.clock
+
+		t = clock()
 		d.dispatch( [ lastTask ] )
 
 		timeLimit = 4
 		if Gaffer.isDebug():
 			timeLimit *= 2
 
-		self.assertLess( time.clock() - t, timeLimit )
+		self.assertLess( clock() - t, timeLimit )
 
 	def testTaskListWaitForSequence( self ) :
 
@@ -1721,6 +1723,40 @@ class DispatcherTest( GafferTest.TestCase ) :
 		self.assertEqual( len( s["n2"].log ), 1 )
 		self.assertEqual( len( s["n3"].log ), 2 )
 
+	def testTwoNameSwitches( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		s["n1"] = GafferDispatchTest.LoggingTaskNode()
+		s["n2"] = GafferDispatchTest.LoggingTaskNode()
+		s["n3"] = GafferDispatchTest.LoggingTaskNode()
+
+		s["switch1"] = Gaffer.NameSwitch()
+		s["switch1"].setup( s["n1"]["task"] )
+		s["switch1"]["in"][0]["value"].setInput( s["n1"]["task"] )
+		s["switch1"]["in"][1]["value"].setInput( s["n2"]["task"] )
+		s["switch1"]["in"][1]["name"].setValue( "n2" )
+
+		s["switch2"] = Gaffer.NameSwitch()
+		s["switch2"].setup( s["n1"]["task"] )
+		s["switch2"]["in"][0]["value"].setInput( s["switch1"]["out"]["value"] )
+		s["switch2"]["in"][1]["value"].setInput( s["n3"]["task"] )
+		s["switch2"]["in"][1]["name"].setValue( "n3" )
+
+		s["n4"] = GafferDispatchTest.LoggingTaskNode()
+		s["n4"]["preTasks"][0].setInput( s["switch2"]["out"]["value"] )
+
+		dispatcher = GafferDispatch.Dispatcher.create( "testDispatcher" )
+
+		s["switch1"]["selector"].setValue( "n2" )
+
+		dispatcher.dispatch( [ s["n4"] ] )
+
+		self.assertEqual( len( s["n1"].log ), 0 )
+		self.assertEqual( len( s["n2"].log ), 1 )
+		self.assertEqual( len( s["n3"].log ), 0 )
+		self.assertEqual( len( s["n4"].log ), 1 )
+
 	def testContextProcessor( self ) :
 
 		s = Gaffer.ScriptNode()
@@ -1745,6 +1781,38 @@ class DispatcherTest( GafferTest.TestCase ) :
 		self.assertIn( "test", s["n1"].log[0].context )
 		self.assertEqual( s["n1"].log[0].context["test"], 10 )
 
+	def testTwoContextProcessors( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		s["n1"] = GafferDispatchTest.LoggingTaskNode()
+
+		s["cv1"] = Gaffer.ContextVariables()
+		s["cv1"].setup( s["n1"]["task"] )
+		s["cv1"]["in"].setInput( s["n1"]["task"] )
+		s["cv1"]["variables"].addChild( Gaffer.NameValuePlug( "test1", 10 ) )
+
+		s["cv2"] = Gaffer.ContextVariables()
+		s["cv2"].setup( s["n1"]["task"] )
+		s["cv2"]["in"].setInput( s["cv1"]["out"] )
+		s["cv2"]["variables"].addChild( Gaffer.NameValuePlug( "test2", 20 ) )
+
+		s["n2"] = GafferDispatchTest.LoggingTaskNode()
+		s["n2"]["preTasks"][0].setInput( s["cv2"]["out"] )
+
+		dispatcher = GafferDispatch.Dispatcher.create( "testDispatcher" )
+		dispatcher.dispatch( [ s["n2"] ] )
+
+		self.assertEqual( len( s["n1"].log ), 1 )
+		self.assertEqual( len( s["n2"].log ), 1 )
+
+		self.assertNotIn( "test1", s["n2"].log[0].context )
+		self.assertNotIn( "test2", s["n2"].log[0].context )
+		self.assertIn( "test1", s["n1"].log[0].context )
+		self.assertIn( "test2", s["n1"].log[0].context )
+		self.assertEqual( s["n1"].log[0].context["test1"], 10 )
+		self.assertEqual( s["n1"].log[0].context["test2"], 20 )
+
 	def testTaskPlugsWithoutTaskNodes( self ) :
 
 		s = Gaffer.ScriptNode()
@@ -1761,6 +1829,57 @@ class DispatcherTest( GafferTest.TestCase ) :
 		dispatcher = GafferDispatch.Dispatcher.create( "testDispatcher" )
 		with six.assertRaisesRegex( self, RuntimeError, "TaskPlug \"ScriptNode.badNode.task\" has no TaskNode" ) :
 			dispatcher.dispatch( [ s["taskList"] ] )
+
+	def testContextDrivingDispatcherPlugs( self ) :
+
+		# a  per-frame task with driven dispatcher plugs
+		# |
+		# v  creates context variables that drive dispatcher plugs on `a`
+		# |
+		# b  per-frame task with normal dispatcher plugs
+
+		s = Gaffer.ScriptNode()
+
+		log = []
+		s["a"] = GafferDispatchTest.LoggingTaskNode( log = log )
+		s["a"]["f"] = Gaffer.StringPlug( defaultValue = "####" )
+
+		s["cv"] = Gaffer.ContextVariables()
+		s["cv"].setup( s["a"]["task"] )
+		s["cv"]["in"].setInput( s["a"]["task"] )
+		s["cv"]["variables"].addChild( Gaffer.NameValuePlug( "test", 2 ) )
+
+		s["b"] = GafferDispatchTest.LoggingTaskNode( log = log )
+		s["b"]["preTasks"][0].setInput( s["cv"]["out"] )
+		s["b"]["f"] = Gaffer.StringPlug( defaultValue = "####" )
+
+		dispatcher = GafferDispatch.Dispatcher.create( "testDispatcher" )
+		dispatcher["framesMode"].setValue( GafferDispatch.Dispatcher.FramesMode.CustomRange )
+		dispatcher["frameRange"].setValue( "1-4" )
+
+		# batchSize
+		s["e"] = Gaffer.Expression()
+		s["e"].setExpression( "parent['a']['dispatcher']['batchSize'] = context.get( 'test', 1 )", "python" )
+		dispatcher.dispatch( [ s["b"] ] )
+		self.assertEqual( [ l.node.getName() for l in log ], [ "a", "a", "b", "b", "a", "a", "b", "b" ] )
+		self.assertEqual( [ l.context.getFrame() for l in log ], [ 1, 2, 1, 2, 3, 4, 3, 4 ] )
+
+		# immediate
+		del log[:]
+		s["cv"]["variables"].addChild( Gaffer.NameValuePlug( "testBool", True ) )
+		s["e"].setExpression( "parent['a']['dispatcher']['immediate'] = context.get( 'testBool', False )", "python" )
+		dispatcher.dispatch( [ s["b"] ] )
+		self.assertEqual( [ l.node.getName() for l in log ], [ "a", "a", "a", "a", "b", "b", "b", "b" ] )
+		self.assertEqual( [ l.context.getFrame() for l in log ], [ 1, 2, 3, 4, 1, 2, 3, 4 ] )
+
+		# requiresSequenceExecution
+		del log[:]
+		s["cv"]["variables"].addChild( Gaffer.NameValuePlug( "testBool", True ) )
+		s["e"].setExpression( "parent['a']['requiresSequenceExecution'] = context.get( 'testBool', False )", "python" )
+		dispatcher.dispatch( [ s["b"] ] )
+		self.assertEqual( [ l.node.getName() for l in log ], [ "a", "b", "b", "b", "b" ] )
+		self.assertEqual( log[0].frames, [ 1, 2, 3, 4 ] )
+		self.assertEqual( [ l.context.getFrame() for l in log[1:] ], [ 1, 2, 3, 4 ] )
 
 if __name__ == "__main__":
 	unittest.main()

@@ -62,16 +62,16 @@ namespace
 
 bool internedStringCompare( InternedString a, InternedString b )
 {
-    return a.string() < b.string();
+	return a.string() < b.string();
 }
 
-typedef std::pair<StringAlgo::MatchPattern, ConstColor3fDataPtr> Override;
+using Override = std::pair<StringAlgo::MatchPattern, ConstColor3fDataPtr>;
 std::vector<Override> unpackOverrides( const CompoundDataPlug *plug )
 {
 	std::vector<Override> overrides;
 
 	std::string name;
-	for( NameValuePlugIterator it( plug ); !it.done(); ++it )
+	for( NameValuePlug::Iterator it( plug ); !it.done(); ++it )
 	{
 		// This will fail if the member has been disabled, or has no name
 		if( ConstDataPtr plugData =  plug->memberDataAndName( it->get(), name ) )
@@ -116,7 +116,7 @@ Color3f colorForSetName( const InternedString &name, const std::vector<Override>
 // We're limited in our target GLSL version to fixed size shader array params
 size_t g_maxShaderColors = 9;
 
-static const StringDataPtr fragmentSource()
+const StringDataPtr fragmentSource()
 {
 	static StringDataPtr g_fragmentSource = new IECore::StringData(
 		"#if __VERSION__ <= 120\n"
@@ -167,7 +167,7 @@ ShaderNetworkPtr stripeShader( float stripeWidth, size_t numColorsUsed, const st
 } // end anon namespace
 
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( SetVisualiser );
+GAFFER_NODE_DEFINE_TYPE( SetVisualiser );
 
 size_t SetVisualiser::g_firstPlugIndex = 0;
 

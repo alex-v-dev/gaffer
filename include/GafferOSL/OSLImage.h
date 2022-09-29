@@ -58,7 +58,7 @@ class GAFFEROSL_API OSLImage : public GafferImage::ImageProcessor
 		OSLImage( const std::string &name=defaultName<OSLImage>() );
 		~OSLImage() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferOSL::OSLImage, OSLImageTypeId, GafferImage::ImageProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferOSL::OSLImage, OSLImageTypeId, GafferImage::ImageProcessor );
 
 		GafferImage::FormatPlug *defaultFormatPlug();
 		const GafferImage::FormatPlug *defaultFormatPlug() const;
@@ -98,6 +98,13 @@ class GAFFEROSL_API OSLImage : public GafferImage::ImageProcessor
 		/// caching once there and once in the shadingPlug.
 		Gaffer::ObjectPlug *shadingPlug();
 		const Gaffer::ObjectPlug *shadingPlug() const;
+
+		// Sorted list of affected channels, used to calculate outPlug()->channelNames(), and
+		// bypass computeChannelData for channels which we don't affect.  This can usually be
+		// evaluated without evaluating the shading, but if closure plugs are present, evaluating
+		// this will also evaluate shadingPlug()
+		Gaffer::StringVectorDataPlug *affectedChannelsPlug();
+		const Gaffer::StringVectorDataPlug *affectedChannelsPlug() const;
 
 		void hashShading( const Gaffer::Context *context, IECore::MurmurHash &h ) const;
 		IECore::ConstCompoundDataPtr computeShading( const Gaffer::Context *context ) const;

@@ -97,9 +97,6 @@ class GAFFERUI_API RotateHandle : public Handle
 
 IE_CORE_DECLAREPTR( RotateHandle )
 
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<RotateHandle> > RotateHandleIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<RotateHandle> > RecursiveRotateHandleIterator;
-
 } // namespace GafferUI
 
 #endif // GAFFERUI_ROTATEHANDLE_H

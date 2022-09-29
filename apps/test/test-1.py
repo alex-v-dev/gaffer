@@ -38,6 +38,7 @@
 import glob
 import os
 import sys
+import warnings
 
 import IECore
 import Gaffer
@@ -134,21 +135,23 @@ class test( Gaffer.Application ) :
 
 		import unittest
 
-		testSuite = unittest.TestSuite()
-		for name in args["testCases"] :
-			testCase = unittest.defaultTestLoader.loadTestsFromName( name )
-			testSuite.addTest( testCase )
-
-		if args["performanceOnly"].value :
-			GafferTest.TestRunner.filterPerformanceTests( testSuite )
-
 		for i in range( 0, args["repeat"].value ) :
+
+			testSuite = unittest.TestSuite()
+			for name in args["testCases"] :
+				testCase = unittest.defaultTestLoader.loadTestsFromName( name )
+				testSuite.addTest( testCase )
+
+			if args["performanceOnly"].value :
+				GafferTest.TestRunner.filterPerformanceTests( testSuite )
 
 			testRunner = GafferTest.TestRunner( previousResultsFile = args["previousOutputFile"].value )
 			if args["stopOnFailure"].value :
 				testRunner.failfast = True
 
-			testResult = testRunner.run( testSuite )
+			with warnings.catch_warnings() :
+				warnings.simplefilter( "error", DeprecationWarning )
+				testResult = testRunner.run( testSuite )
 
 			if args["outputFile"].value :
 				testResult.save( args["outputFile"].value )
@@ -163,7 +166,8 @@ class test( Gaffer.Application ) :
 
 		result = set()
 		for path in sys.path :
-			for m in glob.glob( os.path.join( path, "Gaffer*Test" ) ) :
+			modules = glob.glob( os.path.join( path, "Gaffer*Test" ) ) + glob.glob( os.path.join( path, "IECore*Test" ) )
+			for m in modules :
 				result.add( os.path.basename( m ) )
 
 		return sorted( result )

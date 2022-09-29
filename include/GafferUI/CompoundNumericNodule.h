@@ -67,14 +67,16 @@ class GAFFERUI_API CompoundNumericNodule : public StandardNodule
 
 	protected :
 
-		void doRenderLayer( Layer layer, const Style *style ) const override;
+		void renderLayer( Layer layer, const Style *style, RenderReason reason ) const override;
+		unsigned layerMask() const override;
+		Imath::Box3f renderBound() const override;
 
 	private :
 
 		NoduleLayout *noduleLayout();
 		const NoduleLayout *noduleLayout() const;
 
-		void plugMetadataChanged( IECore::TypeId nodeTypeId, const IECore::StringAlgo::MatchPattern &plugPath, IECore::InternedString key, const Gaffer::Plug *plug );
+		void plugMetadataChanged( const Gaffer::Plug *plug, IECore::InternedString key );
 		void updateChildNoduleVisibility();
 
 		static NoduleTypeDescription<CompoundNumericNodule> g_noduleTypeDescription;
@@ -82,9 +84,6 @@ class GAFFERUI_API CompoundNumericNodule : public StandardNodule
 };
 
 IE_CORE_DECLAREPTR( CompoundNumericNodule );
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<CompoundNumericNodule> > CompoundNumericNoduleIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<CompoundNumericNodule> > RecursiveCompoundNumericNoduleIterator;
 
 } // namespace GafferUI
 

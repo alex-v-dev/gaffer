@@ -211,12 +211,10 @@ class ShaderAssignmentTest( GafferSceneTest.SceneTestCase ) :
 		s["b"]["out"] = Gaffer.Plug( flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, direction = Gaffer.Plug.Direction.Out )
 
 		# Shader assignments should accept connections speculatively
-		# from unconnected box inputs and outputs. We use `execute()` for
-		# this because the backwards compatibility is provided only when
-		# a script is loading.
+		# from unconnected box inputs and outputs.
 
-		s.execute( """script["b"]["a"]["shader"].setInput( script["b"]["in"] )""" )
-		s.execute( """script["a"]["shader"].setInput( script["b"]["out"] )""" )
+		s["b"]["a"]["shader"].setInput( s["b"]["in"] )
+		s["a"]["shader"].setInput( s["b"]["out"] )
 
 		# but should reject connections to connected box inputs and outputs
 		# if they're unsuitable.
@@ -262,7 +260,7 @@ class ShaderAssignmentTest( GafferSceneTest.SceneTestCase ) :
 		script["s"] = Gaffer.Switch()
 		script["s"].setup( Gaffer.Plug() )
 
-		script.execute( """script["a"]["shader"].setInput( script["s"]["out"] )""" )
+		script["a"]["shader"].setInput( script["s"]["out"] )
 		self.assertTrue( script["a"]["shader"].getInput().isSame( script["s"]["out"] ) )
 
 	def testAcceptsNoneInputs( self ) :
@@ -280,10 +278,29 @@ class ShaderAssignmentTest( GafferSceneTest.SceneTestCase ) :
 		script["d"] = Gaffer.Dot()
 		script["d"].setup( script["s"]["out"] )
 
-		# Input only accepted during execution, for backwards compatibility
-		# when loading old scripts.
-		script.execute( """script["a"]["shader"].setInput( script["d"]["out"] )""" )
+		# The Dot doesn't know about Shaders, and just has a Color3fPlug
+		# input, so it should accept input from any old Color3fPlug, not
+		# merely shader outputs.
+
+		script["r"] = Gaffer.Random()
+		self.assertTrue( script["d"]["in"].acceptsInput( script["r"]["outColor"] ) )
+
+		# And we should be able to connect the Dot into the
+		# ShaderAssignment even if the Dot doesn't have an input
+		# yet. The user should be able to wire the graph up in any
+		# order, provided we end up with a valid network.
+
+		script["a"]["shader"].setInput( script["d"]["out"] )
 		self.assertTrue( script["a"]["shader"].getInput().isSame( script["d"]["out"] ) )
+
+		# But once that is done, the Dot should reject
+		# inputs that the ShaderAssignment can't handle.
+
+		self.assertFalse( script["d"]["in"].acceptsInput( script["r"]["outColor"] ) )
+
+		# And only accept inputs from a Shader.
+
+		self.assertTrue( script["d"]["in"].acceptsInput( script["s"]["out"] ) )
 
 	def testFilterInputAcceptanceFromReferences( self ) :
 
@@ -489,7 +506,7 @@ class ShaderAssignmentTest( GafferSceneTest.SceneTestCase ) :
 		# And this should hold true even if the switch has a context-varying
 		# index.
 		random = Gaffer.Random()
-		random["contextEntry"].setValue( "frame" )
+		random["seedVariable"].setValue( "frame" )
 		switch["index"].setInput( random["outFloat"] )
 		self.assertFalse( assignment["shader"].acceptsInput( switch["out"] ) )
 
@@ -601,6 +618,44 @@ class ShaderAssignmentTest( GafferSceneTest.SceneTestCase ) :
 		script.load()
 
 		self.assertNotIn( "__contextCompatibility", script["ShaderAssignment"] )
+
+	def testSwitchGraphDestruction( self ) :
+
+		script = Gaffer.ScriptNode()
+		script["fileName"].setValue( os.path.join( os.path.dirname( __file__ ), "scripts", "shaderAssignmentSwitchProblem.gfr" ) )
+		script.load()
+
+		# This exposed a bug whereby `ShaderPlug.acceptsInput()` rejected an input as the inputs
+		# were being removed between nodes during script destruction.
+		del script
+
+	def testLabelOverride( self ) :
+
+		shader = GafferSceneTest.TestShader()
+		shader["type"].setValue( "test:surface" )
+		shader["name"].setValue( "shader1" )
+
+		shader2 = GafferSceneTest.TestShader()
+		shader2["type"].setValue( "test:surface" )
+		shader2["name"].setValue( "shader2" )
+
+		plane = GafferScene.Plane()
+		planeFilter = GafferScene.PathFilter()
+		planeFilter["paths"].setValue( IECore.StringVectorData( [ "/plane" ] ) )
+
+		assignment = GafferScene.ShaderAssignment()
+		assignment["in"].setInput( plane["out"] )
+		assignment["filter"].setInput( planeFilter["out"] )
+		assignment["shader"].setInput( shader["out"] )
+
+		output = assignment["out"].attributes( "/plane" )["test:surface"].outputShader()
+		self.assertEqual( output.name, "shader1" )
+		self.assertEqual( output.blindData()["label"], IECore.StringData( "TestShader" ) )
+
+		assignment["label"].setValue( "glass" )
+		output = assignment["out"].attributes( "/plane" )["test:surface"].outputShader()
+		self.assertEqual( output.name, "shader1" )
+		self.assertEqual( output.blindData()["label"], IECore.StringData( "glass" ) )
 
 if __name__ == "__main__":
 	unittest.main()

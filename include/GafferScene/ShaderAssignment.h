@@ -41,6 +41,8 @@
 #include "GafferScene/AttributeProcessor.h"
 #include "GafferScene/ShaderPlug.h"
 
+#include "Gaffer/StringPlug.h"
+
 namespace GafferScene
 {
 
@@ -52,10 +54,13 @@ class GAFFERSCENE_API ShaderAssignment : public AttributeProcessor
 		ShaderAssignment( const std::string &name=defaultName<ShaderAssignment>() );
 		~ShaderAssignment() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::ShaderAssignment, ShaderAssignmentTypeId, AttributeProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::ShaderAssignment, ShaderAssignmentTypeId, AttributeProcessor );
 
 		GafferScene::ShaderPlug *shaderPlug();
 		const GafferScene::ShaderPlug *shaderPlug() const;
+
+		Gaffer::StringPlug *labelPlug();
+		const Gaffer::StringPlug *labelPlug() const;
 
 	protected :
 

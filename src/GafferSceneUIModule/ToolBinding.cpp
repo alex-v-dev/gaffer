@@ -64,9 +64,21 @@ using namespace GafferSceneUI;
 namespace
 {
 
+Gaffer::Box2fPlugPtr cropWindowToolPlugWrapper( CropWindowTool &tool )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return tool.plug();
+}
+
+Gaffer::BoolPlugPtr cropWindowToolEnabledPlugWrapper( CropWindowTool &tool )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return tool.enabledPlug();
+}
+
 struct StatusChangedSlotCaller
 {
-	boost::signals::detail::unusable operator()( boost::python::object slot, CropWindowTool &t )
+	void operator()( boost::python::object slot, CropWindowTool &t )
 	{
 		try
 		{
@@ -76,7 +88,6 @@ struct StatusChangedSlotCaller
 		{
 			IECorePython::ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
 	}
 };
 
@@ -104,7 +115,7 @@ bool selectionEditable( const TransformTool &tool )
 
 struct SelectionChangedSlotCaller
 {
-	boost::signals::detail::unusable operator()( boost::python::object slot, TransformTool &t )
+	void operator()( boost::python::object slot, TransformTool &t )
 	{
 		try
 		{
@@ -114,7 +125,6 @@ struct SelectionChangedSlotCaller
 		{
 			IECorePython::ExceptionAlgo::translatePythonException();
 		}
-		return boost::signals::detail::unusable();
 	}
 };
 
@@ -173,7 +183,10 @@ void GafferSceneUIModule::bindTools()
 
 	{
 		GafferBindings::NodeClass<CropWindowTool>( nullptr, no_init )
+			.def( init<GafferUI::View *>() )
 			.def( "status", &CropWindowTool::status )
+			.def( "plug", &cropWindowToolPlugWrapper )
+			.def( "enabledPlug", &cropWindowToolEnabledPlugWrapper )
 			.def( "statusChangedSignal", &CropWindowTool::statusChangedSignal, return_internal_reference<1>() )
 		;
 

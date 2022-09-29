@@ -52,7 +52,7 @@ class GAFFERIMAGE_API CollectImages : public ImageProcessor
 		CollectImages( const std::string &name=defaultName<CollectImages>() );
 		~CollectImages() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::CollectImages, CollectImagesTypeId, ImageProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::CollectImages, CollectImagesTypeId, ImageProcessor );
 
 		Gaffer::StringVectorDataPlug *rootLayersPlug();
 		const Gaffer::StringVectorDataPlug *rootLayersPlug() const;
@@ -63,6 +63,9 @@ class GAFFERIMAGE_API CollectImages : public ImageProcessor
 		void affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const override;
 
 	protected :
+
+		void hashViewNames( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
+		IECore::ConstStringVectorDataPtr computeViewNames( const Gaffer::Context *context, const ImagePlug *parent ) const override;
 
 		void hashFormat( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		GafferImage::Format computeFormat( const Gaffer::Context *context, const ImagePlug *parent ) const override;

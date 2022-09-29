@@ -1,4 +1,9 @@
+# BuildTarget: images/hierarchyView.png
 # BuildTarget: images/sceneInspector.png
+# BuildTarget: images/sceneInspectorAttributesSection.png
+# BuildTarget: images/sceneInspectorBoundSection.png
+# BuildTarget: images/sceneInspectorObjectSection.png
+# BuildTarget: images/sceneInspectorTransformSection.png
 
 import IECore
 import time
@@ -29,7 +34,7 @@ script["AppleseedAttributes"]["attributes"]["shadingSamples"]["enabled"].setValu
 script["AppleseedAttributes"]["attributes"]["shadingSamples"]["value"].setValue( 4 )
 script["Set"]["name"].setValue( "hands" )
 script["Set"]["paths"].setValue( IECore.StringVectorData( [ '/GAFFERBOT' ] ) )
-script.selection().add( script["Set"] )
+script.setFocus( script["Set"] )
 __path = "/GAFFERBOT/C_torso_GRP/R_armUpper_GRP/R_armLower_GRP/R_clawBottom_GRP/R_clawBottom_CPT/R_clawBottom001_REN"
 
 # The Scene Inspector
@@ -43,8 +48,7 @@ hierarchyView = scriptWindow.getLayout().editors( GafferSceneUI.HierarchyView )[
 GafferUI.WidgetAlgo.grab( widget = hierarchyView, imagePath = "images/hierarchyView.png" )
 
 # The Selection tab of the Scene Inspector with a location selected
-script.selection().clear()
-script.selection().add( script["SceneReader"] )
+script.setFocus( script["SceneReader"] )
 with GafferUI.Window( "Scene Inspector" ) as window :
 
 	sceneInspector = GafferSceneUI.SceneInspector( script )

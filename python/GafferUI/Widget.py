@@ -38,6 +38,7 @@
 import weakref
 import inspect
 import warnings
+import six
 import imath
 
 import IECore
@@ -99,7 +100,7 @@ from Qt import QtWidgets
 # have identical signatures in as many places as possible, with the possibility of perhaps having
 # a common base class in the future. Right now the signatures are the same for the event signals and
 # for the tool tips.
-class Widget( Gaffer.Trackable ) :
+class Widget( Gaffer.Signals.Trackable ) :
 
 	## All GafferUI.Widget instances must hold a corresponding QtWidgets.QWidget instance
 	# which provides the top level implementation for the widget, and to which other
@@ -115,7 +116,7 @@ class Widget( Gaffer.Trackable ) :
 	# automatic `parent.addChild()` call.
 	def __init__( self, topLevelWidget, toolTip="", parenting = None ) :
 
-		Gaffer.Trackable.__init__( self )
+		Gaffer.Signals.Trackable.__init__( self )
 
 		assert( isinstance( topLevelWidget, ( QtWidgets.QWidget, Widget ) ) )
 
@@ -195,6 +196,11 @@ class Widget( Gaffer.Trackable ) :
 				break
 			c = c.__bases__[0]
 
+		if isinstance( self, GafferUI.Window ) :
+			# We need keypress events at the window level
+			# in `_EventFilter.__dragKeyPress()`.
+			self.__ensureEventFilter()
+
 		self.setToolTip( toolTip )
 
 		self.__applyQWidgetStyleClasses()
@@ -233,21 +239,21 @@ class Widget( Gaffer.Trackable ) :
 	# parent Widgets.
 	def getVisible( self ) :
 
- 		# I'm very reluctant to have an explicit visibility field on Widget like this,
- 		# as you'd think that would be duplicating the real information Qt holds inside
- 		# QWidget. But Qt shows and hides things behind your back when parenting widgets,
- 		# so there's no real way of knowing whether the Qt visibility is a result of
- 		# your explicit actions or of Qt's implicit actions. Qt does have a flag
- 		# WA_WState_ExplicitShowHide which appears to record whether or not the current
- 		# visibility was requested explicitly, but in the case that that is false,
- 		# I can't see a way of determining what the explicit visibility should be
- 		# without tracking it separately. The only time our idea of visibility should
- 		# differ from Qt's is if we're a parentless widget, so at least most of the time
- 		# the assertion covers our asses a bit.
- 		if self.__qtWidget.parent() or isinstance( self, GafferUI.Window ) :
- 			assert( self.__visible == ( not self.__qtWidget.isHidden() ) )
+		# I'm very reluctant to have an explicit visibility field on Widget like this,
+		# as you'd think that would be duplicating the real information Qt holds inside
+		# QWidget. But Qt shows and hides things behind your back when parenting widgets,
+		# so there's no real way of knowing whether the Qt visibility is a result of
+		# your explicit actions or of Qt's implicit actions. Qt does have a flag
+		# WA_WState_ExplicitShowHide which appears to record whether or not the current
+		# visibility was requested explicitly, but in the case that that is false,
+		# I can't see a way of determining what the explicit visibility should be
+		# without tracking it separately. The only time our idea of visibility should
+		# differ from Qt's is if we're a parentless widget, so at least most of the time
+		# the assertion covers our asses a bit.
+		if self.__qtWidget.parent() or isinstance( self, GafferUI.Window ) :
+			assert( self.__visible == ( not self.__qtWidget.isHidden() ) )
 
- 		return self.__visible
+		return self.__visible
 
 	## Returns True if this Widget and all its parents up to the specified
 	# ancestor are visible.
@@ -491,6 +497,8 @@ class Widget( Gaffer.Trackable ) :
 
 		if self._dragEnterSignal is None :
 			self._dragEnterSignal = GafferUI.WidgetEventSignal()
+			self.__ensureEventFilter()
+			self.__ensureMouseTracking()
 		return self._dragEnterSignal
 
 	## This signal is emitted when a drag is moving within a Widget which
@@ -499,6 +507,8 @@ class Widget( Gaffer.Trackable ) :
 
 		if self._dragMoveSignal is None :
 			self._dragMoveSignal = GafferUI.WidgetEventSignal()
+			self.__ensureEventFilter()
+			self.__ensureMouseTracking()
 		return self._dragMoveSignal
 
 	## This signal is emitted on the previous target when a new Widget
@@ -507,6 +517,8 @@ class Widget( Gaffer.Trackable ) :
 
 		if self._dragLeaveSignal is None :
 			self._dragLeaveSignal = GafferUI.WidgetEventSignal()
+			self.__ensureEventFilter()
+			self.__ensureMouseTracking()
 		return self._dragLeaveSignal
 
 	## This signal is emitted when a drop is made within a Widget which
@@ -584,7 +596,7 @@ class Widget( Gaffer.Trackable ) :
 	# is called.
 	def setToolTip( self, toolTip ) :
 
-		assert( isinstance( toolTip, basestring ) )
+		assert( isinstance( toolTip, six.string_types ) )
 
 		self._qtWidget().setToolTip( toolTip )
 
@@ -709,7 +721,7 @@ class Widget( Gaffer.Trackable ) :
 	def __initNesting() :
 
 		widgetsInInit = set()
-		frame = inspect.currentframe( 1 )
+		frame = inspect.currentframe()
 		while frame :
 			if frame.f_code.co_name=="__init__" :
 				frameSelf = frame.f_locals[frame.f_code.co_varnames[0]]
@@ -720,24 +732,6 @@ class Widget( Gaffer.Trackable ) :
 		return len( widgetsInInit )
 
 	__parentStack = []
-
-	## We detect the use of deprecated keyword arguments in Widget.__init__,
-	# but the actual call site using those arguments can be at an arbitrary
-	# distance away on the stack - this function finds the location so we
-	# can provide an accurate error.
-	def __keywordArgumentDeprecationNesting( self ) :
-
-		frame = inspect.currentframe( 1 )
-		result = 1
-		frameIndex = 1
-		while frame :
-			if frame.f_code.co_name=="__init__" :
-				if frame.f_locals[frame.f_code.co_varnames[0]] is self :
-					result = frameIndex
-			frame = frame.f_back
-			frameIndex += 1
-
-		return result + 1
 
 	## Converts a Qt key code into a string
 	@classmethod
@@ -758,7 +752,7 @@ class Widget( Gaffer.Trackable ) :
 	@staticmethod
 	def _buttons( qtButtons ) :
 
-		result = GafferUI.ButtonEvent.Buttons.None
+		result = GafferUI.ButtonEvent.Buttons.None_
 		if qtButtons & QtCore.Qt.LeftButton :
 			result |= GafferUI.ButtonEvent.Buttons.Left
 		if qtButtons & QtCore.Qt.MidButton :
@@ -772,7 +766,7 @@ class Widget( Gaffer.Trackable ) :
 	@staticmethod
 	def _modifiers( qtModifiers ) :
 
-		modifiers = GafferUI.ModifiableEvent.Modifiers.None
+		modifiers = GafferUI.ModifiableEvent.Modifiers.None_
 		if qtModifiers & QtCore.Qt.ShiftModifier :
 			modifiers = modifiers | GafferUI.ModifiableEvent.Modifiers.Shift
 		if qtModifiers & QtCore.Qt.ControlModifier :
@@ -815,7 +809,7 @@ class Widget( Gaffer.Trackable ) :
 			self._qtWidget().setMouseTracking( True )
 
 
-	__focusChangedSignal = Gaffer.Signal2()
+	__focusChangedSignal = Gaffer.Signals.Signal2()
 	__focusChangedConnected = False
 	@classmethod
 	def __ensureFocusChangedConnection( cls ) :
@@ -934,7 +928,7 @@ class _EventFilter( QtCore.QObject ) :
 
 		elif qEventType==qEvent.Show or qEventType==qEvent.Hide :
 
-			self.__showHide( qObject, qEvent )
+			return self.__showHide( qObject, qEvent )
 
 		# but for anything else we ignore disabled widgets
 		if not qObject.isEnabled() :
@@ -1006,7 +1000,7 @@ class _EventFilter( QtCore.QObject ) :
 
 	def __keyPress( self, qObject, qEvent ) :
 
-		if self.__updateDragModifiers( qObject, qEvent ) :
+		if self.__dragKeyPress( qObject, qEvent ) :
 			return True
 
 		widget = Widget._owner( qObject )
@@ -1045,14 +1039,29 @@ class _EventFilter( QtCore.QObject ) :
 
 		return False
 
+	def __virtualButtons( self, qtButtons ):
+		result = Widget._buttons( qtButtons )
+		if self.__dragDropEvent is not None and self.__dragDropEvent.__startedByKeyPress :
+			result |= GafferUI.ButtonEvent.Buttons.Left
+		return GafferUI.ButtonEvent.Buttons( result )
+
 	def __mouseButtonPress( self, qObject, qEvent ) :
+
+		if (
+			self.__dragDropEvent is not None and self.__dragDropEvent.__startedByKeyPress
+			and ( Widget._buttons( qEvent.button() ) & GafferUI.ButtonEvent.Buttons.Left )
+		) :
+			# We are doing a virtual drag based on a keypress, but once the actual mouse button gets pressed,
+			# we replace it with an actual drag.
+			self.__dragDropEvent.__startedByKeyPress = False
+			return True
 
 		widget = Widget._owner( qObject )
 		if widget._buttonPressSignal is not None :
 			event = GafferUI.ButtonEvent(
 				Widget._buttons( qEvent.button() ),
-				Widget._buttons( qEvent.buttons() ),
-				self.__positionToLine( qEvent.pos() ),
+				self.__virtualButtons( qEvent.buttons() ),
+				self.__widgetSpaceLine( qEvent, widget ),
 				0.0,
 				Widget._modifiers( qEvent.modifiers() ),
 			)
@@ -1068,7 +1077,8 @@ class _EventFilter( QtCore.QObject ) :
 
 	def __mouseButtonRelease( self, qObject, qEvent ) :
 
-		if self.__dragDropEvent is not None :
+		buttons = self.__virtualButtons( qEvent.buttons() )
+		if self.__dragDropEvent is not None and ( buttons & self.__dragDropEvent.buttons ) == 0 :
 			return self.__endDrag( qObject, qEvent )
 		else :
 
@@ -1080,8 +1090,8 @@ class _EventFilter( QtCore.QObject ) :
 
 				event = GafferUI.ButtonEvent(
 					Widget._buttons( qEvent.button() ),
-					Widget._buttons( qEvent.buttons() ),
-					self.__positionToLine( qEvent.pos() ),
+					buttons,
+					self.__widgetSpaceLine( qEvent, widget ),
 					0.0,
 					Widget._modifiers( qEvent.modifiers() ),
 				)
@@ -1100,7 +1110,7 @@ class _EventFilter( QtCore.QObject ) :
 			event = GafferUI.ButtonEvent(
 				Widget._buttons( qEvent.button() ),
 				Widget._buttons( qEvent.buttons() ),
-				self.__positionToLine( qEvent.pos() ),
+				self.__widgetSpaceLine( qEvent, widget ),
 				0.0,
 				Widget._modifiers( qEvent.modifiers() ),
 			)
@@ -1119,8 +1129,8 @@ class _EventFilter( QtCore.QObject ) :
 
 			event = GafferUI.ButtonEvent(
 				Widget._buttons( qEvent.button() ),
-				Widget._buttons( qEvent.buttons() ),
-				self.__positionToLine( qEvent.pos() ),
+				self.__virtualButtons( qEvent.buttons() ),
+				self.__widgetSpaceLine( qEvent, widget ),
 				0.0,
 				Widget._modifiers( qEvent.modifiers() ),
 			)
@@ -1151,9 +1161,9 @@ class _EventFilter( QtCore.QObject ) :
 		if widget._wheelSignal is not None :
 
 			event = GafferUI.ButtonEvent(
-				GafferUI.ButtonEvent.Buttons.None,
-				Widget._buttons( qEvent.buttons() ),
-				self.__positionToLine( qEvent.pos() ),
+				GafferUI.ButtonEvent.Buttons.None_,
+				self.__virtualButtons( qEvent.buttons() ),
+				self.__widgetSpaceLine( qEvent, widget ),
 				qEvent.delta() / 8.0,
 				Widget._modifiers( qEvent.modifiers() ),
 			)
@@ -1208,7 +1218,7 @@ class _EventFilter( QtCore.QObject ) :
 
 		return False
 
-	def __startDrag( self, qObject, qEvent ) :
+	def __startDrag( self, qObject, qEvent, forKeyPress = False ) :
 
 		if self.__lastButtonPressWidget is None :
 			return False
@@ -1223,12 +1233,13 @@ class _EventFilter( QtCore.QObject ) :
 			self.__lastButtonPressWidget = None
 			return False
 
-		if ( self.__lastButtonPressEvent.line.p0 - self.__positionToLine( qEvent.pos() ).p0 ).length() < 3 :
-			return False
-
 		sourceWidget = self.__lastButtonPressWidget()
 		if sourceWidget is None :
 			# the widget died
+			return False
+
+		threshold = 3 if not forKeyPress else 0
+		if ( self.__lastButtonPressEvent.line.p0 - self.__widgetSpaceLine( qEvent, sourceWidget ).p0 ).length() < threshold :
 			return False
 
 		if sourceWidget._dragBeginSignal is None :
@@ -1242,6 +1253,7 @@ class _EventFilter( QtCore.QObject ) :
 		)
 		dragDropEvent.sourceWidget = sourceWidget
 		dragDropEvent.destinationWidget = None
+		dragDropEvent.__startedByKeyPress = forKeyPress
 
 		dragData = sourceWidget._dragBeginSignal( sourceWidget, dragDropEvent )
 		if dragData is not None :
@@ -1258,21 +1270,18 @@ class _EventFilter( QtCore.QObject ) :
 
 	def __doDragEnterAndLeave( self, qObject, qEvent ) :
 
-		cursorPos = imath.V2i( qEvent.globalPos().x(), qEvent.globalPos().y() )
-		candidateWidget = Widget.widgetAt( cursorPos )
-
-		if candidateWidget is self.__dragDropEvent.destinationWidget :
-			return
+		candidateWidget = Widget.widgetAt( imath.V2i( qEvent.globalPos().x(), qEvent.globalPos().y() ) )
 
 		newDestinationWidget = None
-		if candidateWidget is not None :
-			while candidateWidget is not None :
-				if candidateWidget._dragEnterSignal is not None :
-					self.__dragDropEvent.line = self.__positionToLine( cursorPos - candidateWidget.bound().min() )
-					if candidateWidget._dragEnterSignal( candidateWidget, self.__dragDropEvent ) :
-						newDestinationWidget = candidateWidget
-						break
-				candidateWidget = candidateWidget.parent()
+		while candidateWidget is not None :
+			if candidateWidget is self.__dragDropEvent.destinationWidget :
+				return
+			if candidateWidget._dragEnterSignal is not None :
+				self.__dragDropEvent.line = self.__widgetSpaceLine( qEvent, candidateWidget )
+				if candidateWidget._dragEnterSignal( candidateWidget, self.__dragDropEvent ) :
+					newDestinationWidget = candidateWidget
+					break
+			candidateWidget = candidateWidget.parent()
 
 		if newDestinationWidget is None :
 			if self.__dragDropEvent.destinationWidget is self.__dragDropEvent.sourceWidget :
@@ -1285,7 +1294,7 @@ class _EventFilter( QtCore.QObject ) :
 			previousDestinationWidget = self.__dragDropEvent.destinationWidget
 			self.__dragDropEvent.destinationWidget = newDestinationWidget
 			if previousDestinationWidget is not None and previousDestinationWidget._dragLeaveSignal is not None :
-				self.__dragDropEvent.line = self.__positionToLine( cursorPos - previousDestinationWidget.bound().min() )
+				self.__dragDropEvent.line = self.__widgetSpaceLine( qEvent, previousDestinationWidget )
 				previousDestinationWidget._dragLeaveSignal( previousDestinationWidget, self.__dragDropEvent )
 
 	def __updateDrag( self, qObject, qEvent ) :
@@ -1302,10 +1311,7 @@ class _EventFilter( QtCore.QObject ) :
 			return True
 
 		if dst._dragMoveSignal :
-
-			cursorPos = imath.V2i( qEvent.globalPos().x(), qEvent.globalPos().y() )
-			self.__dragDropEvent.line = self.__positionToLine( cursorPos - dst.bound().min() )
-
+			self.__dragDropEvent.line = self.__widgetSpaceLine( qEvent, dst )
 			dst._dragMoveSignal( dst, self.__dragDropEvent )
 
 		return True
@@ -1342,12 +1348,10 @@ class _EventFilter( QtCore.QObject ) :
 
 		# Emit dropSignal() on the destination.
 
-		cursorPos = imath.V2i( qEvent.globalPos().x(), qEvent.globalPos().y() )
-
 		dst = dragDropEvent.destinationWidget
 		if dst is not None and dst._dropSignal :
 
-			dragDropEvent.line = self.__positionToLine( cursorPos - dst.bound().min() )
+			dragDropEvent.line = self.__widgetSpaceLine( qEvent, dst )
 			dragDropEvent.dropResult = dst._dropSignal( dst, dragDropEvent )
 
 		# Emit dragEndSignal() on source.
@@ -1355,7 +1359,7 @@ class _EventFilter( QtCore.QObject ) :
 		src = dragDropEvent.sourceWidget
 		if src._dragEndSignal :
 
-			dragDropEvent.line = self.__positionToLine( cursorPos - src.bound().min() )
+			dragDropEvent.line = self.__widgetSpaceLine( qEvent, src )
 
 			src._dragEndSignal(
 				src,
@@ -1364,16 +1368,72 @@ class _EventFilter( QtCore.QObject ) :
 
 		return True
 
-	def __positionToLine( self, pos ) :
+	def __dragKeyPress( self, qObject, qKeyEvent ) :
 
-		if isinstance( pos, imath.V2i ) :
-			x, y = pos.x, pos.y
+		if self.__updateDragModifiers( qObject, qKeyEvent ) :
+			return True
+
+		if qKeyEvent.key() != QtCore.Qt.Key_G or qKeyEvent.modifiers() :
+			return False
+
+		if self.__dragDropEvent is None :
+
+			# Start drag by simulating a mouse press
+
+			if not isinstance( GafferUI.Widget._owner( qObject ), GafferUI.Window ) :
+				# Only start a drag if no widget lower in the hierarchy wanted
+				# the keypress.
+				return False
+
+			globalPos = QtGui.QCursor.pos()
+			qWidget = QtWidgets.QApplication.instance().widgetAt( globalPos )
+			if qWidget is None :
+				return
+
+			qEvent = QtGui.QMouseEvent(
+				QtCore.QEvent.MouseButtonPress,
+				qWidget.mapFromGlobal( globalPos ),
+				globalPos,
+				QtCore.Qt.LeftButton,
+				QtCore.Qt.LeftButton,
+				qKeyEvent.modifiers()
+			)
+
+			if self.__mouseButtonPress( qWidget, qEvent ) :
+				self.__startDrag( qWidget, qEvent, forKeyPress = True )
+				return True
+
 		else :
-			x, y = pos.x(), pos.y()
+
+			# End drag
+
+			globalPos = QtGui.QCursor.pos()
+			qWidget = self.__dragDropEvent.sourceWidget._qtWidget()
+
+			qEvent = QtGui.QMouseEvent(
+				QtCore.QEvent.MouseButtonRelease,
+				qWidget.mapFromGlobal( globalPos ),
+				globalPos,
+				QtCore.Qt.LeftButton,
+				QtCore.Qt.NoButton,
+				qKeyEvent.modifiers()
+			)
+
+			self.__endDrag( self.__dragDropEvent.sourceWidget._qtWidget(), qEvent )
+			return True
+
+	# Maps the position of the supplied Qt mouse event into the coordinate
+	# space of the target Gaffer widget. This is required as certain widget
+	# configurations (eg: QTableView with a visible header) result in qEvent
+	# coordinate origins differing from the Gaffer Widget's origin.
+	def __widgetSpaceLine( self, qEvent, targetWidget ) :
+
+		cursorPos = imath.V2i( qEvent.globalPos().x(), qEvent.globalPos().y() )
+		cursorPos -= targetWidget.bound().min()
 
 		return IECore.LineSegment3f(
-			imath.V3f( x, y, 1 ),
-			imath.V3f( x, y, 0 )
+			imath.V3f( cursorPos.x, cursorPos.y, 1 ),
+			imath.V3f( cursorPos.x, cursorPos.y, 0 )
 		)
 
 # this single instance is used by all widgets

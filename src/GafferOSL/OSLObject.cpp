@@ -52,8 +52,9 @@
 
 #include "IECore/MessageHandler.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace IECoreScene;
@@ -61,7 +62,7 @@ using namespace Gaffer;
 using namespace GafferScene;
 using namespace GafferOSL;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( OSLObject );
+GAFFER_NODE_DEFINE_TYPE( OSLObject );
 
 size_t OSLObject::g_firstPlugIndex;
 
@@ -369,6 +370,11 @@ IECore::ConstObjectPtr OSLObject::computeProcessedObject( const ScenePath &path,
 	return outputPrimitive;
 }
 
+Gaffer::ValuePlug::CachePolicy OSLObject::processedObjectComputeCachePolicy() const
+{
+	return ValuePlug::CachePolicy::TaskCollaboration;
+}
+
 bool OSLObject::adjustBounds() const
 {
 	if( !Deformer::adjustBounds() )
@@ -458,7 +464,7 @@ void OSLObject::updatePrimitiveVariables()
 
 	std::string code = "closure color out = 0;\n";
 
-	for( NameValuePlugIterator inputPlug( primitiveVariablesPlug() ); !inputPlug.done(); ++inputPlug )
+	for( NameValuePlug::Iterator inputPlug( primitiveVariablesPlug() ); !inputPlug.done(); ++inputPlug )
 	{
 		std::string prefix = "";
 		BoolPlug* enabledPlug = (*inputPlug)->enabledPlug();

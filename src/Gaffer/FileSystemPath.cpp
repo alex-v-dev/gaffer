@@ -51,8 +51,18 @@
 #include "boost/filesystem.hpp"
 #include "boost/filesystem/operations.hpp"
 
-#include <grp.h>
-#include <pwd.h>
+#ifndef _MSC_VER
+	#include <grp.h>
+	#include <pwd.h>
+#else
+	#include <stdio.h>
+	#include <Windows.h>
+	#include <tchar.h>
+	#include "accctrl.h"
+	#include "aclapi.h"
+#endif
+
+#include <regex>
 #include <sys/stat.h>
 
 using namespace std;
@@ -62,6 +72,143 @@ using namespace boost::posix_time;
 using namespace IECore;
 using namespace Gaffer;
 
+//////////////////////////////////////////////////////////////////////////
+// Internal utilities
+//////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+#ifdef _MSC_VER
+
+std::string getFileSecurityInfo( const std::string &pathString, SECURITY_INFORMATION info )
+{
+	/// \todo : There may be optimizations to be had by caching credentials such
+	/// as the results of `LookupAccountSid` to avoid costly Windows API calls.
+	PSID pSidOwner = NULL;
+	PSID pSidGroup = NULL;
+	PSID pSid = NULL;
+	BOOL bRtnBool = TRUE;
+	LPTSTR AcctName = NULL;
+	LPTSTR DomainName = NULL;
+	DWORD dwAcctName = 1;
+	DWORD dwDomainName = 1;
+	SID_NAME_USE eUse = SidTypeUnknown;
+
+	DWORD result = GetNamedSecurityInfo(
+		pathString.c_str(),
+		SE_FILE_OBJECT,
+		OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+		&pSidOwner,
+		&pSidGroup,
+		NULL,  // Out : DACL
+		NULL,  // Out : SACL
+		NULL  // Out : Security Descriptor
+	);
+
+	if( info == OWNER_SECURITY_INFORMATION )
+	{
+		pSid = pSidOwner;
+	}
+	else if( info == GROUP_SECURITY_INFORMATION )
+	{
+		pSid = pSidGroup;
+	}
+	else
+	{
+		return "";
+	}
+
+	// First call to LookupAccountSid to get the buffer sizes.
+	bRtnBool = LookupAccountSid(
+		NULL,
+		pSid,
+		AcctName,
+		( LPDWORD )&dwAcctName,
+		DomainName,
+		( LPDWORD )&dwDomainName,
+		&eUse
+	);
+
+	// Reallocate memory for the buffers.
+	AcctName = ( LPTSTR )GlobalAlloc( GMEM_FIXED, dwAcctName );
+
+	// Check GetLastError for GlobalAlloc error condition.
+	if (AcctName == NULL)
+	{
+		return "";
+	}
+
+	DomainName = ( LPTSTR )GlobalAlloc( GMEM_FIXED, dwDomainName );
+
+	// Check GetLastError for GlobalAlloc error condition.
+	if ( DomainName == NULL )
+	{
+		return "";
+	}
+
+	// Second call to LookupAccountSid to get the account name.
+	bRtnBool = LookupAccountSid(
+		NULL,
+		pSid,
+		AcctName,
+		(LPDWORD)&dwAcctName,
+		DomainName,
+		(LPDWORD)&dwDomainName,
+		&eUse
+	);
+
+	if ( bRtnBool == FALSE )
+	{
+		return "";
+	}
+
+	return AcctName;
+}
+
+#endif
+
+std::string getFileOwner( const std::string &pathString )
+{
+	std::string value;
+#ifndef _MSC_VER
+	struct stat s;
+	stat(pathString.c_str(), &s);
+	struct passwd *pw = getpwuid(s.st_uid);
+	return pw ? pw->pw_name : "";
+
+#else
+
+	return getFileSecurityInfo( pathString, OWNER_SECURITY_INFORMATION );
+
+#endif
+
+}
+
+std::string getFileGroup( const std::string &pathString )
+{
+	std::string value;
+#ifndef _MSC_VER
+	struct stat s;
+	stat(pathString.c_str(), &s);
+	struct group *gr = getgrgid( s.st_gid );
+
+	return gr ? gr->gr_name : "";
+
+#else
+
+	return getFileSecurityInfo( pathString, GROUP_SECURITY_INFORMATION );
+
+#endif
+
+}
+
+}  // namespace
+
+//////////////////////////////////////////////////////////////////////////
+// FileSystemPath implementation
+//////////////////////////////////////////////////////////////////////////
+
 IE_CORE_DEFINERUNTIMETYPED( FileSystemPath );
 
 static InternedString g_ownerPropertyName( "fileSystem:owner" );
@@ -70,14 +217,17 @@ static InternedString g_modificationTimePropertyName( "fileSystem:modificationTi
 static InternedString g_sizePropertyName( "fileSystem:size" );
 static InternedString g_frameRangePropertyName( "fileSystem:frameRange" );
 
+static std::regex g_driveLetterPattern{ "[A-Za-z]:" };
+
 FileSystemPath::FileSystemPath( PathFilterPtr filter, bool includeSequences )
 	:	Path( filter ), m_includeSequences( includeSequences )
 {
 }
 
 FileSystemPath::FileSystemPath( const std::string &path, PathFilterPtr filter, bool includeSequences )
-	:	Path( path, filter ), m_includeSequences( includeSequences )
+	:	Path( filter ), m_includeSequences( includeSequences )
 {
+	setFromString( path );
 }
 
 FileSystemPath::FileSystemPath( const Names &names, const IECore::InternedString &root, PathFilterPtr filter, bool includeSequences )
@@ -89,7 +239,7 @@ FileSystemPath::~FileSystemPath()
 {
 }
 
-bool FileSystemPath::isValid() const
+bool FileSystemPath::isValid( const IECore::Canceller *canceller ) const
 {
 	if( !Path::isValid() )
 	{
@@ -105,7 +255,7 @@ bool FileSystemPath::isValid() const
 	return t != status_error && t != file_not_found;
 }
 
-bool FileSystemPath::isLeaf() const
+bool FileSystemPath::isLeaf( const IECore::Canceller *canceller ) const
 {
 	return isValid() && !is_directory( path( this->string() ) );
 }
@@ -146,11 +296,12 @@ FileSequencePtr FileSystemPath::fileSequence() const
 	}
 
 	FileSequencePtr sequence = nullptr;
-	IECore::ls( this->string(), sequence, /* minSequenceSize = */ 1 );
+	/// \todo Add cancellation support to `ls`.
+	IECore::ls( this->nativeString(), sequence, /* minSequenceSize = */ 1 );
 	return sequence;
 }
 
-void FileSystemPath::propertyNames( std::vector<IECore::InternedString> &names ) const
+void FileSystemPath::propertyNames( std::vector<IECore::InternedString> &names, const IECore::Canceller *canceller ) const
 {
 	Path::propertyNames( names );
 
@@ -165,15 +316,17 @@ void FileSystemPath::propertyNames( std::vector<IECore::InternedString> &names )
 	}
 }
 
-IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedString &name ) const
+IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedString &name, const IECore::Canceller *canceller ) const
 {
 	if( name == g_ownerPropertyName )
 	{
 		if( m_includeSequences )
 		{
+			IECore::Canceller::check( canceller );
 			FileSequencePtr sequence = fileSequence();
 			if( sequence )
 			{
+				IECore::Canceller::check( canceller );
 				std::vector<std::string> files;
 				sequence->fileNames( files );
 
@@ -182,10 +335,8 @@ IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedStr
 				std::map<std::string,size_t> ownerCounter;
 				for( std::vector<std::string>::iterator it = files.begin(); it != files.end(); ++it )
 				{
-					struct stat s;
-					stat( it->c_str(), &s );
-					struct passwd *pw = getpwuid( s.st_uid );
-					std::string value = pw ? pw->pw_name : "";
+					IECore::Canceller::check( canceller );
+					std::string value = getFileOwner( it->c_str() );
 					std::pair<std::map<std::string,size_t>::iterator,bool> oIt = ownerCounter.insert( std::pair<std::string,size_t>( value, 0 ) );
 					oIt.first->second++;
 					if( oIt.first->second > maxCount )
@@ -199,18 +350,18 @@ IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedStr
 		}
 
 		std::string n = this->string();
-		struct stat s;
-		stat( n.c_str(), &s );
-		struct passwd *pw = getpwuid( s.st_uid );
-		return new StringData( pw ? pw->pw_name : "" );
+
+		return new StringData( getFileOwner( n.c_str() ) );
 	}
 	else if( name == g_groupPropertyName )
 	{
 		if( m_includeSequences )
 		{
+			IECore::Canceller::check( canceller );
 			FileSequencePtr sequence = fileSequence();
 			if( sequence )
 			{
+				IECore::Canceller::check( canceller );
 				std::vector<std::string> files;
 				sequence->fileNames( files );
 
@@ -219,10 +370,8 @@ IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedStr
 				std::map<std::string,size_t> ownerCounter;
 				for( std::vector<std::string>::iterator it = files.begin(); it != files.end(); ++it )
 				{
-					struct stat s;
-					stat( it->c_str(), &s );
-					struct group *gr = getgrgid( s.st_gid );
-					std::string value = gr ? gr->gr_name : "";
+					IECore::Canceller::check( canceller );
+					std::string value = getFileGroup( *it );
 					std::pair<std::map<std::string,size_t>::iterator,bool> oIt = ownerCounter.insert( std::pair<std::string,size_t>( value, 0 ) );
 					oIt.first->second++;
 					if( oIt.first->second > maxCount )
@@ -236,10 +385,7 @@ IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedStr
 		}
 
 		std::string n = this->string();
-		struct stat s;
-		stat( n.c_str(), &s );
-		struct group *gr = getgrgid( s.st_gid );
-		return new StringData( gr ? gr->gr_name : "" );
+		return new StringData( getFileGroup( n ) );
 	}
 	else if( name == g_modificationTimePropertyName )
 	{
@@ -247,15 +393,18 @@ IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedStr
 
 		if( m_includeSequences )
 		{
+			IECore::Canceller::check( canceller );
 			FileSequencePtr sequence = fileSequence();
 			if( sequence )
 			{
+				IECore::Canceller::check( canceller );
 				std::vector<std::string> files;
 				sequence->fileNames( files );
 
 				std::time_t newest = 0;
 				for( std::vector<std::string>::iterator it = files.begin(); it != files.end(); ++it )
 				{
+					IECore::Canceller::check( canceller );
 					std::time_t t = last_write_time( path( *it ), e );
 					if( t > newest )
 					{
@@ -276,15 +425,18 @@ IECore::ConstRunTimeTypedPtr FileSystemPath::property( const IECore::InternedStr
 
 		if( m_includeSequences )
 		{
+			IECore::Canceller::check( canceller );
 			FileSequencePtr sequence = fileSequence();
 			if( sequence )
 			{
+				IECore::Canceller::check( canceller );
 				std::vector<std::string> files;
 				sequence->fileNames( files );
 
 				uintmax_t total = 0;
 				for( std::vector<std::string>::iterator it = files.begin(); it != files.end(); ++it )
 				{
+					IECore::Canceller::check( canceller );
 					uintmax_t s = file_size( path( *it ), e );
 					if( !e )
 					{
@@ -318,7 +470,7 @@ PathPtr FileSystemPath::copy() const
 	return new FileSystemPath( names(), root(), const_cast<PathFilter *>( getFilter() ), m_includeSequences );
 }
 
-void FileSystemPath::doChildren( std::vector<PathPtr> &children ) const
+void FileSystemPath::doChildren( std::vector<PathPtr> &children, const IECore::Canceller *canceller ) const
 {
 	path p( this->string() );
 
@@ -329,15 +481,18 @@ void FileSystemPath::doChildren( std::vector<PathPtr> &children ) const
 
 	for( directory_iterator it( p ), eIt; it != eIt; ++it )
 	{
+		IECore::Canceller::check( canceller );
 		children.push_back( new FileSystemPath( it->path().string(), const_cast<PathFilter *>( getFilter() ), m_includeSequences ) );
 	}
 
 	if( m_includeSequences )
 	{
+		IECore::Canceller::check( canceller );
 		std::vector<FileSequencePtr> sequences;
-		IECore::ls( p.string(), sequences, /* minSequenceSize */ 1 );
+		IECore::ls( this->nativeString(), sequences, /* minSequenceSize */ 1 );
 		for( std::vector<FileSequencePtr>::iterator it = sequences.begin(); it != sequences.end(); ++it )
 		{
+			IECore::Canceller::check( canceller );
 			std::vector<FrameList::Frame> frames;
 			(*it)->getFrameList()->asList( frames );
 			if ( !is_directory( path( (*it)->fileNameForFrame( frames[0] ) ) ) )
@@ -415,4 +570,81 @@ PathFilterPtr FileSystemPath::createStandardFilter( const std::vector<std::strin
 	result->addFilter( searchFilter );
 
 	return result;
+}
+
+#ifdef _MSC_VER
+
+void FileSystemPath::rootAndNames(const std::string &string, InternedString &root, Names &names ) const
+{
+	std::string sanitizedString = string;
+
+	if( sanitizedString == "/" || sanitizedString == "\\" )
+	{
+		// We consider a single forward or back slash to be invalid, and convert it to the start
+		// of a UNC path. Windows will return a directory listing of the current drive root contents
+		// given a single slash, but with the permutations below, the child paths of that
+		// listing will have roots but `names()` will be empty. This causes a crash when listing
+		// such directories in `PathListingWidget`.
+		sanitizedString = "//";
+	}
+	else if( sanitizedString.size() && sanitizedString[0] == '/' )
+	{
+		// If `string` is coming from a PathMatcher, it will always have a single leading slash.
+		// On Windows, check to see if the first element is a drive letter path and strip the leading
+		// slash if so. If it's not a drive letter path, interpret it as a UNC path.
+
+		Names splitPath;
+		StringAlgo::tokenize(sanitizedString, '/', splitPath);
+		if( splitPath.size() )
+		{
+			const std::string firstElement = splitPath[0].string();
+			if( std::regex_match( firstElement, g_driveLetterPattern ) )
+			{
+				sanitizedString.erase( sanitizedString.begin(), sanitizedString.begin() + 1 );
+			}
+			else if( sanitizedString.size() > 1 && sanitizedString[1] != '/' )
+			{
+				sanitizedString = "/" + sanitizedString;
+			}
+		}
+	}
+
+	const path convertedPath( sanitizedString );
+	root = convertedPath.root_path().generic_string();
+
+	path::const_iterator startIt = convertedPath.begin();
+
+	// path iteration includes the root name and directory, if present
+	if( convertedPath.has_root_name() )
+	{
+		++startIt;
+	}
+
+	if( convertedPath.has_root_directory() )
+	{
+		++startIt;
+	}
+
+	for( path::const_iterator it = startIt, eIt = convertedPath.end(); it != eIt; ++it )
+	{
+		if( it->string() != "." )
+		{
+			names.push_back( it->string() );
+		}
+	}
+}
+
+#endif
+
+std::string FileSystemPath::nativeString() const
+{
+#ifndef _MSC_VER
+	return string();
+#endif
+
+	path p( string() );
+	// This is used instead of `nativeString()` because `nativeString()` on Windows
+	// returns a `wstring`.
+	p.make_preferred();
+	return p.string();
 }

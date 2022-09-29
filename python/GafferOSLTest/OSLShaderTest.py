@@ -38,6 +38,7 @@ import os
 import unittest
 import imath
 import random
+import shutil
 
 import IECore
 import IECoreScene
@@ -552,8 +553,9 @@ class OSLShaderTest( GafferOSLTest.OSLTestCase ) :
 		n = GafferOSL.OSLShader()
 		n.loadShader( s1 )
 
+		s1Parameters = n["parameters"].keys()
 		self.assertEqual(
-			n["parameters"].keys(),
+			s1Parameters,
 			[
 				"commonI",
 				"commonF",
@@ -679,13 +681,20 @@ class OSLShaderTest( GafferOSLTest.OSLTestCase ) :
 			if isinstance( plug, Gaffer.ValuePlug ) :
 				self.assertTrue( plug.isSetToDefault() )
 
+		shutil.copyfile( s1 + ".oso", s2 + ".oso" )
+		n.reloadShader()
+		self.assertEqual(
+			n["parameters"].keys(),
+			s1Parameters
+		)
+
 	def testSplineParameters( self ) :
 
 		s = self.compileShader( os.path.dirname( __file__ ) + "/shaders/splineParameters.osl" )
 		n = GafferOSL.OSLShader()
 		n.loadShader( s )
 
-		self.assertEqual( n["parameters"].keys(), [ "floatSpline", "colorSpline" ] )
+		self.assertEqual( n["parameters"].keys(), [ "floatSpline", "colorSpline", "checkLinearSpline" ] )
 
 		self.assertTrue( isinstance( n["parameters"]["floatSpline"], Gaffer.SplineffPlug ) )
 		self.assertEqual(
@@ -716,6 +725,21 @@ class OSLShaderTest( GafferOSLTest.OSLTestCase ) :
 				]
 			)
 		)
+
+		# Just adding documentation that this is currently broken, but I'm not supposed to be worrying about
+		# the parameter import path at the moment ( it's not using
+		# IECoreScene::ShaderNetworkAlgo::collapseSplineParameters yet )
+		"""self.assertTrue( isinstance( n["parameters"]["checkLinearSpline"], Gaffer.SplineffPlug ) )
+		self.assertEqual(
+			n["parameters"]["checkLinearSpline"].getValue().spline(),
+			IECore.Splineff(
+				IECore.CubicBasisf.linear(),
+				[
+					( 2, 3 ),
+					( 4, 5 ),
+				]
+			)
+		)"""
 
 		shader = n.attributes()["osl:shader"].outputShader()
 
@@ -1079,6 +1103,24 @@ class OSLShaderTest( GafferOSLTest.OSLTestCase ) :
 		shaderAssignment["filter"].setInput( planeFilter["out"] )
 
 		self.assertEqual( shaderAssignment["out"].attributes( "/plane" ).keys(), [ "osl:surface" ] )
+
+	def testConstantOutPlug( self ) :
+
+		# For compatibility with Arnold, we hack an output closure
+		# parameter onto our Constant shader, but we don't want that
+		# to affect the way we represent the output plug in Gaffer.
+		shader = GafferOSL.OSLShader()
+		shader.loadShader( "Surface/Constant" )
+		self.assertEqual( len( shader["out"].children() ), 0 )
+
+	def testLoadMxInvertFloat( self ) :
+
+		s = Gaffer.ScriptNode()
+		s["fileName"].setValue( os.path.join( os.path.dirname( __file__ ), "scripts", "mxInvert-0.59.8.0.gfr" ) )
+		s.load()
+
+		self.assertEqual( s["mx_invert_float"]["parameters"]["in"].getValue(), 1 )
+		self.assertEqual( s["mx_invert_float"]["parameters"]["amount"].getValue(), 2 )
 
 if __name__ == "__main__":
 	unittest.main()

@@ -69,6 +69,11 @@ bool getPrunedWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &pat
 	return EditScopeAlgo::getPruned( &scope, path );
 }
 
+GraphComponentPtr prunedReadOnlyReasonWrapper( Gaffer::EditScope &scope )
+{
+	return const_cast<GraphComponent *>( EditScopeAlgo::prunedReadOnlyReason( &scope ) );
+}
+
 bool hasTransformEditWrapper( const Gaffer::EditScope &scope, const ScenePlug::ScenePath &path )
 {
 	IECorePython::ScopedGILRelease gilRelease;
@@ -86,6 +91,11 @@ void removeTransformEditWrapper( Gaffer::EditScope &scope, const ScenePlug::Scen
 {
 	IECorePython::ScopedGILRelease gilRelease;
 	EditScopeAlgo::removeTransformEdit( &scope, path );
+}
+
+GraphComponentPtr transformEditReadOnlyReasonWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &path )
+{
+	return const_cast<GraphComponent *>( EditScopeAlgo::transformEditReadOnlyReason( &scope, path ) );
 }
 
 V3fPlugPtr translateAccessor( EditScopeAlgo::TransformEdit &e )
@@ -114,6 +124,58 @@ Imath::M44f matrixWrapper( EditScopeAlgo::TransformEdit &e )
 	return e.matrix();
 }
 
+
+// Shaders
+// =======
+
+bool hasParameterEditWrapper( const Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute, const IECoreScene::ShaderNetwork::Parameter &parameter )
+{
+	return EditScopeAlgo::hasParameterEdit( &scope, path, attribute, parameter );
+}
+
+TweakPlugPtr acquireParameterEditWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute, const IECoreScene::ShaderNetwork::Parameter &parameter, bool createIfNecessary )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return EditScopeAlgo::acquireParameterEdit( &scope, path, attribute, parameter, createIfNecessary );
+}
+
+void removeParameterEditWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute, const IECoreScene::ShaderNetwork::Parameter &parameter )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return EditScopeAlgo::removeParameterEdit( &scope, path, attribute, parameter );
+}
+
+GraphComponentPtr parameterEditReadOnlyReasonWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute, const IECoreScene::ShaderNetwork::Parameter &parameter )
+{
+	return const_cast<GraphComponent *>( EditScopeAlgo::parameterEditReadOnlyReason( &scope, path, attribute, parameter ) );
+}
+
+
+// Attributes
+// ==========
+
+bool hasAttributeEditWrapper( const Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute )
+{
+	return EditScopeAlgo::hasAttributeEdit( &scope, path, attribute );
+}
+
+TweakPlugPtr acquireAttributeEditWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute, bool createIfNecessary )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return EditScopeAlgo::acquireAttributeEdit( &scope, path, attribute, createIfNecessary );
+}
+
+void removeAttributeEditWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return EditScopeAlgo::removeAttributeEdit( &scope, path, attribute );
+}
+
+GraphComponentPtr attributeEditReadOnlyReasonWrapper( Gaffer::EditScope &scope, const ScenePlug::ScenePath &path, const std::string &attribute )
+{
+	return const_cast<GraphComponent *>( EditScopeAlgo::attributeEditReadOnlyReason( &scope, path, attribute ) );
+}
+
 } // namespace
 
 namespace GafferSceneModule
@@ -128,6 +190,7 @@ void bindEditScopeAlgo()
 	def( "setPruned", &setPrunedWrapper1 );
 	def( "setPruned", &setPrunedWrapper2 );
 	def( "getPruned", &getPrunedWrapper );
+	def( "prunedReadOnlyReason", &prunedReadOnlyReasonWrapper );
 
 	class_<EditScopeAlgo::TransformEdit>( "TransformEdit", no_init )
 		.def( init<const V3fPlugPtr &, const V3fPlugPtr &, const V3fPlugPtr &, const V3fPlugPtr &>() )
@@ -143,6 +206,18 @@ void bindEditScopeAlgo()
 	def( "acquireTransformEdit", &acquireTransformEditWrapper, ( arg( "scope" ), arg( "path" ), arg( "createIfNecessary" ) = true ) );
 	def( "hasTransformEdit", &hasTransformEditWrapper );
 	def( "removeTransformEdit", &removeTransformEditWrapper );
+	def( "transformEditReadOnlyReason", &transformEditReadOnlyReasonWrapper );
+
+	def( "acquireParameterEdit", &acquireParameterEditWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ), arg( "parameter" ), arg( "createIfNecessary" ) = true ) );
+	def( "hasParameterEdit", &hasParameterEditWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ), arg( "parameter" ) ) );
+	def( "removeParameterEdit", &removeParameterEditWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ), arg( "parameter" ) ) );
+	def( "parameterEditReadOnlyReason", &parameterEditReadOnlyReasonWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ), arg( "parameter" ) ) );
+
+	def( "acquireAttributeEdit", &acquireAttributeEditWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ), arg( "createIfNecessary" ) = true ) );
+	def( "hasAttributeEdit", &hasAttributeEditWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ) ) );
+	def( "removeAttributeEdit", &removeAttributeEditWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ) ) );
+	def( "attributeEditReadOnlyReason", &attributeEditReadOnlyReasonWrapper, ( arg( "scope" ), arg( "path" ), arg( "attribute" ) ) );
+
 }
 
 } // namespace GafferSceneModule

@@ -57,21 +57,35 @@ class GAFFERSCENE_API Constraint : public SceneElementProcessor
 		Constraint( const std::string &name=defaultName<Constraint>() );
 		~Constraint() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::Constraint, ConstraintTypeId, SceneElementProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::Constraint, ConstraintTypeId, SceneElementProcessor );
 
 		enum TargetMode
 		{
 			Origin = 0,
 			BoundMin = 1,
 			BoundMax = 2,
-			BoundCenter = 3
+			BoundCenter = 3,
+			UV = 4,
+			Vertex = 5
 		};
+
+		ScenePlug *targetScenePlug();
+		const ScenePlug *targetScenePlug() const;
 
 		Gaffer::StringPlug *targetPlug();
 		const Gaffer::StringPlug *targetPlug() const;
 
+		Gaffer::BoolPlug *ignoreMissingTargetPlug();
+		const Gaffer::BoolPlug *ignoreMissingTargetPlug() const;
+
 		Gaffer::IntPlug *targetModePlug();
 		const Gaffer::IntPlug *targetModePlug() const;
+
+		Gaffer::V2fPlug *targetUVPlug();
+		const Gaffer::V2fPlug *targetUVPlug() const;
+
+		Gaffer::IntPlug *targetVertexPlug();
+		const Gaffer::IntPlug *targetVertexPlug() const;
 
 		Gaffer::V3fPlug *targetOffsetPlug();
 		const Gaffer::V3fPlug *targetOffsetPlug() const;
@@ -95,7 +109,13 @@ class GAFFERSCENE_API Constraint : public SceneElementProcessor
 
 	private :
 
-		void tokenizeTargetPath( ScenePath &path ) const;
+		struct Target
+		{
+			ScenePath path;
+			const ScenePlug *scene;
+		};
+
+		std::optional<Target> target() const;
 
 		static size_t g_firstPlugIndex;
 

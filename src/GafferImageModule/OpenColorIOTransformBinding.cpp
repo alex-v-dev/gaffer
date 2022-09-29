@@ -41,8 +41,10 @@
 #include "GafferImage/CDL.h"
 #include "GafferImage/ColorSpace.h"
 #include "GafferImage/DisplayTransform.h"
+#include "GafferImage/LookTransform.h"
 #include "GafferImage/LUT.h"
 #include "GafferImage/OpenColorIOTransform.h"
+#include "GafferImage/Saturation.h"
 
 #include "GafferBindings/DependencyNodeBinding.h"
 
@@ -101,13 +103,22 @@ void GafferImageModule::bindOpenColorIOTransform()
 
 	GafferBindings::DependencyNodeClass<ColorProcessor>();
 
-	GafferBindings::DependencyNodeClass<OpenColorIOTransform>()
-		.def( "availableColorSpaces", &availableColorSpaces ).staticmethod( "availableColorSpaces" )
-		.def( "availableRoles", &availableRoles ).staticmethod( "availableRoles" )
-	;
+	// This probably shouldn't live in this file, but neither should the ColorProcessor line above?
+	GafferBindings::DependencyNodeClass<Saturation>();
+
+	{
+		scope s = GafferBindings::DependencyNodeClass<OpenColorIOTransform>()
+			.def( "availableColorSpaces", &availableColorSpaces ).staticmethod( "availableColorSpaces" )
+			.def( "availableRoles", &availableRoles ).staticmethod( "availableRoles" )
+		;
+
+		enum_<OpenColorIOTransform::Direction>( "Direction" )
+			.value( "Forward", OpenColorIOTransform::Forward )
+			.value( "Inverse", OpenColorIOTransform::Inverse )
+		;
+	}
 
 	GafferBindings::DependencyNodeClass<ColorSpace>();
-	GafferBindings::DependencyNodeClass<CDL>();
 	GafferBindings::DependencyNodeClass<DisplayTransform>();
 
 	{
@@ -121,11 +132,8 @@ void GafferImageModule::bindOpenColorIOTransform()
 			.value( "Linear", LUT::Linear )
 			.value( "Tetrahedral", LUT::Tetrahedral )
 		;
-
-		enum_<LUT::Direction>( "Direction" )
-			.value( "Forward", LUT::Forward )
-			.value( "Inverse", LUT::Inverse )
-		;
 	}
 
+	GafferBindings::DependencyNodeClass<CDL>();
+	GafferBindings::DependencyNodeClass<LookTransform>();
 }

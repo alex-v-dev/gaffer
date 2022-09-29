@@ -61,7 +61,23 @@ GAFFER_API void replacePlug( GraphComponent *parent, PlugPtr plug );
 GAFFER_API ValuePlugPtr createPlugFromData( const std::string &name, Plug::Direction direction, unsigned flags, const IECore::Data *value );
 
 /// Extracts a Data value from a plug previously created with createPlugFromData().
+/// \deprecated Use `getValueAsData` instead.
 GAFFER_API IECore::DataPtr extractDataFromPlug( const ValuePlug *plug );
+
+/// Returns a Data value from a plug.
+GAFFER_API IECore::DataPtr getValueAsData( const ValuePlug *plug );
+
+/// Sets the value of an existing plug to the specified data.
+/// Returns `true` on success and `false` on failure.
+GAFFER_API bool setValueFromData( ValuePlug *plug, const IECore::Data *value );
+
+/// Overload for use in `ComputeNode::compute()` implementations, where values may only
+/// be set on leaf plugs.
+GAFFER_API bool setValueFromData( const ValuePlug *plug, ValuePlug *leafPlug, const IECore::Data *value );
+
+/// Returns true if the given plug's value can be set from Data.
+/// If value is provided, then return true if it can be set from Data with this type id
+GAFFER_API bool canSetValueFromData( const ValuePlug *plug, const IECore::Data *value = nullptr );
 
 /// Promotion
 /// =========
@@ -74,14 +90,13 @@ GAFFER_API IECore::DataPtr extractDataFromPlug( const ValuePlug *plug );
 /// Returns true if a call to `promote( plug, parent )` would
 /// succeed, false otherwise.
 GAFFER_API bool canPromote( const Plug *plug, const Plug *parent = nullptr );
-/// Promotes an internal plug, returning the newly created
-/// external plug. By default the external plug is parented
-/// directly to the node, but the `parent` argument
-/// may specify a plug on that node to be used as parent
-/// instead. By default, all metadata values except those
-/// related to plug layouts are copied to the external
-/// plug - this can be controlled with the `excludeMetadata`
-/// argument.
+/// Promotes an internal plug, returning the newly created external plug. By
+/// default the external plug is parented directly to the node, but the `parent`
+/// argument may specify a plug on that node to be used as parent instead.
+/// Metadata is copied to the promoted plug, but copying can be disabled
+/// by registering `"<metadataName>:promotable"` metadata with a value of `false`.
+/// The `excludeMetadata` argument provides a secondary mechaniscm for the caller
+/// to explicitly exclude other metadata from promotion.
 /// \undoable
 GAFFER_API Plug *promote( Plug *plug, Plug *parent = nullptr, const IECore::StringAlgo::MatchPattern &excludeMetadata = "layout:*" );
 /// As `promote` but by providing the name argument, you can skip an additional

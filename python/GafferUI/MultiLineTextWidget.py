@@ -35,6 +35,9 @@
 #
 ##########################################################################
 
+import six
+import imath
+
 import IECore
 
 import Gaffer
@@ -46,7 +49,7 @@ from Qt import QtCore
 
 class MultiLineTextWidget( GafferUI.Widget ) :
 
-	WrapMode = IECore.Enum.create( "None", "Word", "Character", "WordOrCharacter" )
+	WrapMode = IECore.Enum.create( "None_", "Word", "Character", "WordOrCharacter" )
 	Role = IECore.Enum.create( "Text", "Code" )
 
 	def __init__( self, text="", editable=True, wrapMode=WrapMode.WordOrCharacter, fixedLineHeight=None, role=Role.Text, **kw ) :
@@ -82,7 +85,14 @@ class MultiLineTextWidget( GafferUI.Widget ) :
 
 	def getText( self ) :
 
-		return self._qtWidget().toPlainText().encode( "utf-8" )
+		if six.PY3 :
+			return self._qtWidget().toPlainText()
+		else :
+			# \todo We didn't return `unicode` here because
+			# we didn't want to break any client code. But perhaps
+			# now is the time, since everyone is transitioning to
+			# Python 3?
+			return self._qtWidget().toPlainText().encode( "utf-8" )
 
 	def setText( self, text ) :
 
@@ -120,7 +130,7 @@ class MultiLineTextWidget( GafferUI.Widget ) :
 
 		self._qtWidget().setWordWrapMode(
 			{
-				self.WrapMode.None : QtGui.QTextOption.NoWrap,
+				self.WrapMode.None_ : QtGui.QTextOption.NoWrap,
 				self.WrapMode.Word : QtGui.QTextOption.WordWrap,
 				self.WrapMode.Character : QtGui.QTextOption.WrapAnywhere,
 				self.WrapMode.WordOrCharacter : QtGui.QTextOption.WrapAtWordBoundaryOrAnywhere,
@@ -130,7 +140,7 @@ class MultiLineTextWidget( GafferUI.Widget ) :
 	def getWrapMode( self ) :
 
 		return {
-			QtGui.QTextOption.NoWrap : self.WrapMode.None,
+			QtGui.QTextOption.NoWrap : self.WrapMode.None_,
 			QtGui.QTextOption.WordWrap : self.WrapMode.Word,
 			QtGui.QTextOption.WrapAnywhere : self.WrapMode.Character,
 			QtGui.QTextOption.WrapAtWordBoundaryOrAnywhere : self.WrapMode.WordOrCharacter,
@@ -172,11 +182,29 @@ class MultiLineTextWidget( GafferUI.Widget ) :
 			QtCore.QPoint( position[0], position[1] )
 		).position()
 
+	def cursorBound( self, relativeTo = None ) :
+
+		b = self._qtWidget().cursorRect()
+		b = imath.Box2i(
+			imath.V2i( b.left(), b.top() ),
+			imath.V2i( b.right(), b.bottom() )
+		)
+
+		if relativeTo is not self :
+			p = self.bound( relativeTo ).min()
+			b.setMin( b.min() + p )
+			b.setMax( b.max() + p )
+
+		return b
+
 	def selectedText( self ) :
 
 		cursor = self._qtWidget().textCursor()
 		text = cursor.selection().toPlainText()
-		return text.encode( "utf-8" )
+		if six.PY3 :
+			return text
+		else :
+			return text.encode( "utf-8" )
 
 	def linkAt( self, position ) :
 
@@ -277,7 +305,7 @@ class MultiLineTextWidget( GafferUI.Widget ) :
 		try :
 			return self.__dropTextSignal
 		except :
-			self.__dropTextSignal = Gaffer.Signal2()
+			self.__dropTextSignal = Gaffer.Signals.Signal2()
 
 		return self.__dropTextSignal
 

@@ -86,7 +86,7 @@ class GAFFER_API StringPlug : public ValuePlug
 
 	public :
 
-		typedef std::string ValueType;
+		using ValueType = std::string;
 
 		GAFFER_PLUG_DECLARE_TYPE( Gaffer::StringPlug, StringPlugTypeId, ValuePlug );
 
@@ -109,9 +109,9 @@ class GAFFER_API StringPlug : public ValuePlug
 
 		/// \undoable
 		void setValue( const std::string &value );
-		/// Returns the value. See comments in TypedObjectPlug::getValue()
-		/// for details of the optional precomputedHash argument - and use
-		/// with care!
+		/// Returns the value. The `precomputedHash` argument is deprecated, and
+		/// will be removed in a future release.
+		/// \todo Remove `precomputedHash` argument.
 		std::string getValue( const IECore::MurmurHash *precomputedHash = nullptr ) const;
 
 		void setFrom( const ValuePlug *other ) override;
@@ -128,14 +128,6 @@ class GAFFER_API StringPlug : public ValuePlug
 };
 
 IE_CORE_DECLAREPTR( StringPlug );
-
-typedef FilteredChildIterator<PlugPredicate<Plug::Invalid, StringPlug> > StringPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::In, StringPlug> > InputStringPlugIterator;
-typedef FilteredChildIterator<PlugPredicate<Plug::Out, StringPlug> > OutputStringPlugIterator;
-
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Invalid, StringPlug>, PlugPredicate<> > RecursiveStringPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::In, StringPlug>, PlugPredicate<> > RecursiveInputStringPlugIterator;
-typedef FilteredRecursiveChildIterator<PlugPredicate<Plug::Out, StringPlug>, PlugPredicate<> > RecursiveOutputStringPlugIterator;
 
 } // namespace Gaffer
 

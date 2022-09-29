@@ -46,18 +46,18 @@ using namespace IECore;
 using namespace Gaffer;
 using namespace GafferImage;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( DeepState );
+GAFFER_NODE_DEFINE_TYPE( DeepState );
 
 namespace
 {
 
-const static IECore::InternedString g_AName = "A";
-const static IECore::InternedString g_ZName = "Z";
-const static IECore::InternedString g_ZBackName = "ZBack";
-const static IECore::InternedString g_sampleOffsetsName = "sampleOffsets";
-const static IECore::InternedString g_contributionIdsName = "contributionIds";
-const static IECore::InternedString g_contributionWeightsName = "contributionWeights";
-const static IECore::InternedString g_contributionOffsetsName = "contributionOffsets";
+const IECore::InternedString g_AName = "A";
+const IECore::InternedString g_ZName = "Z";
+const IECore::InternedString g_ZBackName = "ZBack";
+const IECore::InternedString g_sampleOffsetsName = "sampleOffsets";
+const IECore::InternedString g_contributionIdsName = "contributionIds";
+const IECore::InternedString g_contributionWeightsName = "contributionWeights";
+const IECore::InternedString g_contributionOffsetsName = "contributionOffsets";
 
 // This class stores all information about how samples are merged together.
 // It is initialized just based on the sorted Z and ZBack channels ( and the sampleOffsets that
@@ -818,6 +818,7 @@ DeepState::DeepState( const std::string &name )
 	addChild( new CompoundObjectPlug( "__sampleMapping", Gaffer::Plug::Out, new IECore::CompoundObject ) );
 
 	// We don't ever want to change these, so we make pass-through connections.
+	outPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 	outPlug()->channelNamesPlug()->setInput( inPlug()->channelNamesPlug() );
 	outPlug()->dataWindowPlug()->setInput( inPlug()->dataWindowPlug() );
 	outPlug()->formatPlug()->setInput( inPlug()->formatPlug() );
@@ -948,27 +949,27 @@ void DeepState::hash( const Gaffer::ValuePlug *output, const Gaffer::Context *co
 	const std::vector<std::string> &channelNames = channelNamesData->readable();
 
 	ImagePlug::ChannelDataScope channelScope( context );
-	if( ImageAlgo::channelExists( channelNames, "Z" ) )
+	if( ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameZ ) )
 	{
-		channelScope.setChannelName( "Z" );
+		channelScope.setChannelName( &ImageAlgo::channelNameZ );
 		inPlug()->channelDataPlug()->hash( h );
 	}
 	else
 	{
 		h.append( false );
 	}
-	if( ImageAlgo::channelExists( channelNames, "ZBack" ) )
+	if( ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameZBack ) )
 	{
-		channelScope.setChannelName( "ZBack" );
+		channelScope.setChannelName( &ImageAlgo::channelNameZBack );
 		inPlug()->channelDataPlug()->hash( h );
 	}
 	else
 	{
 		h.append( false );
 	}
-	if( ImageAlgo::channelExists( channelNames, "A" ) )
+	if( ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameA ) )
 	{
-		channelScope.setChannelName( "A" );
+		channelScope.setChannelName( &ImageAlgo::channelNameA );
 		inPlug()->channelDataPlug()->hash( h );
 	}
 	else
@@ -1008,20 +1009,20 @@ void DeepState::compute( Gaffer::ValuePlug *output, const Gaffer::Context *conte
 	CompoundObjectPtr result = new CompoundObject;
 
 	ImagePlug::ChannelDataScope channelScope( Context::current() );
-	bool hasZ = ImageAlgo::channelExists( channelNames, "Z" );
+	bool hasZ = ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameZ );
 
 	ConstFloatVectorDataPtr zData;
 	if( hasZ )
 	{
-		channelScope.setChannelName( "Z" );
+		channelScope.setChannelName( &ImageAlgo::channelNameZ );
 		zData = inPlug()->channelDataPlug()->getValue();
 	}
 
 	ConstFloatVectorDataPtr zBackData;
-	bool hasZBack = ImageAlgo::channelExists( channelNames, "ZBack" );
+	bool hasZBack = ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameZBack );
 	if( hasZBack )
 	{
-		channelScope.setChannelName( "ZBack" );
+		channelScope.setChannelName( &ImageAlgo::channelNameZBack );
 		zBackData = inPlug()->channelDataPlug()->getValue();
 	}
 	else
@@ -1052,10 +1053,10 @@ void DeepState::compute( Gaffer::ValuePlug *output, const Gaffer::Context *conte
 			FloatVectorDataPtr sampleWeightsData = new FloatVectorData();
 			std::vector<float> &sampleWeights = sampleWeightsData->writable();
 
-			if( ImageAlgo::channelExists( channelNames, "A" ) )
+			if( ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameA ) )
 			{
 				ImagePlug::ChannelDataScope channelScope( Context::current() );
-				channelScope.setChannelName( "A" );
+				channelScope.setChannelName( &ImageAlgo::channelNameA );
 				ConstFloatVectorDataPtr alphaData = inPlug()->channelDataPlug()->getValue();
 
 				sampleWeights.resize( sampleOffsetsData->readable().back() );
@@ -1134,9 +1135,9 @@ void DeepState::compute( Gaffer::ValuePlug *output, const Gaffer::Context *conte
 		}
 
 		ConstFloatVectorDataPtr alphaData;
-		if( ImageAlgo::channelExists( channelNames, "A" ) )
+		if( ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameA ) )
 		{
-			channelScope.setChannelName( "A" );
+			channelScope.setChannelName( &ImageAlgo::channelNameA );
 			alphaData = inPlug()->channelDataPlug()->getValue();
 		}
 		else

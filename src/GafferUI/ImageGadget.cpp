@@ -61,7 +61,7 @@ using namespace GafferUI;
 namespace
 {
 
-Box3f boundGetter( const std::string &fileName, size_t &cost )
+Box3f boundGetter( const std::string &fileName, size_t &cost, const IECore::Canceller *canceller )
 {
 	const char *s = getenv( "GAFFERUI_IMAGE_PATHS" );
 	IECore::SearchPath sp( s ? s : "" );
@@ -145,7 +145,7 @@ ImageGadget::ImageGadget( const std::string &fileName )
 	// we'll load the actual texture later when we're sure a GL context exists,
 	// but we need to find the bounding box now so that bound() will always be correct.
 
-	typedef IECorePreview::LRUCache<std::string, Box3f> ImageBoundCache;
+	using ImageBoundCache = IECorePreview::LRUCache<std::string, Box3f>;
 	static ImageBoundCache g_imageBoundCache( boundGetter, 10000 );
 	m_bound = g_imageBoundCache.get( fileName );
 
@@ -186,9 +186,8 @@ IECoreGL::ConstTexturePtr ImageGadget::loadTexture( const std::string &fileName 
 	return texture;
 }
 
-void ImageGadget::doRenderLayer( Layer layer, const Style *style ) const
+void ImageGadget::renderLayer( Layer layer, const Style *style, RenderReason reason ) const
 {
-	Gadget::doRenderLayer( layer, style );
 	if( layer != Layer::Main )
 	{
 		return;
@@ -199,8 +198,16 @@ void ImageGadget::doRenderLayer( Layer layer, const Style *style ) const
 		Box2f b( V2f( m_bound.min.x, m_bound.min.y ), V2f( m_bound.max.x, m_bound.max.y ) );
 		style->renderImage( b, texture );
 	}
+}
 
-	Gadget::doRenderLayer( layer, style );
+unsigned ImageGadget::layerMask() const
+{
+	return (unsigned)Layer::Main;
+}
+
+Imath::Box3f ImageGadget::renderBound() const
+{
+	return bound();
 }
 
 Imath::Box3f ImageGadget::bound() const

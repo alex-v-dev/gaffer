@@ -51,6 +51,7 @@
 #include "GafferImage/Resize.h"
 
 #include "GafferImageUI/ImageView.h"
+#include "GafferImageUI/OpenColorIOAlgo.h"
 
 #include "GafferUI/Style.h"
 #include "GafferUI/ViewportGadget.h"
@@ -62,7 +63,7 @@
 #include "OpenEXR/ImathFun.h"
 
 #include "boost/algorithm/string/replace.hpp"
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/bind/placeholders.hpp"
 #include "boost/regex.hpp"
 
@@ -70,6 +71,7 @@
 #include <unordered_set>
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace IECoreGL;
@@ -92,7 +94,7 @@ class UVView::UVScene : public SceneProcessor
 
 	public :
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferSceneUI::UVView::UVScene, UVSceneTypeId, SceneProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferSceneUI::UVView::UVScene, UVSceneTypeId, SceneProcessor );
 
 		UVScene( const std::string &name = defaultName<UVScene>() )
 			:	SceneProcessor( name )
@@ -376,7 +378,7 @@ class UVView::UVScene : public SceneProcessor
 
 };
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( UVView::UVScene );
+GAFFER_NODE_DEFINE_TYPE( UVView::UVScene );
 size_t UVView::UVScene::g_firstPlugIndex;
 
 //////////////////////////////////////////////////////////////////////////
@@ -397,7 +399,7 @@ class GridGadget : public GafferUI::Gadget
 
 	protected :
 
-		void doRenderLayer( Layer layer, const Style *style ) const override
+		void renderLayer( Layer layer, const Style *style, RenderReason reason ) const override
 		{
 			if( layer != Layer::Main && layer != Layer::MidBack && layer != Layer::Front )
 			{
@@ -474,6 +476,18 @@ class GridGadget : public GafferUI::Gadget
 			}
 		}
 
+		Box3f renderBound() const override
+		{
+			Box3f b;
+			b.makeInfinite();
+			return b;
+		}
+
+		unsigned layerMask() const override
+		{
+			return Layer::Main | Layer::MidBack | Layer::Front;
+		}
+
 };
 
 } // namespace
@@ -533,33 +547,6 @@ class TextureGadget : public GafferUI::Gadget
 			return m_imageReader->fileNamePlug()->getValue();
 		}
 
-		void setDisplayTransform( const std::string &name )
-		{
-			ImageProcessorPtr processor;
-			const auto it = m_displayTransforms.find( name );
-			if( it == m_displayTransforms.end() )
-			{
-				processor = ImageView::createDisplayTransform( name );
-				m_displayTransforms[name] = processor;
-				if( processor )
-				{
-					processor->inPlug()->setInput( m_resize->outPlug() );
-				}
-			}
-			else
-			{
-				processor = it->second;
-			}
-
-			imageGadget()->setImage( processor ? processor->outPlug() : m_resize->outPlug() );
-			m_displayTransform = name;
-		}
-
-		const std::string &getDisplayTransform()
-		{
-			return m_displayTransform;
-		}
-
 		std::string getToolTip( const IECore::LineSegment3f &position ) const override
 		{
 			const std::string t = Gadget::getToolTip( position );
@@ -575,16 +562,12 @@ class TextureGadget : public GafferUI::Gadget
 
 		ImageReaderPtr m_imageReader;
 		ResizePtr m_resize;
-		std::string m_displayTransform;
-
-		typedef std::unordered_map<std::string, GafferImage::ImageProcessorPtr> DisplayTransformMap;
-		DisplayTransformMap m_displayTransforms;
 
 };
 
 IE_CORE_DECLAREPTR( TextureGadget )
 
-typedef FilteredChildIterator<TypePredicate<TextureGadget>> TextureGadgetIterator;
+using TextureGadgetIterator = FilteredChildIterator<TypePredicate<TextureGadget> >;
 
 } // namespace
 
@@ -596,10 +579,10 @@ size_t UVView::g_firstPlugIndex = 0;
 static InternedString g_textureGadgetsName( "textureGadgets" );
 static InternedString g_gridGadgetName( "gridGadget" );
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( UVView )
+GAFFER_NODE_DEFINE_TYPE( UVView )
 
 UVView::UVView( const std::string &name )
-	:	View( name, new ScenePlug ), m_textureGadgetsDirty( true ), m_framed( false )
+	:	View( name, new ScenePlug ), m_textureGadgetsDirty( true ), m_framed( false ), m_displayTransformDirty( true )
 {
 	storeIndexOfNextChild( g_firstPlugIndex );
 
@@ -646,6 +629,10 @@ void UVView::setContext( Gaffer::ContextPtr context )
 {
 	View::setContext( context );
 	sceneGadget()->setContext( context );
+	for( TextureGadgetIterator it( textureGadgets() ); !it.done(); ++it )
+	{
+		(*it)->imageGadget()->setContext( context );
+	}
 }
 
 void UVView::contextChanged( const IECore::InternedString &name )
@@ -773,7 +760,7 @@ void UVView::plugSet( const Gaffer::Plug *plug )
 {
 	if( plug == displayTransformPlug() )
 	{
-		updateDisplayTransform();
+		m_displayTransformDirty = true;
 	}
 }
 
@@ -791,6 +778,14 @@ void UVView::preRender()
 	{
 		viewportGadget()->frame( Box3f( V3f( -0.05 ), V3f( 1.05 ) ) );
 		m_framed = true;
+	}
+
+	// We use an OpenGL display transform, so we can't set it up until GL is initialized - once
+	// we get the preRender call, we should be good.
+	if( m_displayTransformDirty )
+	{
+		updateDisplayTransform();
+		m_displayTransformDirty = false;
 	}
 
 	if( getPaused() || !m_textureGadgetsDirty )
@@ -851,6 +846,7 @@ void UVView::updateTextureGadgets( const IECore::ConstCompoundObjectPtr &texture
 		if( !textureGadget )
 		{
 			TextureGadgetPtr g = new TextureGadget();
+			g->imageGadget()->setContext( this->getContext() );
 			textureGadgets()->setChild( gadgetName, g );
 			textureGadget = g.get();
 
@@ -859,7 +855,6 @@ void UVView::updateTextureGadgets( const IECore::ConstCompoundObjectPtr &texture
 			const int v = ( udim - 1001 ) / 10;
 
 			g->setTransform( M44f().translate( V3f( u, v, 0 ) ) );
-			g->setDisplayTransform( displayTransformPlug()->getValue() );
 
 			g->imageGadget()->stateChangedSignal().connect(
 				[this]( ImageGadget *g ) { this->gadgetStateChanged( g, g->state() == ImageGadget::Running ); }
@@ -876,7 +871,7 @@ void UVView::updateTextureGadgets( const IECore::ConstCompoundObjectPtr &texture
 
 	// Hide any texture gadgets we don't need this time round.
 
-	for( GadgetIterator it( textureGadgets() ); !it.done(); ++it )
+	for( Gadget::Iterator it( textureGadgets() ); !it.done(); ++it )
 	{
 		if( !textures->member<Data>( (*it)->getName().c_str() + gadgetNamePrefix.size() ) )
 		{
@@ -889,11 +884,31 @@ void UVView::updateTextureGadgets( const IECore::ConstCompoundObjectPtr &texture
 
 void UVView::updateDisplayTransform()
 {
-	const string displayTransform = displayTransformPlug()->getValue();
-	for( TextureGadgetIterator it( textureGadgets() ); !it.done(); ++it )
+	const string displayTransformName = displayTransformPlug()->getValue();
+
+	const ImageProcessor *displayTransform;
+
+	const auto it = m_displayTransforms.find( displayTransformName );
+	if( it == m_displayTransforms.end() )
 	{
-		(*it)->setDisplayTransform( displayTransform );
+		ImageProcessorPtr newDisplayTransform = ImageView::createDisplayTransform( displayTransformName );
+		m_displayTransforms[displayTransformName] = newDisplayTransform;
+		displayTransform = newDisplayTransform.get();
 	}
+	else
+	{
+		displayTransform = it->second.get();
+	}
+
+	const OpenColorIOTransform *ocioTrans = runTimeCast<const OpenColorIOTransform>( displayTransform );
+
+	const OCIO_NAMESPACE::Processor *ocioProcessor = nullptr;
+	if( ocioTrans )
+	{
+		ocioProcessor = ocioTrans->processor().get();
+	}
+
+	viewportGadget()->setPostProcessShader( OpenColorIOAlgo::displayTransformToFramebufferShader( ocioProcessor ) );
 }
 
 void UVView::gadgetStateChanged( const Gadget *gadget, bool running )

@@ -35,16 +35,17 @@
 ##########################################################################
 
 import os
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 
 import IECore
 import GafferScene
 import GafferSceneTest
 
 class VDBTestCase( GafferSceneTest.SceneTestCase ) :
-
-	def assertEqualTolerance(self, a, b, tolerance):
-		self.assertTrue( abs(a - b) < tolerance)
 
 	def setUp( self ) :
 		GafferSceneTest.SceneTestCase.setUp( self )

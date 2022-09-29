@@ -37,6 +37,7 @@
 import os
 import unittest
 import threading
+import inspect
 import imath
 
 import IECore
@@ -44,6 +45,7 @@ import IECoreScene
 
 import Gaffer
 import GafferTest
+import GafferDispatch
 import GafferScene
 import GafferSceneTest
 
@@ -290,6 +292,126 @@ class SceneWriterTest( GafferSceneTest.SceneTestCase ) :
 		r["fileName"].setInput( w["fileName"] )
 
 		self.assertScenesEqual( p["out"], r["out"] )
+
+	def testFileNameWithArtificalFrameDependency( self ) :
+
+		script = Gaffer.ScriptNode()
+		script["plane"] = GafferScene.Plane()
+
+		script["writer"] = GafferScene.SceneWriter()
+		script["writer"]["in"].setInput( script["plane"]["out"] )
+
+		fileName = os.path.join( self.temporaryDirectory(), "test.scc" )
+
+		script["expression"] = Gaffer.Expression()
+		script["expression"].setExpression( inspect.cleandoc(
+			"""
+			# Add artificial dependency on frame
+			context.getFrame()
+			parent["writer"]["fileName"] = "{}"
+			""".format( fileName )
+		) )
+
+		dispatcher = GafferDispatch.LocalDispatcher()
+		dispatcher["jobsDirectory"].setValue( self.temporaryDirectory() )
+		dispatcher["framesMode"].setValue( dispatcher.FramesMode.CustomRange )
+		dispatcher["frameRange"].setValue( "1-10" )
+		dispatcher.dispatch( [ script["writer"] ] )
+
+		scene = IECoreScene.SceneInterface.create( fileName, IECore.IndexedIO.OpenMode.Read )
+		self.assertEqual( scene.child( "plane" ).numObjectSamples(), 10 )
+
+	def testFileNameWithFrameDependency( self ) :
+
+		script = Gaffer.ScriptNode()
+		script["plane"] = GafferScene.Plane()
+
+		script["writer"] = GafferScene.SceneWriter()
+		script["writer"]["in"].setInput( script["plane"]["out"] )
+		script["writer"]["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.####.scc" ) )
+
+		dispatcher = GafferDispatch.LocalDispatcher()
+		dispatcher["jobsDirectory"].setValue( self.temporaryDirectory() )
+		dispatcher["framesMode"].setValue( dispatcher.FramesMode.CustomRange )
+		dispatcher["frameRange"].setValue( "1-10" )
+		dispatcher.dispatch( [ script["writer"] ] )
+
+		with Gaffer.Context( script.context() ) as context :
+			for frame in range( 1, 10 ) :
+				context.setFrame( frame )
+				scene = IECoreScene.SceneInterface.create(
+					context.substitute( script["writer"]["fileName"].getValue() ),
+					IECore.IndexedIO.OpenMode.Read
+				)
+				plane = scene.child( "plane" )
+				self.assertEqual( plane.numObjectSamples(), 1 )
+				self.assertEqual( plane.objectSampleTime( 0 ), context.getTime() )
+
+	def testUSDConstantPrimitiveVariables( self ) :
+
+		plane = GafferScene.Plane()
+
+		planeFilter = GafferScene.PathFilter()
+		planeFilter["paths"].setValue( IECore.StringVectorData( [ "/plane" ] ) )
+
+		primitiveVariables = GafferScene.PrimitiveVariables()
+		primitiveVariables["in"].setInput( plane["out"] )
+		primitiveVariables["filter"].setInput( planeFilter["out"] )
+		primitiveVariables["primitiveVariables"].addChild( Gaffer.NameValuePlug( "test", 10 ) )
+
+		self.assertEqual( primitiveVariables["out"].object( "/plane" )["test"].data.value, 10 )
+		self.assertEqual( primitiveVariables["out"].attributes( "/plane" ), IECore.CompoundObject() )
+
+		sceneWriter = GafferScene.SceneWriter()
+		sceneWriter["in"].setInput( primitiveVariables["out"] )
+		sceneWriter["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.usda" ) )
+		sceneWriter["task"].execute()
+
+		sceneReader = GafferScene.SceneReader()
+		sceneReader["fileName"].setInput( sceneWriter["fileName"] )
+
+		self.assertEqual( sceneReader["out"].object( "/plane" )["test"].data.value, 10 )
+		self.assertEqual( sceneReader["out"].attributes( "/plane" ), IECore.CompoundObject() )
+
+	def testUSDDoubleSidedAttribute( self ) :
+
+		sphere = GafferScene.Sphere()
+
+		attributes = GafferScene.StandardAttributes()
+		attributes["in"].setInput( sphere["out"] )
+		attributes["attributes"]["doubleSided"]["enabled"].setValue( True )
+		attributes["attributes"]["doubleSided"]["value"].setValue( True )
+
+		sceneWriter = GafferScene.SceneWriter()
+		sceneWriter["in"].setInput( attributes["out"] )
+		sceneWriter["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.usda" ) )
+		sceneWriter["task"].execute()
+
+		sceneReader = GafferScene.SceneReader()
+		sceneReader["fileName"].setInput( sceneWriter["fileName"] )
+
+		self.assertEqual( sceneReader["out"].attributes( "/sphere" ), sceneWriter["in"].attributes( "/sphere" ) )
+
+	def testChildNamesOrder( self ) :
+
+		sphere = GafferScene.Sphere()
+
+		sphereFilter = GafferScene.PathFilter()
+		sphereFilter["paths"].setValue( IECore.StringVectorData( [ "/sphere" ] ) )
+
+		duplicate = GafferScene.Duplicate()
+		duplicate["in"].setInput( sphere["out"] )
+		duplicate["filter"].setInput( sphereFilter["out"] )
+		duplicate["copies"].setValue( 100 )
+
+		writer = GafferScene.SceneWriter()
+		writer["in"].setInput( duplicate["out"] )
+		writer["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.abc" ) )
+		writer["task"].execute()
+
+		reader = GafferScene.SceneReader()
+		reader["fileName"].setInput( writer["fileName"] )
+		self.assertScenesEqual( reader["out"], writer["in"] )
 
 if __name__ == "__main__":
 	unittest.main()

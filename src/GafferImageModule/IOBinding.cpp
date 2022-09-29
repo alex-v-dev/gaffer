@@ -48,6 +48,8 @@
 
 #include "GafferBindings/DependencyNodeBinding.h"
 
+#include "boost/mpl/vector.hpp"
+
 using namespace std;
 using namespace boost::python;
 using namespace Gaffer;
@@ -69,9 +71,14 @@ struct DefaultColorSpaceFunction
 	{
 
 		IECorePython::ScopedGILLock gilock;
-		string result = extract<string>( m_fn( fileName, fileFormat, dataType, IECore::CompoundDataPtr( const_cast<IECore::CompoundData *>( metadata ) ) ) );
-		return result;
-
+		try
+		{
+			return extract<string>( m_fn( fileName, fileFormat, dataType, IECore::CompoundDataPtr( const_cast<IECore::CompoundData *>( metadata ) ) ) );
+		}
+		catch( const error_already_set &e )
+		{
+			IECorePython::ExceptionAlgo::translatePythonException();
+		}
 	}
 
 	private:
@@ -121,6 +128,10 @@ void GafferImageModule::bindIO()
 
 	{
 		scope s = GafferBindings::DependencyNodeClass<OpenImageIOReader>()
+			.def( "setOpenFilesLimit", &OpenImageIOReader::setOpenFilesLimit )
+			.staticmethod( "setOpenFilesLimit" )
+			.def( "getOpenFilesLimit", &OpenImageIOReader::getOpenFilesLimit )
+			.staticmethod( "getOpenFilesLimit" )
 			.def( "supportedExtensions", &supportedExtensions<OpenImageIOReader> )
 			.staticmethod( "supportedExtensions" )
 		;
@@ -150,13 +161,20 @@ void GafferImageModule::bindIO()
 
 		enum_<ImageReader::FrameMaskMode>( "FrameMaskMode" )
 			.value( "None", ImageReader::None )
+			.value( "None_", ImageReader::None )
 			.value( "BlackOutside", ImageReader::BlackOutside )
 			.value( "ClampToFrame", ImageReader::ClampToFrame )
+		;
+
+		enum_<ImageReader::ChannelInterpretation>( "ChannelInterpretation" )
+			.value( "Legacy", ImageReader::ChannelInterpretation::Legacy )
+			.value( "Default", ImageReader::ChannelInterpretation::Default )
+			.value( "Specification", ImageReader::ChannelInterpretation::Specification )
 		;
 	}
 
 	{
-		typedef TaskNodeWrapper<ImageWriter> ImageWriterWrapper;
+		using ImageWriterWrapper = TaskNodeWrapper<ImageWriter>;
 
 		scope s = TaskNodeClass<ImageWriter, ImageWriterWrapper>()
 			.def( "currentFileFormat", &ImageWriter::currentFileFormat )

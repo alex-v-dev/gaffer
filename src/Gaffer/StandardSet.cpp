@@ -39,6 +39,7 @@
 
 #include "IECore/Exception.h"
 
+using namespace boost::placeholders;
 using namespace Gaffer;
 
 StandardSet::StandardSet( bool removeOrphans )
@@ -193,4 +194,3 @@ void StandardSet::parentChanged( GraphComponent *member )
 		remove( member );
 	}
 }
-

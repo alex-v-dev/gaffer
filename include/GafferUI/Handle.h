@@ -38,6 +38,7 @@
 #ifndef GAFFERUI_HANDLE_H
 #define GAFFERUI_HANDLE_H
 
+#include "GafferUI/Export.h"
 #include "GafferUI/Gadget.h"
 #include "GafferUI/Style.h"
 
@@ -69,8 +70,9 @@ class GAFFERUI_API Handle : public Gadget
 
 		// Implemented to call renderHandle() after applying
 		// the raster scale.
-		void doRenderLayer( Layer layer, const Style *style ) const override;
-		bool hasLayer( Layer layer ) const override;
+		void renderLayer( Layer layer, const Style *style, RenderReason reason ) const override;
+		unsigned layerMask() const override;
+		Imath::Box3f renderBound() const override;
 
 		// Must be implemented by derived classes to draw their
 		// handle.
@@ -84,7 +86,7 @@ class GAFFERUI_API Handle : public Gadget
 		// Helper for performing linear drags. Should be constructed
 		// in `dragBegin()` and then `position()` should be used
 		// to measure the progress of the drag.
-		struct LinearDrag
+		struct GAFFERUI_API LinearDrag
 		{
 
 			LinearDrag( bool processModifiers = true );
@@ -116,7 +118,7 @@ class GAFFERUI_API Handle : public Gadget
 		};
 
 		// Helper for performing drags in a plane.
-		struct PlanarDrag
+		struct GAFFERUI_API PlanarDrag
 		{
 
 			PlanarDrag( bool processModifiers = true );
@@ -217,9 +219,6 @@ class GAFFERUI_API Handle : public Gadget
 };
 
 IE_CORE_DECLAREPTR( Handle )
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<Handle> > HandleIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<Handle> > RecursiveHandleIterator;
 
 } // namespace GafferUI
 

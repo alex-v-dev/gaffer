@@ -38,6 +38,7 @@ import unittest
 import os
 
 import imath
+import six
 
 import IECore
 
@@ -75,6 +76,48 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 		self.assertEqual( Gaffer.MetadataAlgo.getReadOnly( n["op1"] ), False )
 		self.assertEqual( Gaffer.MetadataAlgo.readOnly( n ), True )
 		self.assertEqual( Gaffer.MetadataAlgo.readOnly( n["op1"] ), True )
+
+		with six.assertRaisesRegex( self, Exception, r"did not match C\+\+ signature" ) :
+			Gaffer.MetadataAlgo.readOnly( None )
+
+	def testReadOnlyReason( self ) :
+
+		b = Gaffer.Box()
+		b["b"] = Gaffer.Box()
+
+		n = GafferTest.AddNode()
+		b["b"]["n"] = n
+
+		self.assertIsNone( Gaffer.MetadataAlgo.readOnlyReason( n ) )
+		self.assertIsNone( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ) )
+
+		Gaffer.MetadataAlgo.setReadOnly( b, True )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n ), b )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ), b )
+
+		Gaffer.MetadataAlgo.setReadOnly( b["b"], True )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ), b )
+
+		Gaffer.MetadataAlgo.setReadOnly( b["b"]["n"], True )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ), b )
+
+		Gaffer.MetadataAlgo.setReadOnly( b["b"]["n"]["op1"], True )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ), b )
+
+		Gaffer.MetadataAlgo.setReadOnly( b, False )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ), b["b"] )
+
+		Gaffer.MetadataAlgo.setReadOnly( b["b"], False )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ), n )
+
+		Gaffer.MetadataAlgo.setReadOnly( b["b"]["n"], False )
+		self.assertEqual( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ), n["op1"] )
+
+		Gaffer.MetadataAlgo.setReadOnly( b["b"]["n"]["op1"], False )
+		self.assertIsNone( Gaffer.MetadataAlgo.readOnlyReason( n["op1"] ) )
+
+		with six.assertRaisesRegex( self, Exception, r"did not match C\+\+ signature" ) :
+			Gaffer.MetadataAlgo.readOnlyReason( None )
 
 	def testChildNodesAreReadOnly( self ) :
 
@@ -179,7 +222,7 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 			ancestorAffected.append( Gaffer.MetadataAlgo.ancestorAffectedByChange( n["p"]["s"], nodeTypeId, plugPath, plug ) )
 			childAffected.append( Gaffer.MetadataAlgo.childAffectedByChange( n["p"], nodeTypeId, plugPath, plug ) )
 
-		c = Gaffer.Metadata.plugValueChangedSignal().connect( plugValueChanged )
+		c = Gaffer.Metadata.plugValueChangedSignal().connect( plugValueChanged, scoped = True )
 
 		Gaffer.Metadata.registerValue( Gaffer.Node, "user", "test", 1 )
 		self.assertEqual( affected, [ False ] )
@@ -231,7 +274,7 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 			affected.append( Gaffer.MetadataAlgo.affectedByChange( n, nodeTypeId, node ) )
 			childAffected.append( Gaffer.MetadataAlgo.childAffectedByChange( n, nodeTypeId, node ) )
 
-		c = Gaffer.Metadata.nodeValueChangedSignal().connect( nodeValueChanged )
+		c = Gaffer.Metadata.nodeValueChangedSignal().connect( nodeValueChanged, scoped = True )
 
 		Gaffer.Metadata.registerValue( Gaffer.Node, "metadataAlgoTest", 1 )
 		self.assertEqual( affected, [ True ] )
@@ -267,7 +310,7 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 
 			affected.append( a )
 
-		c = Gaffer.Metadata.nodeValueChangedSignal().connect( nodeValueChanged )
+		c = Gaffer.Metadata.nodeValueChangedSignal().connect( nodeValueChanged, scoped = True )
 
 		Gaffer.Metadata.registerValue( s["b"]["n"], "metadataAlgoTest", "test" )
 		self.assertEqual( len( affected ), 1 )
@@ -330,6 +373,14 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 		for k in Gaffer.Metadata.registeredValues( t ) :
 			self.assertEqual( Gaffer.Metadata.value( t, k ), Gaffer.Metadata.value( s, k ) )
 
+		t = Gaffer.Node()
+		Gaffer.MetadataAlgo.copyIf( s, t, lambda f, t, n : n.startswith( "a" ) )
+		self.assertEqual( registeredTestValues( t ), { "a", "a2" } )
+
+		t = Gaffer.Node()
+		Gaffer.MetadataAlgo.copyIf( s, t, lambda f, t, n : n.startswith( "c" ) )
+		self.assertEqual( registeredTestValues( t ), { "c" } )
+
 	def testCopyColorKeepExisting( self ) :
 
 		plug1 = Gaffer.IntPlug()
@@ -385,7 +436,7 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 
 			affected.append( a )
 
-		c1 = Gaffer.Metadata.nodeValueChangedSignal().connect( nodeValueChanged )
+		c1 = Gaffer.Metadata.nodeValueChangedSignal().connect( nodeValueChanged, scoped = True )
 
 		def plugValueChanged( nodeTypeId, plugPath, key, plug ) :
 
@@ -396,7 +447,7 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 
 			affected.append( a )
 
-		c2 = Gaffer.Metadata.plugValueChangedSignal().connect( plugValueChanged )
+		c2 = Gaffer.Metadata.plugValueChangedSignal().connect( plugValueChanged, scoped = True )
 
 		Gaffer.Metadata.registerValue( s["b"]["n"]["op1"], "metadataAlgoTest", "test" )
 		self.assertEqual( len( affected ), 1 )
@@ -429,19 +480,6 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 
 		Gaffer.MetadataAlgo.setBookmarked( s["n"], False )
 		self.assertEqual( len( Gaffer.Metadata.registeredValues( s["n"], instanceOnly = True ) ), 0 )
-
-	def testLoadLegacyBookmarks( self ) :
-
-		s = Gaffer.ScriptNode()
-		s["fileName"].setValue( os.path.dirname( __file__ ) + "/scripts/legacyBookmarks.gfr" )
-		s.load()
-
-		self.assertTrue( Gaffer.MetadataAlgo.getBookmarked( s["Bookmarked"] ) )
-		self.assertEqual( len( Gaffer.Metadata.registeredValues( s["Bookmarked"], instanceOnly = True ) ), 1 )
-		self.assertFalse( Gaffer.MetadataAlgo.getBookmarked( s["Unbookmarked"] ) )
-		self.assertEqual( len( Gaffer.Metadata.registeredValues( s["Unbookmarked"], instanceOnly = True ) ), 0 )
-		self.assertTrue( Gaffer.MetadataAlgo.getBookmarked( s["OldBookmarked"] ) )
-		self.assertEqual( len( Gaffer.Metadata.registeredValues( s["OldBookmarked"], instanceOnly = True ) ), 1 )
 
 	def testNumericBookmarks( self ) :
 
@@ -525,6 +563,49 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 		self.assertEqual( Gaffer.MetadataAlgo.numericBookmark( s["r2"]["n"] ), 0 )
 		self.assertEqual( Gaffer.MetadataAlgo.getNumericBookmark( s, 1 ), None )
 
+	def testNumericBookmarksInReadOnlyBox( self ) :
+
+		# Numeric bookmarks are removed when loading read-only boxes.
+
+		s = Gaffer.ScriptNode()
+		s["box"] = Gaffer.Box()
+		s["box"]["n"] = Gaffer.Node()
+
+		Gaffer.MetadataAlgo.setNumericBookmark( s, 1, s["box"]["n"] )
+
+		s["box"].exportForReference( self.temporaryDirectory() + "/bookmarked.grf" )
+
+		# Bring the box back in, not as a Reference, but as read-only Box
+		s["b1"] = Gaffer.Box()
+		Gaffer.MetadataAlgo.setChildNodesAreReadOnly( s["b1"], True )
+		s.executeFile( self.temporaryDirectory() + "/bookmarked.grf", parent = s["b1"], continueOnError = True)
+
+		# Clashing Metadata was completely removed
+		self.assertEqual( Gaffer.Metadata.value( s["b1"]["n"], "numericBookmark1" ), None )
+		self.assertEqual( Gaffer.MetadataAlgo.numericBookmark( s["b1"]["n"] ), 0 )
+		self.assertEqual( Gaffer.MetadataAlgo.getNumericBookmark( s, 1 ), s["box"]["n"] )
+
+		# Even without the clash, the metadata is removed
+
+		Gaffer.MetadataAlgo.setNumericBookmark( s, 1, None )
+
+		s["b2"] = Gaffer.Box()
+		Gaffer.MetadataAlgo.setChildNodesAreReadOnly( s["b2"], True )
+		s.executeFile( self.temporaryDirectory() + "/bookmarked.grf", parent = s["b2"], continueOnError = True)
+
+		self.assertEqual( Gaffer.Metadata.value( s["b2"]["n"], "numericBookmark1" ), None )
+		self.assertEqual( Gaffer.MetadataAlgo.numericBookmark( s["b2"]["n"] ), 0 )
+		self.assertEqual( Gaffer.MetadataAlgo.getNumericBookmark( s, 1 ), None )
+
+		# But loading it without the read-only flag results in the bookmark being set
+
+		s["b3"] = Gaffer.Box()
+		s.executeFile( self.temporaryDirectory() + "/bookmarked.grf", parent = s["b3"], continueOnError = True)
+
+		self.assertEqual( Gaffer.Metadata.value( s["b3"]["n"], "numericBookmark1" ), True )
+		self.assertEqual( Gaffer.MetadataAlgo.numericBookmark( s["b3"]["n"] ), 1 )
+		self.assertEqual( Gaffer.MetadataAlgo.getNumericBookmark( s, 1 ), s["b3"]["n"] )
+
 	def testNumericBookmarkAffectedByChange( self ) :
 
 		# The naming convention for valid numeric bookmarks is "numericBookmark<1-9>"
@@ -566,6 +647,127 @@ class MetadataAlgoTest( GafferTest.TestCase ) :
 
 		self.assertTrue( Gaffer.MetadataAlgo.childAffectedByChange( n["p"], Gaffer.V3fPlug, changedPlugPath = "[xyz]", changedPlug = None ) )
 		self.assertFalse( Gaffer.MetadataAlgo.childAffectedByChange( n["p"], Gaffer.V3fPlug, changedPlugPath = "x.c", changedPlug = None ) )
+
+	def testAnnotations( self ) :
+
+		n = Gaffer.Node()
+		self.assertEqual( Gaffer.MetadataAlgo.annotations( n ), [] )
+		self.assertIsNone( Gaffer.MetadataAlgo.getAnnotation( n, "test" ) )
+
+		cs = GafferTest.CapturingSlot( Gaffer.Metadata.nodeValueChangedSignal( n ) )
+		Gaffer.MetadataAlgo.addAnnotation( n, "test", Gaffer.MetadataAlgo.Annotation( "Hello world", imath.Color3f( 1, 0, 0 ) ) )
+		self.assertTrue( len( cs ) )
+		for x in cs :
+			self.assertTrue( Gaffer.MetadataAlgo.annotationsAffectedByChange( x[1] ) )
+
+		self.assertEqual( Gaffer.MetadataAlgo.annotations( n ), [ "test" ] )
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test" ),
+			Gaffer.MetadataAlgo.Annotation( "Hello world", imath.Color3f( 1, 0, 0 ) )
+		)
+
+		del cs[:]
+		Gaffer.MetadataAlgo.addAnnotation( n, "test2", Gaffer.MetadataAlgo.Annotation( "abc", imath.Color3f( 0, 1, 0 ) ) )
+		self.assertTrue( len( cs ) )
+		for x in cs :
+			self.assertTrue( Gaffer.MetadataAlgo.annotationsAffectedByChange( x[1] ) )
+
+		self.assertEqual( Gaffer.MetadataAlgo.annotations( n ), [ "test", "test2" ] )
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test2" ),
+			Gaffer.MetadataAlgo.Annotation( "abc", imath.Color3f( 0, 1, 0 ) )
+		)
+
+		del cs[:]
+		Gaffer.MetadataAlgo.removeAnnotation( n, "test" )
+		self.assertTrue( len( cs ) )
+		for x in cs :
+			self.assertTrue( Gaffer.MetadataAlgo.annotationsAffectedByChange( x[1] ) )
+
+		self.assertEqual( Gaffer.MetadataAlgo.annotations( n ), [ "test2" ] )
+		self.assertIsNone( Gaffer.MetadataAlgo.getAnnotation( n, "test" ) )
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test2" ),
+			Gaffer.MetadataAlgo.Annotation( "abc", imath.Color3f( 0, 1, 0 ) )
+		)
+
+	def testAnnotationWithoutColor( self ) :
+
+		n = Gaffer.Node()
+		Gaffer.MetadataAlgo.addAnnotation( n, "test", Gaffer.MetadataAlgo.Annotation( text = "abc" ) )
+		self.assertEqual( len( Gaffer.Metadata.registeredValues( n, instanceOnly = True ) ), 1 )
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test" ),
+			Gaffer.MetadataAlgo.Annotation( text = "abc" )
+		)
+
+		Gaffer.MetadataAlgo.addAnnotation( n, "test", Gaffer.MetadataAlgo.Annotation( text = "xyz", color = imath.Color3f( 1 ) ) )
+		self.assertEqual( len( Gaffer.Metadata.registeredValues( n, instanceOnly = True ) ), 2 )
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test" ),
+			Gaffer.MetadataAlgo.Annotation( text = "xyz", color = imath.Color3f( 1 ) )
+		)
+
+		Gaffer.MetadataAlgo.addAnnotation( n, "test", Gaffer.MetadataAlgo.Annotation( text = "abc" ) )
+		self.assertEqual( len( Gaffer.Metadata.registeredValues( n, instanceOnly = True ) ), 1 )
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test" ),
+			Gaffer.MetadataAlgo.Annotation( text = "abc" )
+		)
+
+	def testAnnotationToBool( self ) :
+
+		self.assertFalse( Gaffer.MetadataAlgo.Annotation() )
+		self.assertTrue( Gaffer.MetadataAlgo.Annotation( "test" ) )
+
+	def testAnnotationTemplates( self ) :
+
+		defaultTemplates = Gaffer.MetadataAlgo.annotationTemplates()
+		self.assertIsNone( Gaffer.MetadataAlgo.getAnnotationTemplate( "test" ) )
+
+		a = Gaffer.MetadataAlgo.Annotation( "", imath.Color3f( 1, 0, 0 ) )
+		Gaffer.MetadataAlgo.addAnnotationTemplate( "test", a )
+		self.assertEqual( Gaffer.MetadataAlgo.getAnnotationTemplate( "test" ), a )
+		self.assertEqual( Gaffer.MetadataAlgo.annotationTemplates(), defaultTemplates + [ "test" ] )
+
+		n = Gaffer.Node()
+		Gaffer.MetadataAlgo.addAnnotation( n, "test", Gaffer.MetadataAlgo.Annotation( "hi" ) )
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test" ),
+			Gaffer.MetadataAlgo.Annotation( "hi" ),
+		)
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test", inheritTemplate = True ),
+			Gaffer.MetadataAlgo.Annotation( "hi", imath.Color3f( 1, 0, 0 ) ),
+		)
+
+		Gaffer.MetadataAlgo.removeAnnotationTemplate( "test" )
+		self.assertIsNone( Gaffer.MetadataAlgo.getAnnotationTemplate( "test" ) )
+		self.assertEqual( Gaffer.MetadataAlgo.annotationTemplates(), defaultTemplates )
+
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test" ),
+			Gaffer.MetadataAlgo.Annotation( "hi" ),
+		)
+		self.assertEqual(
+			Gaffer.MetadataAlgo.getAnnotation( n, "test", inheritTemplate = True ),
+			Gaffer.MetadataAlgo.Annotation( "hi" ),
+		)
+
+	def testNonUserAnnotationTemplates( self ) :
+
+		defaultTemplates = Gaffer.MetadataAlgo.annotationTemplates()
+		userOnlyDefaultTemplates = Gaffer.MetadataAlgo.annotationTemplates( userOnly = True )
+
+		a = Gaffer.MetadataAlgo.Annotation( "", imath.Color3f( 1, 0, 0 ) )
+		Gaffer.MetadataAlgo.addAnnotationTemplate( "test", a, user = False )
+
+		self.assertEqual( Gaffer.MetadataAlgo.annotationTemplates(), defaultTemplates + [ "test" ] )
+		self.assertEqual( Gaffer.MetadataAlgo.annotationTemplates( userOnly = True ), userOnlyDefaultTemplates )
+
+		Gaffer.MetadataAlgo.addAnnotationTemplate( "test2", a, user = True )
+		self.assertEqual( Gaffer.MetadataAlgo.annotationTemplates(), defaultTemplates + [ "test", "test2" ] )
+		self.assertEqual( Gaffer.MetadataAlgo.annotationTemplates( userOnly = True ), userOnlyDefaultTemplates + [ "test2" ] )
 
 	def tearDown( self ) :
 

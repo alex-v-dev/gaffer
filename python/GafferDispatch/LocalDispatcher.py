@@ -38,7 +38,11 @@ import os
 import errno
 import signal
 import shlex
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 import threading
 import time
 import traceback
@@ -131,7 +135,10 @@ class LocalDispatcher( GafferDispatch.Dispatcher ) :
 			pid = batch.blindData().get( "pid" )
 
 			try :
-				stats = subprocess.Popen( ( "ps -Ao pid,ppid,pgid,sess,pcpu,rss" ).split( " " ), stdout=subprocess.PIPE, stderr=subprocess.PIPE ).communicate()[0].split()
+				stats = subprocess.check_output(
+					[ "ps", "-Ao", "pid,ppid,pgid,sess,pcpu,rss" ],
+					universal_newlines = True,
+				).split()
 				for i in range( 0, len(stats), 6 ) :
 					if str(pid) in stats[i:i+4] :
 						pcpu += float(stats[i+4])
@@ -202,7 +209,7 @@ class LocalDispatcher( GafferDispatch.Dispatcher ) :
 				self.__reportKilled( batch )
 				return False
 
-			if not batch.plug() :
+			if batch.plug() is None :
 				self.__setStatus( batch, LocalDispatcher.Job.Status.Complete )
 				return True
 
@@ -239,7 +246,7 @@ class LocalDispatcher( GafferDispatch.Dispatcher ) :
 				self.__reportKilled( batch )
 				return False
 
-			if not batch.plug() :
+			if batch.plug() is None :
 				self.__reportCompleted( batch )
 				return True
 
@@ -256,8 +263,9 @@ class LocalDispatcher( GafferDispatch.Dispatcher ) :
 			taskContext = batch.context()
 			frames = str( IECore.frameListFromList( [ int(x) for x in batch.frames() ] ) )
 
-			args = [
-				"gaffer", "execute",
+			args = [ "gaffer.cmd" ] if os.name == "nt" else [ "gaffer" ]
+			args = args + [
+				"execute",
 				"-script", self.__scriptFile,
 				"-nodes", batch.blindData()["nodeName"].value,
 				"-frames", frames,
@@ -278,7 +286,10 @@ class LocalDispatcher( GafferDispatch.Dispatcher ) :
 
 			self.__setStatus( batch, LocalDispatcher.Job.Status.Running )
 			IECore.msg( IECore.MessageHandler.Level.Info, self.__messageTitle, " ".join( args ) )
-			process = subprocess.Popen( args, start_new_session=True )
+			if os.name == "nt":
+				process = subprocess.Popen( args )
+			else:
+				process = subprocess.Popen( args, start_new_session=True )
 			batch.blindData()["pid"] = IECore.IntData( process.pid )
 
 			while process.poll() is None :
@@ -370,9 +381,9 @@ class LocalDispatcher( GafferDispatch.Dispatcher ) :
 
 			self.__jobs = []
 			self.__failedJobs = []
-			self.__jobAddedSignal = Gaffer.Signal1()
-			self.__jobRemovedSignal = Gaffer.Signal1()
-			self.__jobFailedSignal = Gaffer.Signal1()
+			self.__jobAddedSignal = Gaffer.Signals.Signal1()
+			self.__jobRemovedSignal = Gaffer.Signals.Signal1()
+			self.__jobFailedSignal = Gaffer.Signals.Signal1()
 
 		def jobs( self ) :
 

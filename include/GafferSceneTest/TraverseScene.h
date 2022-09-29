@@ -50,21 +50,19 @@ namespace GafferSceneTest
 /// threads to process different children. It's useful to use this in test cases to exercise
 /// any thread related crashes, and also in profiling for performance improvement.
 GAFFERSCENETEST_API void traverseScene( const GafferScene::ScenePlug *scenePlug );
-/// \todo Remove.
-GAFFERSCENETEST_API void traverseScene( GafferScene::ScenePlug *scenePlug );
 
 /// Arranges for traverseScene() to be called every time the scene is dirtied. This is useful
 /// for exposing bugs caused by things like InteractiveRender and SceneView, where threaded
 /// traversals will be triggered automatically by plugDirtiedSignal().
-GAFFERSCENETEST_API boost::signals::connection connectTraverseSceneToPlugDirtiedSignal( const GafferScene::ConstScenePlugPtr &scene );
+GAFFERSCENETEST_API Gaffer::Signals::Connection connectTraverseSceneToPlugDirtiedSignal( const GafferScene::ConstScenePlugPtr &scene );
 
 /// Arranges for traverseScene() to be called every time the context is changed. This is useful
 /// for exposing bugs caused by things like InteractiveRender and SceneView, where threaded
 /// traversals will be triggered automatically from Context::changedSignal().
-GAFFERSCENETEST_API boost::signals::connection connectTraverseSceneToContextChangedSignal( const GafferScene::ConstScenePlugPtr &scene, const Gaffer::ContextPtr &context );
+GAFFERSCENETEST_API Gaffer::Signals::Connection connectTraverseSceneToContextChangedSignal( const GafferScene::ConstScenePlugPtr &scene, const Gaffer::ContextPtr &context );
 
 /// Arranges for traverseScene() to be called when Dispatcher::preDispatchSignal() is emitted.
-GAFFERSCENETEST_API boost::signals::connection connectTraverseSceneToPreDispatchSignal( const GafferScene::ConstScenePlugPtr &scene );
+GAFFERSCENETEST_API Gaffer::Signals::Connection connectTraverseSceneToPreDispatchSignal( const GafferScene::ConstScenePlugPtr &scene );
 
 } // namespace GafferSceneTest
 

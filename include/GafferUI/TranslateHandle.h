@@ -84,9 +84,6 @@ class GAFFERUI_API TranslateHandle : public Handle
 
 IE_CORE_DECLAREPTR( TranslateHandle )
 
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<TranslateHandle> > TranslateHandleIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<TranslateHandle> > RecursiveTranslateHandleIterator;
-
 } // namespace GafferUI
 
 #endif // GAFFERUI_TRANSLATEHANDLE_H

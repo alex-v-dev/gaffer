@@ -38,7 +38,12 @@
 import os
 import inspect
 import unittest
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
+import sys
 import threading
 
 import arnold
@@ -72,7 +77,7 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		GafferSceneTest.SceneTestCase.tearDown( self )
 
-		GafferScene.deregisterAdaptor( "Test" )
+		GafferScene.SceneAlgo.deregisterRenderAdaptor( "Test" )
 
 	def testExecute( self ) :
 
@@ -355,17 +360,17 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 		s["options"]["options"]["transformBlur"]["value"].setValue( False )
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
-			camera = arnold.AiNodeLookUpByName( "gaffer:defaultCamera" )
-			sphere = arnold.AiNodeLookUpByName( "/group/sphere" )
+			camera = arnold.AiNodeLookUpByName( universe, "gaffer:defaultCamera" )
+			sphere = arnold.AiNodeLookUpByName( universe, "/group/sphere" )
 			sphereMotionStart = arnold.AiNodeGetFlt( sphere, "motion_start" )
 			sphereMotionEnd = arnold.AiNodeGetFlt( sphere, "motion_end" )
 			sphereMatrix = arnold.AiNodeGetMatrix( sphere, "matrix" )
 
-			plane = arnold.AiNodeLookUpByName( "/group/plane" )
+			plane = arnold.AiNodeLookUpByName( universe, "/group/plane" )
 			planeMotionStart = arnold.AiNodeGetFlt( plane, "motion_start" )
 			planeMotionEnd = arnold.AiNodeGetFlt( plane, "motion_end" )
 			planeMatrix = arnold.AiNodeGetMatrix( plane, "matrix" )
@@ -386,22 +391,24 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 			self.assertEqual( arnold.AiNodeGetFlt( camera, "shutter_start" ), 1 )
 			self.assertEqual( arnold.AiNodeGetFlt( camera, "shutter_end" ), 1 )
 
+			self.assertEqual( arnold.AiNodeGetBool( arnold.AiUniverseGetOptions( universe ), "ignore_motion_blur" ), False )
+
 		# Motion blur
 
 		s["options"]["options"]["transformBlur"]["value"].setValue( True )
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
-			camera = arnold.AiNodeLookUpByName( "gaffer:defaultCamera" )
-			sphere = arnold.AiNodeLookUpByName( "/group/sphere" )
+			camera = arnold.AiNodeLookUpByName( universe, "gaffer:defaultCamera" )
+			sphere = arnold.AiNodeLookUpByName( universe, "/group/sphere" )
 			sphereMotionStart = arnold.AiNodeGetFlt( sphere, "motion_start" )
 			sphereMotionEnd = arnold.AiNodeGetFlt( sphere, "motion_end" )
 			sphereMatrices = arnold.AiNodeGetArray( sphere, "matrix" )
 
-			plane = arnold.AiNodeLookUpByName( "/group/plane" )
+			plane = arnold.AiNodeLookUpByName( universe, "/group/plane" )
 			planeMotionStart = arnold.AiNodeGetFlt( plane, "motion_start" )
 			planeMotionEnd = arnold.AiNodeGetFlt( plane, "motion_end" )
 			planeMatrices = arnold.AiNodeGetArray( plane, "matrix" )
@@ -433,23 +440,25 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 			self.assertEqual( arnold.AiNodeGetFlt( camera, "shutter_start" ), 0.75 )
 			self.assertEqual( arnold.AiNodeGetFlt( camera, "shutter_end" ), 1.25 )
 
+			self.assertEqual( arnold.AiNodeGetBool( arnold.AiUniverseGetOptions( universe ), "ignore_motion_blur" ), False )
+
 		# Motion blur on, but sampleMotion off
 
 		s["options"]["options"]["sampleMotion"]["enabled"].setValue( True )
 		s["options"]["options"]["sampleMotion"]["value"].setValue( False )
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
-			camera = arnold.AiNodeLookUpByName( "gaffer:defaultCamera" )
-			sphere = arnold.AiNodeLookUpByName( "/group/sphere" )
+			camera = arnold.AiNodeLookUpByName( universe, "gaffer:defaultCamera" )
+			sphere = arnold.AiNodeLookUpByName( universe, "/group/sphere" )
 			sphereMotionStart = arnold.AiNodeGetFlt( sphere, "motion_start" )
 			sphereMotionEnd = arnold.AiNodeGetFlt( sphere, "motion_end" )
 			sphereMatrices = arnold.AiNodeGetArray( sphere, "matrix" )
 
-			plane = arnold.AiNodeLookUpByName( "/group/plane" )
+			plane = arnold.AiNodeLookUpByName( universe, "/group/plane" )
 			planeMotionStart = arnold.AiNodeGetFlt( plane, "motion_start" )
 			planeMotionEnd = arnold.AiNodeGetFlt( plane, "motion_end" )
 			planeMatrices = arnold.AiNodeGetArray( plane, "matrix" )
@@ -480,7 +489,9 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 				self.assertEqual( self.__m44f( planeMatrix ), self.__m44f( expectedPlaneMatrix ) )
 
 			self.assertEqual( arnold.AiNodeGetFlt( camera, "shutter_start" ), 0.75 )
-			self.assertEqual( arnold.AiNodeGetFlt( camera, "shutter_end" ), 0.75 )
+			self.assertEqual( arnold.AiNodeGetFlt( camera, "shutter_end" ), 1.25 )
+
+			self.assertEqual( arnold.AiNodeGetBool( arnold.AiUniverseGetOptions( universe ), "ignore_motion_blur" ), True )
 
 	def testResolution( self ) :
 
@@ -504,10 +515,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			options = arnold.AiUniverseGetOptions()
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			options = arnold.AiUniverseGetOptions( universe )
 			self.assertEqual( arnold.AiNodeGetInt( options, "xres" ), 400 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "yres" ), 200 )
 
@@ -517,10 +528,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 		s["options"]["options"]["renderCamera"]["value"].setValue( "/camera" )
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			options = arnold.AiUniverseGetOptions()
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			options = arnold.AiUniverseGetOptions( universe )
 			self.assertEqual( arnold.AiNodeGetInt( options, "xres" ), 400 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "yres" ), 200 )
 
@@ -543,10 +554,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 		# Default region
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			options = arnold.AiUniverseGetOptions()
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			options = arnold.AiUniverseGetOptions( universe )
 			self.assertEqual( arnold.AiNodeGetInt( options, "xres" ), 640 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "yres" ), 480 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "region_min_x" ), 0 )
@@ -560,10 +571,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			options = arnold.AiUniverseGetOptions()
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			options = arnold.AiUniverseGetOptions( universe )
 			self.assertEqual( arnold.AiNodeGetInt( options, "xres" ), 640 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "yres" ), 480 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "region_min_x" ), 160 )
@@ -576,10 +587,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			options = arnold.AiUniverseGetOptions()
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			options = arnold.AiUniverseGetOptions( universe )
 			self.assertEqual( arnold.AiNodeGetInt( options, "xres" ), 640 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "yres" ), 480 )
 
@@ -604,10 +615,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			options = arnold.AiUniverseGetOptions()
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			options = arnold.AiUniverseGetOptions( universe )
 			self.assertEqual( arnold.AiNodeGetInt( options, "xres" ), 640 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "yres" ), 480 )
 			self.assertEqual( arnold.AiNodeGetInt( options, "region_min_x" ), -192 )
@@ -688,8 +699,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 		for t in threads :
 			t.join()
 
-		self.assertEqual( len( errors ), 1 )
-		self.assertTrue( "Arnold is already in use" in errors[0] )
+		with Gaffer.Context() as c :
+			for i in range( 0, 2 ) :
+				c.setFrame( i )
+				self.assertTrue( os.path.exists( c.substitute( render["fileName"].getValue() ) ) )
 
 	def testTraceSets( self ) :
 
@@ -725,12 +738,12 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		render["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
-			firstSphere = arnold.AiNodeLookUpByName( "/group/sphere" )
-			secondSphere = arnold.AiNodeLookUpByName( "/group/sphere1" )
+			firstSphere = arnold.AiNodeLookUpByName( universe, "/group/sphere" )
+			secondSphere = arnold.AiNodeLookUpByName( universe, "/group/sphere1" )
 
 			self.assertEqual( self.__arrayToSet( arnold.AiNodeGetArray( firstSphere, "trace_sets" ) ), { "firstSphere", "group", "bothSpheres" } )
 			self.assertEqual( self.__arrayToSet( arnold.AiNodeGetArray( secondSphere, "trace_sets" ) ), { "secondSphere", "group", "bothSpheres" } )
@@ -778,12 +791,12 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 					render["task"].execute()
 
-					with IECoreArnold.UniverseBlock( writable = True ) :
+					with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-						arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+						arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
 						self.assertEqual(
-							arnold.AiNodeGetInt( arnold.AiUniverseGetOptions(), "AA_seed" ),
+							arnold.AiNodeGetInt( arnold.AiUniverseGetOptions( universe ), "AA_seed" ),
 							seed or round( frame )
 						)
 
@@ -799,10 +812,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		render["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			self.assertTrue( arnold.AiNodeLookUpByName( "/sphereArnold" ) is not None )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			self.assertTrue( arnold.AiNodeLookUpByName( universe, "/sphereArnold" ) is not None )
 
 	def testAdaptors( self ) :
 
@@ -816,7 +829,7 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 			return result
 
-		GafferScene.registerAdaptor( "Test", a )
+		GafferScene.SceneAlgo.registerRenderAdaptor( "Test", a )
 
 		sphere = GafferScene.Sphere()
 
@@ -827,10 +840,10 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		render["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			node = arnold.AiNodeLookUpByName( "/sphere" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			node = arnold.AiNodeLookUpByName( universe, "/sphere" )
 
 			self.assertEqual( arnold.AiNodeGetBool( node, "matte" ), True )
 
@@ -873,12 +886,12 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 		render["fileName"].setValue( self.temporaryDirectory() + "/test.ass" )
 		render["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
 			# the first sphere had linked lights
-			sphere = arnold.AiNodeLookUpByName( "/group/sphere" )
+			sphere = arnold.AiNodeLookUpByName( universe, "/group/sphere" )
 
 			# check illumination
 			self.assertTrue( arnold.AiNodeGetBool( sphere, "use_light_group" ) )
@@ -899,7 +912,7 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 			)
 
 			# the second sphere does not have any light linking enabled
-			sphere1 = arnold.AiNodeLookUpByName( "/group/sphere1" )
+			sphere1 = arnold.AiNodeLookUpByName( universe, "/group/sphere1" )
 
 			# check illumination
 			self.assertFalse( arnold.AiNodeGetBool( sphere1, "use_light_group" ) )
@@ -948,11 +961,11 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 		render["fileName"].setValue( self.temporaryDirectory() + "/test.ass" )
 		render["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
-			sphere = arnold.AiNodeLookUpByName( "/group/sphere" )
+			sphere = arnold.AiNodeLookUpByName( universe, "/group/sphere" )
 			self.assertIsNotNone( sphere )
 
 			self.assertEqual( arnold.AiArrayGetNumElements( arnold.AiNodeGetArray( sphere, "light_group" ) ), 0 )
@@ -992,11 +1005,11 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
-			light = arnold.AiNodeLookUpByName( "light:/group/light" )
+			light = arnold.AiNodeLookUpByName( universe, "light:/group/light" )
 			linkedFilters = arnold.AiNodeGetArray( light, "filters" )
 			numFilters = arnold.AiArrayGetNumElements( linkedFilters.contents )
 
@@ -1090,17 +1103,24 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 	def testOSLShaders( self ) :
 
-		swizzle = GafferOSL.OSLShader()
-		swizzle.loadShader( "MaterialX/mx_swizzle_color_float" )
-		swizzle["parameters"]["in"].setValue( imath.Color3f( 0, 0, 1 ) )
-		swizzle["parameters"]["channels"].setValue( "b" )
+		purple = GafferOSL.OSLShader()
+		purple.loadShader( "Maths/MixColor" )
+		purple["parameters"]["a"].setValue( imath.Color3f( 0.5, 0, 1 ) )
 
-		pack = GafferOSL.OSLShader()
-		pack.loadShader( "MaterialX/mx_pack_color" )
-		pack["parameters"]["in1"].setInput( swizzle["out"]["out"] )
+		green = GafferOSL.OSLShader()
+		green.loadShader( "Maths/MixColor" )
+		green["parameters"]["a"].setValue( imath.Color3f( 0, 1, 0 ) )
+
+		mix = GafferOSL.OSLShader()
+		mix.loadShader( "Maths/MixColor" )
+		# test component connections
+		mix["parameters"]["a"][2].setInput( purple["out"]["out"][2] )
+		# test color connections
+		mix["parameters"]["b"].setInput( green["out"]["out"] )
+		mix["parameters"]["m"].setValue( 0.5 )
 
 		ball = GafferArnold.ArnoldShaderBall()
-		ball["shader"].setInput( pack["out"] )
+		ball["shader"].setInput( mix["out"] )
 
 		catalogue = GafferImage.Catalogue()
 
@@ -1129,7 +1149,7 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 			handler.waitFor( 0.1 ) #Just need to let the catalogue update
 
-			self.assertEqual( self.__color4fAtUV( catalogue, imath.V2f( 0.5 ) ), imath.Color4f( 1, 0, 0, 1 ) )
+			self.assertEqual( self.__color4fAtUV( catalogue, imath.V2f( 0.5 ) ), imath.Color4f( 0, 0.5, 0.5, 1 ) )
 
 	def testDefaultLightsMistakesDontForceLinking( self ) :
 
@@ -1158,15 +1178,78 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 		render["fileName"].setValue( self.temporaryDirectory() + "/test.ass" )
 		render["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
 
-			sphere = arnold.AiNodeLookUpByName( "/group/sphere" )
+			sphere = arnold.AiNodeLookUpByName( universe, "/group/sphere" )
 			self.assertIsNotNone( sphere )
 
 			self.assertEqual( arnold.AiArrayGetNumElements( arnold.AiNodeGetArray( sphere, "light_group" ) ), 0 )
 			self.assertFalse( arnold.AiNodeGetBool( sphere, "use_light_group" ) )
+
+	def testLightLinkingWarnings( self ) :
+
+		# Emulate a meshlight that has been set up sloppily - it is filtered to 4 locations, some actually
+		# have meshes, some don't
+		lightSphere = GafferScene.Sphere()
+		lightInvalid = GafferScene.Group()
+
+		lightGroup = GafferScene.Group()
+		lightGroup["name"].setValue( "lightGroup" )
+		lightGroup["in"][0].setInput( lightSphere["out"] ) # Has a mesh
+		lightGroup["in"][1].setInput( lightSphere["out"] ) # Has a mesh
+		lightGroup["in"][2].setInput( lightInvalid["out"] ) # Doesn't have a mesh
+		lightGroup["in"][3].setInput( lightInvalid["out"] ) # Doesn't have a mesh
+
+		meshLightFilter = GafferScene.PathFilter()
+		meshLightFilter["paths"].setValue( IECore.StringVectorData( [ "/lightGroup/*" ] ) )
+
+		meshLight = GafferArnold.ArnoldMeshLight()
+		meshLight["in"].setInput( lightGroup["out"] )
+		meshLight["filter"].setInput( meshLightFilter["out"] )
+
+		geoSphere = GafferScene.Sphere()
+		geoGroup = GafferScene.Group()
+		geoGroup["name"].setValue( "geoGroup" )
+		for i in range( 20 ):
+			geoGroup["in"][i].setInput( geoSphere["out"] )
+
+		group = GafferScene.Group()
+		group["in"][0].setInput( geoGroup["out"] )
+		group["in"][1].setInput( meshLight["out"] )
+
+		attributeFilter = GafferScene.PathFilter()
+		attributeFilter["paths"].setValue( IECore.StringVectorData( [ "/group/geoGroup/*" ] ) )
+
+		attributes = GafferScene.StandardAttributes()
+		attributes["in"].setInput( group["out"] )
+		attributes["filter"].setInput( attributeFilter["out"] )
+		attributes["attributes"]["linkedLights"]["enabled"].setValue( True )
+		# Link some ( but not all ) lights, so we have to do actual light linking
+		attributes["attributes"]["linkedLights"]["value"].setValue(
+			"/group/lightGroup/sphere1 /group/lightGroup/group /group/lightGroup/group1"
+		)
+
+		render = GafferArnold.ArnoldRender()
+		render["in"].setInput( attributes["out"] )
+		render["mode"].setValue( render.Mode.SceneDescriptionMode )
+		render["fileName"].setValue( self.temporaryDirectory() + "/test.ass" )
+
+		# Don't really understand why a regular `with CapturingMessageHandler` doesn't work here
+		try :
+			defaultHandler = IECore.MessageHandler.getDefaultHandler()
+			mh = IECore.CapturingMessageHandler()
+			IECore.MessageHandler.setDefaultHandler( mh )
+			render["task"].execute()
+		finally :
+			IECore.MessageHandler.setDefaultHandler( defaultHandler )
+
+		# We want to see one message per invalid light - not repeated for each location it's referenced at
+		self.assertEqual( len( mh.messages ), 2 )
+		mm = [ m.message for m in mh.messages ]
+		self.assertTrue( "Mesh light without object at location: /group/lightGroup/group" in mm )
+		self.assertTrue( "Mesh light without object at location: /group/lightGroup/group1" in mm )
 
 	def __color4fAtUV( self, image, uv ) :
 
@@ -1279,26 +1362,127 @@ class ArnoldRenderTest( GafferSceneTest.SceneTestCase ) :
 
 		s["render"]["task"].execute()
 
-		with IECoreArnold.UniverseBlock( writable = True ) :
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
 
-			arnold.AiASSLoad( self.temporaryDirectory() + "/test.ass" )
-			plane = arnold.AiNodeLookUpByName( "/plane" )
+			arnold.AiSceneLoad( universe, self.temporaryDirectory() + "/test.ass", None )
+			plane = arnold.AiNodeLookUpByName( universe, "/plane" )
 			shader = arnold.AiNodeGetPtr( plane, "shader" )
 			self.assertEqual( arnold.AiNodeGetStr( shader, "filename" ), "bar/path/foo.tx" )
 
-			cube = arnold.AiNodeLookUpByName( "/plane/cube" )
+			cube = arnold.AiNodeLookUpByName( universe, "/plane/cube" )
 			shader2 = arnold.AiNodeGetPtr( cube, "shader" )
 			self.assertEqual( arnold.AiNodeGetStr( shader2, "filename" ), "bar/path/override.tx" )
 
-			light = arnold.AiNodeLookUpByName( "light:/lightGroup/light" )
+			light = arnold.AiNodeLookUpByName( universe, "light:/lightGroup/light" )
 			self.assertEqual( arnold.AiNodeGetStr( light, "filename" ), "/path/default1.ies" )
 
 			gobo = arnold.AiNodeGetPtr( light, "filters" )
 			goboTex = arnold.AiNodeGetLink( gobo, "slidemap" )
 			self.assertEqual( arnold.AiNodeGetStr( goboTex, "filename" ), "default2/gobo.tx" )
 
-			lightFilter = arnold.AiNodeLookUpByName( "lightFilter:/lightGroup/lightFilter" )
+			lightFilter = arnold.AiNodeLookUpByName( universe, "lightFilter:/lightGroup/lightFilter" )
 			self.assertEqual( arnold.AiNodeGetStr( lightFilter, "geometry_type" ), "cylinder" )
+
+	def testEncapsulateDeformationBlur( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		# Make a sphere where the red channel has the value of the current frame.
+
+		s["sphere"] = GafferScene.Sphere()
+
+		s["sphereFilter"] = GafferScene.PathFilter()
+		s["sphereFilter"]["paths"].setValue( IECore.StringVectorData( [ "/sphere" ] ) )
+
+		s["frame"] = GafferTest.FrameNode()
+
+		s["flat"] = GafferArnold.ArnoldShader()
+		s["flat"].loadShader( "flat" )
+		s["flat"]["parameters"]["color"].setValue( imath.Color3f( 0 ) )
+		s["flat"]["parameters"]["color"]["r"].setInput( s["frame"]["output"] )
+
+		s["assignment"] = GafferScene.ShaderAssignment()
+		s["assignment"]["in"].setInput( s["sphere"]["out"] )
+		s["assignment"]["shader"].setInput( s["flat"]["out"] )
+		s["assignment"]["filter"].setInput( s["sphereFilter"]["out"] )
+
+		# Put the sphere in a capsule.
+
+		s["group"] = GafferScene.Group()
+		s["group"]["in"][0].setInput( s["assignment"]["out"] )
+
+		s["groupFilter"] = GafferScene.PathFilter()
+		s["groupFilter"]["paths"].setValue( IECore.StringVectorData( [ "/group" ] ) )
+
+		s["encapsulate"] = GafferScene.Encapsulate()
+		s["encapsulate"]["in"].setInput( s["group"]["out"] )
+		s["encapsulate"]["filter"].setInput( s["groupFilter"]["out"] )
+
+		# Do a render at frame 1, with deformation blur off.
+
+		s["outputs"] = GafferScene.Outputs()
+		s["outputs"].addOutput(
+			"beauty",
+			IECoreScene.Output(
+				os.path.join( self.temporaryDirectory(), "deformationBlurOff.exr" ),
+				"exr",
+				"rgba",
+				{
+				}
+			)
+		)
+		s["outputs"]["in"].setInput( s["encapsulate"]["out"] )
+
+		s["options"] = GafferScene.StandardOptions()
+		s["options"]["in"].setInput( s["outputs"]["out"] )
+
+		s["arnoldOptions"] = GafferArnold.ArnoldOptions()
+		s["arnoldOptions"]["in"].setInput( s["options"]["out"] )
+		s["arnoldOptions"]["options"]["aaSamples"]["enabled"].setValue( True )
+		s["arnoldOptions"]["options"]["aaSamples"]["value"].setValue( 6 )
+
+		s["render"] = GafferArnold.ArnoldRender()
+		s["render"]["in"].setInput( s["arnoldOptions"]["out"] )
+		s["render"]["task"].execute()
+
+		# Do another render at frame 1, but with deformation blur on.
+
+		s["options"]["options"]["deformationBlur"]["enabled"].setValue( True )
+		s["options"]["options"]["deformationBlur"]["value"].setValue( True )
+		s["options"]["options"]["shutter"]["enabled"].setValue( True )
+		s["options"]["options"]["shutter"]["value"].setValue( imath.V2f( -0.5, 0.5 ) )
+		s["outputs"]["outputs"][0]["fileName"].setValue( os.path.join( self.temporaryDirectory(), "deformationBlurOn.exr" ) )
+		s["render"]["task"].execute()
+
+		# Check that the renders are the same.
+
+		s["deformationOff"] = GafferImage.ImageReader()
+		s["deformationOff"]["fileName"].setValue( os.path.join( self.temporaryDirectory(), "deformationBlurOff.exr" ) )
+
+		s["deformationOn"] = GafferImage.ImageReader()
+		s["deformationOn"]["fileName"].setValue( os.path.join( self.temporaryDirectory(), "deformationBlurOn.exr" ) )
+
+		# The `maxDifference` is huge to account for noise and watermarks, but is still low enough to check what
+		# we want, since if the Encapsulate was sampled at shutter open and not the frame, the difference would be
+		# 0.5.
+		self.assertImagesEqual( s["deformationOff"]["out"], s["deformationOn"]["out"], maxDifference = 0.27, ignoreMetadata = True )
+
+	def testCoordinateSystem( self ) :
+
+		coordinateSystem = GafferScene.CoordinateSystem()
+		render = GafferArnold.ArnoldRender()
+		render["in"].setInput( coordinateSystem["out"] )
+		render["mode"].setValue( render.Mode.SceneDescriptionMode )
+		render["fileName"].setValue( os.path.join( self.temporaryDirectory(), "test.ass" ) )
+		render["task"].execute()
+
+		with IECoreArnold.UniverseBlock( writable = True ) as universe :
+
+			arnold.AiSceneLoad( universe, render["fileName"].getValue(), None )
+
+			# Arnold doesn't support coordinate systems, so we don't expect a
+			# node to have been created for ours.
+			self.assertIsNone( arnold.AiNodeLookUpByName( universe, "/coordinateSystem" ) )
 
 if __name__ == "__main__":
 	unittest.main()

@@ -108,7 +108,7 @@ class GadgetWidget( GafferUI.GLWidget ) :
 			self.__viewportGadget.setVisible( False )
 
 		self.__viewportGadget = viewportGadget
-		self.__renderRequestConnection = self.__viewportGadget.renderRequestSignal().connect( Gaffer.WeakMethod( self.__renderRequest ) )
+		self.__viewportGadget.renderRequestSignal().connect( Gaffer.WeakMethod( self.__renderRequest ), scoped = False )
 		size = self.size()
 		if size.x and size.y :
 			self.__viewportGadget.setViewport( size )
@@ -138,8 +138,8 @@ class GadgetWidget( GafferUI.GLWidget ) :
 		# event itself.
 		p = self.mousePosition( relativeTo = self )
 		event = GafferUI.ButtonEvent(
-			GafferUI.ButtonEvent.Buttons.None,
-			GafferUI.ButtonEvent.Buttons.None,
+			GafferUI.ButtonEvent.Buttons.None_,
+			GafferUI.ButtonEvent.Buttons.None_,
 			IECore.LineSegment3f(
 				imath.V3f( p.x, p.y, 1 ),
 				imath.V3f( p.x, p.y, 0 )
@@ -157,8 +157,8 @@ class GadgetWidget( GafferUI.GLWidget ) :
 
 		p = self.mousePosition( relativeTo = self )
 		event = GafferUI.ButtonEvent(
-			GafferUI.ButtonEvent.Buttons.None,
-			GafferUI.ButtonEvent.Buttons.None,
+			GafferUI.ButtonEvent.Buttons.None_,
+			GafferUI.ButtonEvent.Buttons.None_,
 			IECore.LineSegment3f(
 				imath.V3f( p.x, p.y, 1 ),
 				imath.V3f( p.x, p.y, 0 )
@@ -291,6 +291,11 @@ class GadgetWidget( GafferUI.GLWidget ) :
 		if not self._makeCurrent() :
 			return False
 
+		# We get given wheel events before they're given to the overlay items,
+		# so we must ignore them so they can be used by the overlay.
+		if self._qtWidget().itemAt( event.line.p0.x, event.line.p0.y ) is not None :
+			return False
+
 		return self.__viewportGadget.wheelSignal()( self.__viewportGadget, event )
 
 	def __visibilityChanged( self, widget ) :
@@ -319,7 +324,7 @@ class _EventFilter( QtCore.QObject ) :
 					imath.V3f( qEvent.x(), qEvent.y(), 1 ),
 					imath.V3f( qEvent.x(), qEvent.y(), 0 )
 				)
-			 )
+			)
 
 			if not toolTip :
 				return False

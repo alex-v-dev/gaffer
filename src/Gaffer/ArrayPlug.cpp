@@ -36,14 +36,14 @@
 
 #include "Gaffer/ArrayPlug.h"
 
-#include "Gaffer/BlockedConnection.h"
 #include "Gaffer/MetadataAlgo.h"
 #include "Gaffer/ScriptNode.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/bind/placeholders.hpp"
 
 using namespace boost;
+using namespace boost::placeholders;
 using namespace Gaffer;
 
 namespace
@@ -55,7 +55,7 @@ bool hasInput( const Plug *p )
 	{
 		return true;
 	}
-	for( PlugIterator it( p ); !it.done(); ++it )
+	for( Plug::Iterator it( p ); !it.done(); ++it )
 	{
 		if( hasInput( it->get() ) )
 		{
@@ -120,14 +120,14 @@ void ArrayPlug::setInput( PlugPtr input )
 	// Plug::setInput() will be managing the inputs of our children,
 	// and we don't want to be fighting with it in inputChanged(), so
 	// we disable our connection while it does its work.
-	BlockedConnection blockedConnection( m_inputChangedConnection );
+	Signals::BlockedConnection blockedConnection( m_inputChangedConnection );
 	Plug::setInput( input );
 }
 
 PlugPtr ArrayPlug::createCounterpart( const std::string &name, Direction direction ) const
 {
 	ArrayPlugPtr result = new ArrayPlug( name, direction, nullptr, m_minSize, m_maxSize, getFlags(), resizeWhenInputsChange() );
-	for( PlugIterator it( this ); !it.done(); ++it )
+	for( Plug::Iterator it( this ); !it.done(); ++it )
 	{
 		result->addChild( (*it)->createCounterpart( (*it)->getName(), direction ) );
 	}
@@ -219,8 +219,9 @@ void ArrayPlug::inputChanged( Gaffer::Plug *plug )
 
 	if( const ScriptNode *script = ancestor<ScriptNode>() )
 	{
-		if( script->currentActionStage() == Action::Undo ||
-		    script->currentActionStage() == Action::Redo
+		if(
+			script->currentActionStage() == Action::Undo ||
+			script->currentActionStage() == Action::Redo
 		)
 		{
 			// If we're currently in an undo or redo, we don't

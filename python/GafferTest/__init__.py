@@ -50,7 +50,7 @@ except AttributeError :
 			try :
 				f( self )
 			except :
-				print "Expected failure"
+				print( "Expected failure" )
 		return wrapper
 
 ## Determines if the tests are running in a Continuous Integration
@@ -61,7 +61,8 @@ def inCI( platforms = set() ) :
 		# There isn't a specific 'We're on Azure' var (other than some azure specific
 		# vars that are set that would be 'magic words'), so we set our own in our
 		# azure-pipelines.yaml
-		'azure' : 'AZURE'
+		"azure" : "AZURE",
+		"github" : "CI",
 	}
 
 	targets = platforms or platformVars.keys()
@@ -102,7 +103,6 @@ from .ContextTest import ContextTest
 from .CompoundPathFilterTest import CompoundPathFilterTest
 from .BadNode import BadNode
 from .CapturingSlot import CapturingSlot
-from .LazyModuleTest import LazyModuleTest
 from .NodeBindingTest import NodeBindingTest
 from .DictPathTest import DictPathTest
 from .ExpressionTest import ExpressionTest
@@ -164,6 +164,9 @@ from .NameSwitchTest import NameSwitchTest
 from .SpreadsheetTest import SpreadsheetTest
 from .ShufflePlugTest import ShufflePlugTest
 from .EditScopeTest import EditScopeTest
+from .RandomChoiceTest import RandomChoiceTest
+from .ContextQueryTest import ContextQueryTest
+from .TweakPlugTest import TweakPlugTest
 
 from .IECorePreviewTest import *
 

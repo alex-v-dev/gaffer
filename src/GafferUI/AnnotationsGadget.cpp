@@ -39,19 +39,22 @@
 #include "GafferUI/GraphGadget.h"
 #include "GafferUI/ImageGadget.h"
 #include "GafferUI/NodeGadget.h"
+#include "GafferUI/StandardNodeGadget.h"
 #include "GafferUI/Style.h"
 
 #include "Gaffer/Metadata.h"
 #include "Gaffer/MetadataAlgo.h"
+#include "Gaffer/ScriptNode.h"
 
 #include "boost/algorithm/string/predicate.hpp"
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/bind/placeholders.hpp"
 
 using namespace GafferUI;
 using namespace Gaffer;
 using namespace IECore;
 using namespace Imath;
+using namespace boost::placeholders;
 using namespace std;
 
 //////////////////////////////////////////////////////////////////////////
@@ -105,9 +108,37 @@ IECoreGL::Texture *numericBookmarkTexture()
 	return numericBookmarkTexture.get();
 }
 
+string wrap( const std::string &text, size_t maxLineLength )
+{
+	string result;
+
+	using Tokenizer = boost::tokenizer<boost::char_separator<char>>;
+	boost::char_separator<char> separator( "", " \n" );
+	Tokenizer tokenizer( text, separator );
+
+	size_t lineLength = 0;
+	for( const auto &s : tokenizer )
+	{
+		if( s == "\n" )
+		{
+			result += s;
+			lineLength = 0;
+		}
+		else if( lineLength == 0 || lineLength + s.size() < maxLineLength )
+		{
+			result += s;
+			lineLength += s.size();
+		}
+		else
+		{
+			result += "\n" + s;
+			lineLength = s.size();
+		}
+	}
+
+	return result;
+}
 float g_offset = 0.5;
-float g_borderWidth = 0.5;
-float g_spacing = 0.25;
 
 } // namespace
 
@@ -117,8 +148,10 @@ float g_spacing = 0.25;
 
 GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( AnnotationsGadget );
 
+const std::string AnnotationsGadget::untemplatedAnnotations = "__untemplated__";
+
 AnnotationsGadget::AnnotationsGadget()
-	:	Gadget( "AnnotationsGadget" )
+	:	Gadget( "AnnotationsGadget" ), m_dirty( true ), m_visibleAnnotations( "*" )
 {
 	Metadata::nodeValueChangedSignal().connect(
 		boost::bind( &AnnotationsGadget::nodeMetadataChanged, this, ::_1, ::_2, ::_3 )
@@ -127,6 +160,27 @@ AnnotationsGadget::AnnotationsGadget()
 
 AnnotationsGadget::~AnnotationsGadget()
 {
+}
+
+void AnnotationsGadget::setVisibleAnnotations( const IECore::StringAlgo::MatchPattern &patterns )
+{
+	if( patterns == m_visibleAnnotations )
+	{
+		return;
+	}
+
+	m_visibleAnnotations = patterns;
+	for( auto &a : m_annotations )
+	{
+		a.second.dirty = true;
+	}
+	m_dirty = true;
+	dirty( DirtyType::Render );
+}
+
+const IECore::StringAlgo::MatchPattern &AnnotationsGadget::getVisibleAnnotations() const
+{
+	return m_visibleAnnotations;
 }
 
 bool AnnotationsGadget::acceptsParent( const GraphComponent *potentialParent ) const
@@ -150,121 +204,78 @@ void AnnotationsGadget::parentChanging( Gaffer::GraphComponent *newParent )
 	}
 }
 
-void AnnotationsGadget::doRenderLayer( Layer layer, const Style *style ) const
+void AnnotationsGadget::renderLayer( Layer layer, const Style *style, RenderReason reason ) const
 {
 	if( layer != GraphLayer::Overlay )
 	{
 		return;
 	}
 
-	vector<InternedString> registeredValues;
+	update();
+
 	for( auto &ga : m_annotations )
 	{
-		const Node *node = ga.first->node();
 		Annotations &annotations = ga.second;
-
-		if( annotations.dirty )
-		{
-			annotations.renderable = false;
-
-			annotations.bookmarked = Gaffer::MetadataAlgo::getBookmarked( node );
-			annotations.renderable |= annotations.bookmarked;
-
-			if( int bookmark = MetadataAlgo::numericBookmark( node ) )
-			{
-				annotations.numericBookmark = std::to_string( bookmark );
-				annotations.renderable = true;
-			}
-			else
-			{
-				annotations.numericBookmark = InternedString();
-			}
-
-			annotations.standardAnnotations.clear();
-			registeredValues.clear();
-			Metadata::registeredValues( node, registeredValues );
-			for( const auto &key : registeredValues )
-			{
-				if( boost::starts_with( key.string(), "annotation:" ) && boost::ends_with( key.string(), ":text" ) )
-				{
-					if( auto text = Metadata::value<StringData>( node, key ) )
-					{
-						const string prefix = key.string().substr( 0, key.string().size() - 4 );
-						annotations.standardAnnotations.push_back(
-							{ text, Metadata::value<Color3fData>( node, prefix + "color" ) }
-						);
-						annotations.renderable = true;
-					}
-				}
-			}
-
-			annotations.dirty = false;
-		}
-
+		assert( !annotations.dirty );
 		if( !annotations.renderable )
 		{
 			continue;
 		}
 
 		const Box2f b = nodeFrame( ga.first );
+
+		V2f bookmarkIconPos( b.min.x, b.max.y );
+		V2f annotationOrigin( b.max.x + g_offset, b.max.y );
+		if( ga.first->node() == ga.first->node()->ancestor<ScriptNode>()->getFocus() )
+		{
+			const StandardNodeGadget *standardNodeGadget = runTimeCast<const StandardNodeGadget>( ga.first );
+			if( standardNodeGadget )
+			{
+				float fbw = standardNodeGadget->focusBorderWidth();
+				bookmarkIconPos += V2f( -fbw, fbw );
+				annotationOrigin += V2f( fbw, 0.0f );
+			}
+		}
+
 		if( annotations.bookmarked )
 		{
-			style->renderImage( Box2f( V2f( b.min.x - 1.0, b.max.y - 1.0 ), V2f( b.min.x + 1.0, b.max.y + 1.0 ) ), bookmarkTexture() );
+			style->renderImage( Box2f( bookmarkIconPos - V2f( 1.0 ), bookmarkIconPos + V2f( 1.0 ) ), bookmarkTexture() );
 		}
 
 		if( annotations.numericBookmark.string().size() )
 		{
 			if( !annotations.bookmarked )
 			{
-				style->renderImage( Box2f( V2f( b.min.x - 1.0, b.max.y - 1.0 ), V2f( b.min.x + 1.0, b.max.y + 1.0 ) ), numericBookmarkTexture() );
+				style->renderImage( Box2f( bookmarkIconPos - V2f( 1.0 ), bookmarkIconPos + V2f( 1.0 ) ), numericBookmarkTexture() );
 			}
 
 			const Box3f textBounds = style->textBound( Style::LabelText, annotations.numericBookmark.string() );
 
-			const Imath::Color4f textColor( 1.0f );
+			const Imath::Color4f textColor( 0.8f );
 			glPushMatrix();
-				IECoreGL::glTranslate( V2f( b.min.x + 1.0 - textBounds.size().x * 0.5, b.max.y - textBounds.size().y * 0.5 - 0.7 ) );
-				style->renderText( Style::BodyText, annotations.numericBookmark.string(), Style::NormalState, &textColor );
+				IECoreGL::glTranslate( V2f( bookmarkIconPos.x - 0.9 - textBounds.size().x, bookmarkIconPos.y - textBounds.size().y * 0.5 - 0.2 ) );
+				style->renderText( Style::LabelText, annotations.numericBookmark.string(), Style::NormalState, &textColor );
 			glPopMatrix();
 		}
 
-		if( annotations.standardAnnotations.size() )
+		for( const auto &a : annotations.standardAnnotations )
 		{
-			glPushMatrix();
-			IECoreGL::glTranslate( V2f( b.max.x + g_offset + g_borderWidth, b.max.y - g_borderWidth ) );
-
-			const Color4f midGrey( 0.65, 0.65, 0.65, 1.0 );
-			const Color3f darkGrey( 0.05 );
-			float previousHeight = 0;
-			for( const auto &a : annotations.standardAnnotations )
-			{
-				Box3f textBounds = style->textBound( Style::BodyText, a.text->readable() );
-
-				float yOffset;
-				if( &a == &annotations.standardAnnotations.front() )
-				{
-					yOffset = -style->characterBound( Style::BodyText ).max.y;
-				}
-				else
-				{
-					yOffset = -previousHeight -g_spacing;
-				}
-
-				IECoreGL::glTranslate( V2f( 0, yOffset ) );
-				/// \todo We're using `renderNodeFrame()` because it's the only way we can specify a colour,
-				/// but really we want `renderFrame()` to provide that option. Or we could consider having
-				/// explicit annotation rendering methods in the Style class.
-				style->renderNodeFrame(
-					Box2f( V2f( 0, textBounds.min.y ), V2f( textBounds.max.x, textBounds.max.y ) ),
-					g_borderWidth, Style::NormalState,
-					a.color ? &(a.color->readable()) : &darkGrey
-				);
-				style->renderText( Style::BodyText, a.text->readable(), Style::NormalState, &midGrey );
-				previousHeight = textBounds.size().y + g_borderWidth * 2;
-			}
-			glPopMatrix();
+			annotationOrigin = style->renderAnnotation( annotationOrigin, a.text(), Style::NormalState, a.colorData ? &a.color() : nullptr );
 		}
 	}
+}
+
+unsigned AnnotationsGadget::layerMask() const
+{
+	return (unsigned)GraphLayer::Overlay;
+}
+
+Imath::Box3f AnnotationsGadget::renderBound() const
+{
+	// This Gadget renders annotations for many nodes, so we can't give it a tight render bound
+	Box3f b;
+	b.makeInfinite();
+	return b;
 }
 
 GraphGadget *AnnotationsGadget::graphGadget()
@@ -282,6 +293,7 @@ void AnnotationsGadget::graphGadgetChildAdded( GraphComponent *child )
 	if( NodeGadget *nodeGadget = runTimeCast<NodeGadget>( child ) )
 	{
 		m_annotations[nodeGadget] = Annotations();
+		m_dirty = true;
 	}
 }
 
@@ -290,6 +302,7 @@ void AnnotationsGadget::graphGadgetChildRemoved( const GraphComponent *child )
 	if( const NodeGadget *nodeGadget = runTimeCast<const NodeGadget>( child ) )
 	{
 		m_annotations.erase( nodeGadget );
+		m_dirty = true;
 	}
 }
 
@@ -305,7 +318,7 @@ void AnnotationsGadget::nodeMetadataChanged( IECore::TypeId nodeTypeId, IECore::
 	if(
 		!MetadataAlgo::bookmarkedAffectedByChange( key ) &&
 		!MetadataAlgo::numericBookmarkAffectedByChange( key ) &&
-		!boost::starts_with( key.c_str(), "annotation:" )
+		!MetadataAlgo::annotationsAffectedByChange( key )
 	)
 	{
 		return;
@@ -316,6 +329,76 @@ void AnnotationsGadget::nodeMetadataChanged( IECore::TypeId nodeTypeId, IECore::
 		auto it = m_annotations.find( gadget );
 		assert( it != m_annotations.end() );
 		it->second.dirty = true;
-		requestRender();
+		m_dirty = true;
+		dirty( DirtyType::Render );
 	}
+}
+
+void AnnotationsGadget::update() const
+{
+	if( !m_dirty )
+	{
+		return;
+	}
+
+	vector<string> templates;
+	MetadataAlgo::annotationTemplates( templates );
+	std::sort( templates.begin(), templates.end() );
+	const bool untemplatedVisible = StringAlgo::matchMultiple( untemplatedAnnotations, m_visibleAnnotations );
+
+	vector<string> names;
+	for( auto &ga : m_annotations )
+	{
+		const Node *node = ga.first->node();
+		Annotations &annotations = ga.second;
+		if( !annotations.dirty )
+		{
+			continue;
+		}
+
+		annotations.renderable = false;
+
+		annotations.bookmarked = Gaffer::MetadataAlgo::getBookmarked( node );
+		annotations.renderable |= annotations.bookmarked;
+
+		if( int bookmark = MetadataAlgo::numericBookmark( node ) )
+		{
+			annotations.numericBookmark = std::to_string( bookmark );
+			annotations.renderable = true;
+		}
+		else
+		{
+			annotations.numericBookmark = InternedString();
+		}
+
+		annotations.standardAnnotations.clear();
+		names.clear();
+		MetadataAlgo::annotations( node, names );
+		for( const auto &name : names )
+		{
+			if( !StringAlgo::matchMultiple( name, m_visibleAnnotations ) )
+			{
+				const bool templated = binary_search( templates.begin(), templates.end(), name ) || name == "user";
+				if( templated || !untemplatedVisible )
+				{
+					continue;
+				}
+			}
+
+			annotations.standardAnnotations.push_back(
+				MetadataAlgo::getAnnotation( node, name, /* inheritTemplate = */ true )
+			);
+			// Word wrap. It might be preferable to do this during
+			// rendering, but we have no way of querying the extent of
+			// `Style::renderWrappedText()`.
+			annotations.standardAnnotations.back().textData = new StringData(
+				wrap( annotations.standardAnnotations.back().text(), 60 )
+			);
+		}
+		annotations.renderable |= (bool)annotations.standardAnnotations.size();
+
+		annotations.dirty = false;
+	}
+
+	m_dirty = false;
 }

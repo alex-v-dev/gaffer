@@ -53,12 +53,12 @@ class GAFFERIMAGE_API Shuffle : public ImageProcessor
 		Shuffle( const std::string &name=defaultName<Shuffle>() );
 		~Shuffle() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::Shuffle, ShuffleTypeId, ImageProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::Shuffle, ShuffleTypeId, ImageProcessor );
 
 		/// A custom plug to hold the name of an output channel and the
 		/// name of an input channel to shuffle into it. Add instances
 		/// of these to the Shuffle::channelsPlug() to define the shuffle.
-		class ChannelPlug : public Gaffer::ValuePlug
+		class GAFFERIMAGE_API ChannelPlug : public Gaffer::ValuePlug
 		{
 
 			public :
@@ -87,8 +87,6 @@ class GAFFERIMAGE_API Shuffle : public ImageProcessor
 		};
 
 		IE_CORE_DECLAREPTR( ChannelPlug )
-
-		typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, ChannelPlug> > ChannelPlugIterator;
 
 		Gaffer::ValuePlug *channelsPlug();
 		const Gaffer::ValuePlug *channelsPlug() const;

@@ -43,11 +43,14 @@
 #include "GafferTest/FilteredRecursiveChildIteratorTest.h"
 #include "GafferTest/MetadataTest.h"
 #include "GafferTest/MultiplyNode.h"
+#include "GafferTest/RandomTest.h"
 #include "GafferTest/RecursiveChildIteratorTest.h"
 
 #include "LRUCacheTest.h"
 #include "TaskMutexTest.h"
 #include "ValuePlugTest.h"
+#include "MessagesTest.h"
+#include "SignalsTest.h"
 
 #include "IECorePython/ScopedGILRelease.h"
 
@@ -61,11 +64,31 @@ static void testMetadataThreadingWrapper()
 	testMetadataThreading();
 }
 
+static boost::python::tuple countContextHash32CollisionsWrapper( int entries, int mode, int seed )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	auto result = countContextHash32Collisions( entries, mode, seed );
+	return boost::python::make_tuple( std::get<0>(result), std::get<1>(result), std::get<2>(result), std::get<3>(result) );
+}
+
+static float asFloat32( const float value )
+{
+	return value;
+}
+
 BOOST_PYTHON_MODULE( _GafferTest )
 {
 
-	GafferBindings::DependencyNodeClass<MultiplyNode>();
+	GafferBindings::DependencyNodeClass<MultiplyNode>()
+		.def( init<const char *, bool>(
+				(
+					boost::python::arg_( "name" ),
+					boost::python::arg_( "brokenAffects" )=false
+				)
+			)
+		);
 
+	def( "asFloat32", &asFloat32 );
 	def( "testRecursiveChildIterator", &testRecursiveChildIterator );
 	def( "testFilteredRecursiveChildIterator", &testFilteredRecursiveChildIterator );
 	def( "testMetadataThreading", &testMetadataThreadingWrapper );
@@ -74,11 +97,19 @@ BOOST_PYTHON_MODULE( _GafferTest )
 	def( "testManyEnvironmentSubstitutions", &testManyEnvironmentSubstitutions );
 	def( "testScopingNullContext", &testScopingNullContext );
 	def( "testEditableScope", &testEditableScope );
+	def( "countContextHash32Collisions", &countContextHash32CollisionsWrapper );
+	def( "testContextHashPerformance", &testContextHashPerformance );
+	def( "testContextCopyPerformance", &testContextCopyPerformance );
+	def( "testCopyEditableScope", &testCopyEditableScope );
+	def( "testContextHashValidation", &testContextHashValidation );
 	def( "testComputeNodeThreading", &testComputeNodeThreading );
 	def( "testDownstreamIterator", &testDownstreamIterator );
+	def( "testRandomPerf", &testRandomPerf );
 
 	bindTaskMutexTest();
 	bindLRUCacheTest();
 	bindValuePlugTest();
+	bindMessagesTest();
+	bindSignalsTest();
 
 }

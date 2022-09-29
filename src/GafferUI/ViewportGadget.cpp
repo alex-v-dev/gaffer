@@ -40,7 +40,8 @@
 #include "GafferUI/Style.h"
 #include "GafferUI/Pointer.h"
 
-#include "IECoreGL/PerspectiveCamera.h"
+#include "IECoreGL/Buffer.h"
+#include "IECoreGL/Camera.h"
 #include "IECoreGL/Selector.h"
 #include "IECoreGL/State.h"
 #include "IECoreGL/ToGLCameraConverter.h"
@@ -55,12 +56,14 @@
 #include "OpenEXR/ImathBoxAlgo.h"
 #include "OpenEXR/ImathMatrixAlgo.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/bind/placeholders.hpp"
 
 #include <chrono>
 #include <cmath>
+#include <regex>
 
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace IECoreScene;
@@ -93,14 +96,48 @@ float floorSignificantDigits( float x, int significantDigits )
 // a planarScale based on the current resolution.  This is pretty useless,
 // setting planarScale directly would be far more useful - but since the
 // interface exists, we have to deal with someone potentially calling it.
-V2f planarScaleFromCameraAndRes( const IECoreScene::Camera *cam, const V2i &res )
+V2f planarScaleFromCamera( const IECoreScene::Camera *cam )
 {
 	if( cam->getProjection() != "orthographic" )
 	{
 		return V2f( 1.0f );
 	}
 
-	return V2f( cam->getAperture()[0] / ((float)res[0] ), cam->getAperture()[1] / ((float)res[1] ) );
+	return cam->getAperture() / V2f( cam->getResolution() );
+}
+
+M44f g_identityMatrix;
+
+const Box3f initInfiniteBox()
+{
+	Box3f r;
+	r.makeInfinite();
+	return r;
+}
+
+Box3f g_infiniteBox( initInfiniteBox() );
+
+float rectPBufferData[12] = { -1, -1, 0,  -1, 1, 0,  1, -1, 0,  1, 1, 0 };
+IECoreGL::BufferPtr rectPBuffer()
+{
+	static IECoreGL::BufferPtr g_rectPBuffer = new IECoreGL::Buffer( rectPBufferData, sizeof( float ) * 12 );
+	return g_rectPBuffer;
+}
+
+float rectUvBufferData[12] = { 0, 0,  0, 1,  1, 0,  1, 1 };
+IECoreGL::BufferPtr rectUvBuffer()
+{
+	static IECoreGL::BufferPtr g_rectUvBuffer = new IECoreGL::Buffer( rectUvBufferData, sizeof( float ) * 8 );
+	return g_rectUvBuffer;
+}
+
+bool checkGLArbTextureFloat()
+{
+	bool supported = std::regex_match( std::string( (const char*)glGetString( GL_EXTENSIONS ) ), std::regex( R"(.*GL_ARB_texture_float( |\n).*)" ) );
+
+	// Really ought to warn here if supported is false, but currently we already warn in ImageGadget
+	// if GL_ARB_texture_float is not found, and there's probably not much point in duplicate warnings
+	return supported;
 }
 
 } // namespace
@@ -115,38 +152,48 @@ class ViewportGadget::CameraController : public boost::noncopyable
 	public :
 
 		CameraController()
-			:	m_planarMovement( true ), m_sourceCamera( new IECoreScene::Camera() ), m_viewportResolution( 640, 480 ), m_planarScale( 1.0f ), m_clippingPlanes( 0.01f, 100000.0f ), m_centerOfInterest( 1.0f )
+			:	m_planarMovement( true ), m_tumblingEnabled( true ), m_dollyingEnabled( true ),
+				m_camera( new IECoreScene::Camera() ), m_maxPlanarZoom( 0.0f ), m_planarScale( 1.0f ),
+				m_centerOfInterest( 1.0f )
 		{
+			// Force existence of parameter (see `getViewportResolution()`)
+			m_camera->setResolution( m_camera->getResolution() );
 		}
 
-		void setCamera( IECoreScene::CameraPtr camera )
+		bool setCamera( const IECoreScene::Camera *camera )
 		{
+			// Public API treats viewport resolution as independent of camera,
+			// but we store it on the camera so must transfer it over.
+			IECoreScene::CameraPtr cameraWithResolution = camera->copy();
+			cameraWithResolution->setResolution( m_camera->getResolution() );
+			const bool changed = !cameraWithResolution->isEqualTo( m_camera.get() );
+
 			if( m_planarMovement )
 			{
-				m_planarScale = planarScaleFromCameraAndRes( camera.get(), m_viewportResolution );
+				m_planarScale = planarScaleFromCamera( camera );
 			}
-			m_clippingPlanes = camera->getClippingPlanes();
-			m_sourceCamera = camera;
+			m_camera = cameraWithResolution;
+
+			return changed;
 		}
 
 		IECoreScene::ConstCameraPtr getCamera() const
 		{
-			IECoreScene::CameraPtr viewportCamera = m_sourceCamera->copy();
 			if( m_planarMovement )
 			{
+				IECoreScene::CameraPtr viewportCamera = m_camera->copy();
 				viewportCamera->setProjection( "orthographic" );
-				viewportCamera->setAperture( m_planarScale * V2f( m_viewportResolution[0], m_viewportResolution[1] ) );
+				viewportCamera->setAperture( m_planarScale * V2f( m_camera->getResolution() ) );
+				return viewportCamera;
 			}
-			viewportCamera->setResolution( m_viewportResolution );
-			viewportCamera->setClippingPlanes( m_clippingPlanes );
-			return viewportCamera;
+			return m_camera;
 		}
 
 		void setPlanarMovement( bool planarMovement )
 		{
 			if( planarMovement && !m_planarMovement )
 			{
-				m_planarScale = planarScaleFromCameraAndRes( m_sourceCamera.get(), m_viewportResolution );
+				m_planarScale = planarScaleFromCamera( m_camera.get() );
 			}
 			m_planarMovement = planarMovement;
 		}
@@ -154,6 +201,26 @@ class ViewportGadget::CameraController : public boost::noncopyable
 		bool getPlanarMovement() const
 		{
 			return m_planarMovement;
+		}
+
+		void setTumblingEnabled( bool tumblingEnabled )
+		{
+			m_tumblingEnabled = tumblingEnabled;
+		}
+
+		bool getTumblingEnabled() const
+		{
+			return m_tumblingEnabled;
+		}
+
+		void setDollyingEnabled( bool dollyingEnabled )
+		{
+			m_dollyingEnabled = dollyingEnabled;
+		}
+
+		bool getDollyingEnabled() const
+		{
+			return m_dollyingEnabled;
 		}
 
 		void setTransform( const M44f &transform )
@@ -177,42 +244,53 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			return m_centerOfInterest;
 		}
 
+		void setMaxPlanarZoom( const Imath::V2f &scale )
+		{
+			m_maxPlanarZoom = scale;
+		}
+
+		Imath::V2f getMaxPlanarZoom()
+		{
+			return m_maxPlanarZoom;
+		}
+
 		/// Set the resolution of the viewport we are working in
 		void setViewportResolution( const Imath::V2i &viewportResolution )
 		{
-			m_viewportResolution = viewportResolution;
+			m_camera->setResolution( viewportResolution );
 		}
 
 		const Imath::V2i &getViewportResolution() const
 		{
-			return m_viewportResolution;
+			// Can't call `getResolution()` because we need to return a reference.
+			return m_camera->parametersData()->member<V2iData>( "resolution" )->readable();
 		}
 
 		void setClippingPlanes( const Imath::V2f &clippingPlanes )
 		{
-			m_clippingPlanes = clippingPlanes;
+			m_camera->setClippingPlanes( clippingPlanes );
 		}
 
-		const Imath::V2f &getClippingPlanes() const
+		const Imath::V2f getClippingPlanes() const
 		{
-			return m_clippingPlanes;
+			return m_camera->getClippingPlanes();
 		}
 
 		/// Moves the camera to frame the specified box, keeping the
 		/// current viewing direction unchanged.
-		void frame( const Imath::Box3f &box, bool variableAspectZoom = false )
+		ViewportGadget::CameraFlags frame( const Imath::Box3f &box, bool variableAspectZoom = false )
 		{
 			V3f z( 0, 0, -1 );
 			V3f y( 0, 1, 0 );
 			M44f t = m_transform;
 			t.multDirMatrix( z, z );
 			t.multDirMatrix( y, y );
-			frame( box, z, y, variableAspectZoom );
+			return frame( box, z, y, variableAspectZoom );
 		}
 
 		/// Moves the camera to frame the specified box, viewing it from the
 		/// specified direction, and with the specified up vector.
-		void frame( const Imath::Box3f &box, const Imath::V3f &viewDirection,
+		ViewportGadget::CameraFlags frame( const Imath::Box3f &box, const Imath::V3f &viewDirection,
 			const Imath::V3f &upVector = Imath::V3f( 0, 1, 0 ), bool variableAspectZoom = false )
 		{
 			// Make a matrix to center the camera on the box, with the appropriate view direction.
@@ -226,15 +304,17 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			M44f inverseCameraMatrix = cameraMatrix.inverse();
 			Box3f cBox = transform( box, inverseCameraMatrix );
 
+			CameraFlags result = CameraFlags::Transform | CameraFlags::CenterOfInterest;
+
 			if( m_planarMovement )
 			{
 				// Orthographic. Translate to front of box.
 				// The 0.1 is just a fudge factor to ensure we don't accidentally clip
 				// the front of the box.
-				m_centerOfInterest = cBox.max.z + m_clippingPlanes[0] + 0.1;
+				m_centerOfInterest = cBox.max.z + m_camera->getClippingPlanes()[0] + 0.1;
 
 				// Adjust the planar scale so the entire bound can be seen.
-				V2f ratio( cBox.size().x / m_viewportResolution[0], cBox.size().y / m_viewportResolution[1] );
+				V2f ratio = V2f( cBox.size().x, cBox.size().y ) / V2f( m_camera->getResolution() );
 				if( variableAspectZoom )
 				{
 					m_planarScale = ratio;
@@ -243,31 +323,26 @@ class ViewportGadget::CameraController : public boost::noncopyable
 				{
 					m_planarScale = V2f( std::max( ratio.x, ratio.y ) );
 				}
+
+				result |= CameraFlags::Camera;
 			}
 			else
 			{
-				if( m_sourceCamera->getProjection()=="perspective" )
+				if( m_camera->getProjection()=="perspective" )
 				{
 					// Perspective. leave the field of view and screen window as is and translate
 					// back till the box is wholly visible. this currently assumes the screen window
 					// is centered about the camera axis.
-
-					const Box2f &normalizedScreenWindow = m_sourceCamera->frustum(
-						m_sourceCamera->getFilmFit(),
-						( (float)m_viewportResolution.x ) / m_viewportResolution.y
-					);
-
+					const Box2f &normalizedScreenWindow = m_camera->frustum();
 					// Compute a distance to push back in z in order to see the whole width and height of cBox
 					float z0 = cBox.size().x / normalizedScreenWindow.size().x;
 					float z1 = cBox.size().y / normalizedScreenWindow.size().y;
 
-					m_centerOfInterest = std::max( z0, z1 ) + cBox.max.z + m_clippingPlanes[0];
+					m_centerOfInterest = std::max( z0, z1 ) + cBox.max.z + m_camera->getClippingPlanes()[0];
 				}
 				else
 				{
-					// Orthographic. Note that we are not altering the projection, so we may still not
-					// be able to see the entire bound, if the ortho camera has too small an aperture to
-					// see the whole bound at once.
+					// Orthographic.
 
 					// Translate to front of box.
 					// We need to clamp the near clipping plane to >= 0.0f because
@@ -275,53 +350,63 @@ class ViewportGadget::CameraController : public boost::noncopyable
 					// planes that would otherwise send us way out into space. The
 					// 0.1 is just a fudge factor to ensure we don't accidentally clip
 					// the front of the box.
-					m_centerOfInterest = cBox.max.z + std::max( m_clippingPlanes[0], 0.0f ) + 0.1;
+					m_centerOfInterest = cBox.max.z + std::max( m_camera->getClippingPlanes()[0], 0.0f ) + 0.1;
 
 					// The user might want to tumble around the thing
 					// they framed. Translate back some more to make
 					// room to tumble around the entire bound.
-					m_centerOfInterest += cBox.size().length();
+					if( getTumblingEnabled() )
+					{
+						m_centerOfInterest += cBox.size().length();
+					}
+
+					// If dollying is enabled, then we have permission to modify the
+					// aperture. Adjust it so that we can see the whole bound.
+					if( getDollyingEnabled() )
+					{
+						m_camera->setAperture( V2f( cBox.size().x, cBox.size().y ) );
+						result |= CameraFlags::Camera;
+					}
 				}
 			}
 
 			cameraMatrix.translate( V3f( 0.0f, 0.0f, m_centerOfInterest ) );
 			m_transform = cameraMatrix;
 
+			return result;
 		}
 
 		/// Computes the points on the near and far clipping planes that correspond
 		/// with the specified raster position. Points are computed in world space.
 		void unproject( const Imath::V2f rasterPosition, Imath::V3f &near, Imath::V3f &far ) const
 		{
+			const V2f clippingPlanes = m_camera->getClippingPlanes();
 			if( m_planarMovement )
 			{
-				V2f rasterCenter = 0.5f * V2f( m_viewportResolution );
+				V2f rasterCenter = 0.5f * V2f( m_camera->getResolution() );
 				V2f unscaled = ( rasterPosition - rasterCenter ) * m_planarScale;
-				near = V3f( unscaled.x, -unscaled.y, -m_clippingPlanes[0] );
-				far = V3f( unscaled.x, -unscaled.y, -m_clippingPlanes[1] );
+				near = V3f( unscaled.x, -unscaled.y, -clippingPlanes[0] );
+				far = V3f( unscaled.x, -unscaled.y, -clippingPlanes[1] );
 			}
 			else
 			{
-				V2f ndc = V2f( rasterPosition ) / m_viewportResolution;
-				const Box2f &normalizedScreenWindow = m_sourceCamera->frustum(
-					m_sourceCamera->getFilmFit(),
-					( (float)m_viewportResolution.x ) / m_viewportResolution.y
-				);
+				V2f ndc = V2f( rasterPosition ) / V2f( m_camera->getResolution() );
+				const Box2f &normalizedScreenWindow = m_camera->frustum();
 				V2f screen(
 					lerp( normalizedScreenWindow.min.x, normalizedScreenWindow.max.x, ndc.x ),
 					lerp( normalizedScreenWindow.max.y, normalizedScreenWindow.min.y, ndc.y )
 				);
 
-				if( m_sourceCamera->getProjection()=="perspective" )
+				if( m_camera->getProjection()=="perspective" )
 				{
 					V3f camera( screen.x, screen.y, -1.0f );
-					near = camera * m_clippingPlanes[0];
-					far = camera * m_clippingPlanes[1];
+					near = camera * clippingPlanes[0];
+					far = camera * clippingPlanes[1];
 				}
 				else
 				{
-					near = V3f( screen.x, screen.y, -m_clippingPlanes[0] );
-					far = V3f( screen.x, screen.y, -m_clippingPlanes[1] );
+					near = V3f( screen.x, screen.y, -clippingPlanes[0] );
+					far = V3f( screen.x, screen.y, -clippingPlanes[1] );
 				}
 			}
 
@@ -337,18 +422,14 @@ class ViewportGadget::CameraController : public boost::noncopyable
 
 			if( m_planarMovement )
 			{
-				V2f rasterCenter = 0.5f * V2f( m_viewportResolution );
+				V2f rasterCenter = 0.5f * V2f( getViewportResolution() );
 				return rasterCenter + V2f( cameraPosition.x, -cameraPosition.y ) / m_planarScale;
 			}
 			else
 			{
-
-				const V2i &resolution = m_viewportResolution;
-				const Box2f &normalizedScreenWindow = m_sourceCamera->frustum(
-					m_sourceCamera->getFilmFit(),
-					( (float)m_viewportResolution.x ) / m_viewportResolution.y
-				);
-				if( m_sourceCamera->getProjection() == "perspective" )
+				const V2i resolution = getViewportResolution();
+				const Box2f &normalizedScreenWindow = m_camera->frustum();
+				if( m_camera->getProjection() == "perspective" )
 				{
 					cameraPosition = cameraPosition / -cameraPosition.z;
 				}
@@ -399,41 +480,46 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			m_motionMatrix = m_transform;
 			m_motionPlanarScale = m_planarScale;
 			m_motionCenterOfInterest = m_centerOfInterest;
+			m_motionOrthoAperture = m_camera->getAperture();
 		}
 
-		/// Updates the camera position based on a changed mouse position. Can only
-		/// be called after motionStart() and before motionEnd().
-		void motionUpdate( const Imath::V2f &newPosition, bool variableAspect = false )
+		/// Updates the camera position based on a changed mouse position. Can
+		/// only be called after motionStart() and before motionEnd(). Returns a
+		/// CameraFlags bitmask to indicate what has changed.
+		CameraFlags motionUpdate( const Imath::V2f &newPosition, bool variableAspect = false )
 		{
 			switch( m_motionType )
 			{
 				case Track :
-					track( newPosition );
+					return track( newPosition );
 					break;
 				case Tumble :
-					tumble( newPosition );
+					return tumble( newPosition );
 					break;
 				case Dolly :
-					dolly( newPosition, variableAspect );
+					return dolly( newPosition, variableAspect );
 					break;
 				default :
 					throw Exception( "CameraController not in motion." );
 			}
 		}
 
-		/// End the current motion, ready to call motionStart() again if required.
-		void motionEnd( const Imath::V2f &endPosition, bool variableAspect = false )
+		/// End the current motion, ready to call motionStart() again if
+		/// required. Returns a CameraFlags bitmask to indicate what has
+		/// changed.
+		CameraFlags motionEnd( const Imath::V2f &endPosition, bool variableAspect = false )
 		{
+			CameraFlags result = CameraFlags::None;
 			switch( m_motionType )
 			{
 				case Track :
-					track( endPosition );
+					result = track( endPosition );
 					break;
 				case Tumble :
-					tumble( endPosition );
+					result = tumble( endPosition );
 					break;
 				case Dolly :
-					dolly( endPosition, variableAspect );
+					result = dolly( endPosition, variableAspect );
 					break;
 				default :
 					break;
@@ -441,6 +527,7 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			m_motionType = None;
 			m_zoomAxis = ZoomAxis::Undefined;
 			Pointer::setCurrent( "" );
+			return result;
 		}
 
 		/// Determine the type of motion based on current events
@@ -479,7 +566,7 @@ class ViewportGadget::CameraController : public boost::noncopyable
 
 	private:
 
-		void track( const Imath::V2f &p )
+		CameraFlags track( const Imath::V2f &p )
 		{
 			V2f d = p - m_motionStart;
 
@@ -490,14 +577,12 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			}
 			else
 			{
-				const Box2f &normalizedScreenWindow = m_sourceCamera->frustum(
-					m_sourceCamera->getFilmFit(),
-					( (float)m_viewportResolution.x ) / m_viewportResolution.y
-				);
+				const V2i resolution = getViewportResolution();
+				const Box2f &normalizedScreenWindow = m_camera->frustum();
 
-				translate.x = -normalizedScreenWindow.size().x * d.x/(float)m_viewportResolution.x;
-				translate.y = normalizedScreenWindow.size().y * d.y/(float)m_viewportResolution.y;
-				if( m_sourceCamera->getProjection()=="perspective" )
+				translate.x = -normalizedScreenWindow.size().x * d.x/(float)resolution.x;
+				translate.y = normalizedScreenWindow.size().y * d.y/(float)resolution.y;
+				if( m_camera->getProjection()=="perspective" )
 				{
 					translate *= m_centerOfInterest;
 				}
@@ -505,10 +590,17 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			M44f t = m_motionMatrix;
 			t.translate( translate );
 			m_transform = t;
+
+			return CameraFlags::Transform;
 		}
 
-		void tumble( const Imath::V2f &p )
+		CameraFlags tumble( const Imath::V2f &p )
 		{
+			if( !m_tumblingEnabled )
+			{
+				return CameraFlags::None;
+			}
+
 			V2f d = p - m_motionStart;
 
 			V3f centerOfInterestInWorld = V3f( 0, 0, -m_centerOfInterest ) * m_motionMatrix;
@@ -529,11 +621,18 @@ class ViewportGadget::CameraController : public boost::noncopyable
 			t.translate( -centerOfInterestInWorld );
 
 			m_transform = m_motionMatrix * t;
+
+			return CameraFlags::Transform;
 		}
 
-		void dolly( const Imath::V2f &p, bool variableAspect )
+		CameraFlags dolly( const Imath::V2f &p, bool variableAspect )
 		{
-			V2i resolution = m_viewportResolution;
+			if( !m_dollyingEnabled )
+			{
+				return CameraFlags::None;
+			}
+
+			const V2i resolution = m_camera->getResolution();
 			V2f dv = V2f( (p - m_motionStart) ) / resolution;
 			float d = dv.x - dv.y;
 
@@ -562,6 +661,14 @@ class ViewportGadget::CameraController : public boost::noncopyable
 				}
 				m_planarScale = m_motionPlanarScale * mult;
 
+				if( m_maxPlanarZoom != V2f( 0.0f ) )
+				{
+					m_planarScale = V2f(
+						std::max( m_planarScale.x, 1.0f / m_maxPlanarZoom.x ),
+						std::max( m_planarScale.y, 1.0f / m_maxPlanarZoom.y )
+					);
+				}
+
 				// Also apply a transform to keep the origin of the scale centered on the
 				// starting cursor position
 				V2f offset = V2f( -1, 1 ) * ( m_planarScale - m_motionPlanarScale ) *
@@ -569,8 +676,9 @@ class ViewportGadget::CameraController : public boost::noncopyable
 				M44f t = m_motionMatrix;
 				t.translate( V3f( offset.x, offset.y, 0 ) );
 				m_transform = t;
+				return CameraFlags::Transform | CameraFlags::Camera;
 			}
-			else
+			else if( m_camera->getProjection()=="perspective" )
 			{
 				m_centerOfInterest = m_motionCenterOfInterest * expf( -1.9f * d );
 
@@ -578,6 +686,15 @@ class ViewportGadget::CameraController : public boost::noncopyable
 				t.translate( V3f( 0, 0, m_centerOfInterest - m_motionCenterOfInterest ) );
 
 				m_transform = t;
+				return CameraFlags::Transform | CameraFlags::CenterOfInterest;
+			}
+			else
+			{
+				// Orthographic
+				const float oldWidth = m_camera->getAperture().x;
+				const float newWidth = std::max( oldWidth * expf( -1.9f * d ), 0.01f );
+				m_camera->setAperture( m_motionOrthoAperture * newWidth / oldWidth );
+				return CameraFlags::Camera;
 			}
 		}
 
@@ -585,17 +702,15 @@ class ViewportGadget::CameraController : public boost::noncopyable
 		// between world units and pixels, independ of viewport resolution
 		// ( and m_sourceCamera will be null ).
 		bool m_planarMovement;
+		bool m_tumblingEnabled;
+		bool m_dollyingEnabled;
 
-		// m_sourceCamera provides the values for any camera properties
-		// which we don't override
-		IECoreScene::ConstCameraPtr m_sourceCamera;
-
-		// Resolution of the viewport we are working in
-		Imath::V2i m_viewportResolution;
-
-		// Parts of the camera we manipulate
+		// The camera we are manipulating.
+		IECoreScene::CameraPtr m_camera;
+		// Additional properties we manipulate, which don't have a standard
+		// representation in the Camera class.
+		Imath::V2f m_maxPlanarZoom;
 		Imath::V2f m_planarScale;
-		Imath::V2f m_clippingPlanes;
 		float m_centerOfInterest;
 		M44f m_transform;
 
@@ -605,6 +720,7 @@ class ViewportGadget::CameraController : public boost::noncopyable
 		Imath::M44f m_motionMatrix;
 		float m_motionCenterOfInterest;
 		Imath::V2f m_motionPlanarScale;
+		Imath::V2f m_motionOrthoAperture;
 
 		ZoomAxis m_zoomAxis;
 };
@@ -616,14 +732,18 @@ class ViewportGadget::CameraController : public boost::noncopyable
 GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( ViewportGadget );
 
 ViewportGadget::ViewportGadget( GadgetPtr primaryChild )
-	: Gadget(),
-	  m_cameraController( new CameraController() ),
-	  m_cameraInMotion( false ),
-	  m_cameraEditable( true ),
-	  m_preciseMotionAllowed( true ),
-	  m_preciseMotionEnabled( false ),
-	  m_dragTracking( DragTracking::NoDragTracking ),
-	  m_variableAspectZoom( false )
+	:	Gadget(),
+		m_cameraController( new CameraController() ),
+		m_cameraInMotion( false ),
+		m_cameraEditable( true ),
+		m_preciseMotionAllowed( true ),
+		m_preciseMotionEnabled( false ),
+		m_dragTracking( DragTracking::NoDragTracking ),
+		m_variableAspectZoom( false ),
+		m_dragButton( ButtonEvent::None ),
+		m_cameraMotionDuringDrag( false ),
+		m_fbo( 0 ),
+		m_framebufferSize( -1 )
 {
 
 	// Viewport visibility is managed by GadgetWidgets,
@@ -648,11 +768,21 @@ ViewportGadget::ViewportGadget( GadgetPtr primaryChild )
 	wheelSignal().connect( boost::bind( &ViewportGadget::wheel, this, ::_1, ::_2 ) );
 	keyPressSignal().connect( boost::bind( &ViewportGadget::keyPress, this, ::_1, ::_2 ) );
 	keyReleaseSignal().connect( boost::bind( &ViewportGadget::keyRelease, this, ::_1, ::_2 ) );
-
 }
 
 ViewportGadget::~ViewportGadget()
 {
+	if( m_framebufferSize != Imath::V2i( -1 ) )
+	{
+		// We should technically ensure that the GL context is current when making these calls, but it
+		// seems to be working to just make them in the destructor.
+		// John says "I think we're just generally lucky because all our GL contexts are sharing
+		// the same resources, so it doesn't matter which is current"
+
+		glDeleteTextures(1, &m_framebufferTexture);
+		glDeleteRenderbuffers(1, &m_rbo);
+		glDeleteFramebuffers(1, &m_fbo);
+	}
 }
 
 bool ViewportGadget::acceptsParent( const Gaffer::GraphComponent *potentialParent ) const
@@ -668,11 +798,10 @@ std::string ViewportGadget::getToolTip( const IECore::LineSegment3f &line ) cons
 		return result;
 	}
 
-	std::vector<GadgetPtr> gadgets;
-	gadgetsAt( V2f( line.p0.x, line.p0.y ), gadgets );
-	for( std::vector<GadgetPtr>::const_iterator it = gadgets.begin(), eIt = gadgets.end(); it != eIt; it++ )
+	std::vector<Gadget*> gadgets = gadgetsAtInternal( V2f( line.p0.x, line.p0.y ), false );
+	for( Gadget *it : gadgets )
 	{
-		Gadget *gadget = it->get();
+		Gadget *gadget = it;
 		while( gadget && gadget != this )
 		{
 			IECore::LineSegment3f lineInGadgetSpace = rasterToGadgetSpace( V2f( line.p0.x, line.p0.y), gadget );
@@ -768,13 +897,11 @@ void ViewportGadget::setCamera( IECoreScene::CameraPtr camera )
 		throw Exception( "Cannot use null camera in ViewportGadget." );
 	}
 
-	if( m_cameraController->getCamera()->isEqualTo( camera.get() ) )
+	if( m_cameraController->setCamera( camera.get() ) )
 	{
-		return;
+		m_cameraChangedSignal( this, CameraFlags::Camera );
+		dirty( DirtyType::Render );
 	}
-	m_cameraController->setCamera( camera->copy() );
-	m_cameraChangedSignal( this );
-	requestRender();
 }
 
 const Imath::M44f &ViewportGadget::getCameraTransform() const
@@ -784,16 +911,17 @@ const Imath::M44f &ViewportGadget::getCameraTransform() const
 
 void ViewportGadget::setCameraTransform( const Imath::M44f &transform )
 {
-	if( transform == getCameraTransform() )
+	const Imath::M44f viewTransform = Imath::sansScalingAndShear( transform );
+	if( viewTransform == getCameraTransform() )
 	{
 		return;
 	}
-	m_cameraController->setTransform( transform );
-	m_cameraChangedSignal( this );
-	requestRender();
+	m_cameraController->setTransform( viewTransform );
+	m_cameraChangedSignal( this, CameraFlags::Transform );
+	dirty( DirtyType::Render );
 }
 
-ViewportGadget::UnarySignal &ViewportGadget::cameraChangedSignal()
+ViewportGadget::CameraChangedSignal &ViewportGadget::cameraChangedSignal()
 {
 	return m_cameraChangedSignal;
 }
@@ -810,7 +938,17 @@ void ViewportGadget::setCameraEditable( bool editable )
 
 void ViewportGadget::setCenterOfInterest( float centerOfInterest )
 {
+	if( centerOfInterest == m_cameraController->getCenterOfInterest() )
+	{
+		return;
+	}
 	m_cameraController->setCenterOfInterest( centerOfInterest );
+	m_cameraChangedSignal( this, CameraFlags::CenterOfInterest );
+}
+
+float ViewportGadget::getCenterOfInterest() const
+{
+	return m_cameraController->getCenterOfInterest();
 }
 
 float ViewportGadget::getCenterOfInterest()
@@ -818,19 +956,52 @@ float ViewportGadget::getCenterOfInterest()
 	return m_cameraController->getCenterOfInterest();
 }
 
+void ViewportGadget::setTumblingEnabled( bool tumblingEnabled )
+{
+	m_cameraController->setTumblingEnabled( tumblingEnabled );
+}
+
+bool ViewportGadget::getTumblingEnabled() const
+{
+	return m_cameraController->getTumblingEnabled();
+}
+
+void ViewportGadget::setDollyingEnabled( bool dollyingEnabled )
+{
+	m_cameraController->setDollyingEnabled( dollyingEnabled );
+}
+
+bool ViewportGadget::getDollyingEnabled() const
+{
+	return m_cameraController->getDollyingEnabled();
+}
+
+void ViewportGadget::setMaxPlanarZoom( const Imath::V2f &scale )
+{
+	m_cameraController->setMaxPlanarZoom( scale );
+}
+
+Imath::V2f ViewportGadget::getMaxPlanarZoom() const
+{
+	return m_cameraController->getMaxPlanarZoom();
+}
+
+Imath::V2f ViewportGadget::getMaxPlanarZoom()
+{
+	return m_cameraController->getMaxPlanarZoom();
+}
+
 void ViewportGadget::frame( const Imath::Box3f &box )
 {
-	m_cameraController->frame( box, m_variableAspectZoom );
-	m_cameraChangedSignal( this );
-	requestRender();
+	m_cameraChangedSignal( this, m_cameraController->frame( box, m_variableAspectZoom ) );
+	dirty( DirtyType::Render );
 }
 
 void ViewportGadget::frame( const Imath::Box3f &box, const Imath::V3f &viewDirection,
 	const Imath::V3f &upVector )
 {
-	m_cameraController->frame( box, viewDirection, upVector );
-	m_cameraChangedSignal( this );
-	requestRender();
+	m_cameraChangedSignal( this, m_cameraController->frame( box, viewDirection, upVector ) );
+	dirty( DirtyType::Render );
 }
 
 void ViewportGadget::fitClippingPlanes( const Imath::Box3f &box )
@@ -865,8 +1036,8 @@ void ViewportGadget::fitClippingPlanes( const Imath::Box3f &box )
 	near = std::max( 0.01f, near );
 
 	m_cameraController->setClippingPlanes( V2f( near, far ) );
-	m_cameraChangedSignal( this );
-	requestRender();
+	m_cameraChangedSignal( this, CameraFlags::Camera );
+	dirty( DirtyType::Render );
 }
 
 void ViewportGadget::setDragTracking( unsigned dragTracking )
@@ -889,21 +1060,35 @@ bool ViewportGadget::getVariableAspectZoom() const
 	return m_variableAspectZoom;
 }
 
-void ViewportGadget::gadgetsAt( const Imath::V2f &rasterPosition, std::vector<GadgetPtr> &gadgets ) const
+std::vector< Gadget* > ViewportGadget::gadgetsAt( const Imath::V2f &rasterPosition ) const
+{
+	return gadgetsAtInternal( Box2f( rasterPosition - V2f( 1 ), rasterPosition + V2f( 1 ) ), Layer::None, false );
+}
+
+std::vector< Gadget* > ViewportGadget::gadgetsAt( const Imath::Box2f &rasterRegion, Gadget::Layer filterLayer ) const
+{
+	return gadgetsAtInternal( rasterRegion, filterLayer, false );
+}
+std::vector< Gadget* > ViewportGadget::gadgetsAtInternal( const Imath::V2f &rasterPosition, bool dragging ) const
+{
+	return gadgetsAtInternal( Box2f( rasterPosition - V2f( 1 ), rasterPosition + V2f( 1 ) ), Layer::None, dragging );
+}
+
+std::vector< Gadget* > ViewportGadget::gadgetsAtInternal( const Imath::Box2f &rasterRegion, Gadget::Layer filterLayer, bool dragging ) const
 {
 	std::vector<HitRecord> selection;
 	{
-		SelectionScope selectionScope( this, rasterPosition, selection, IECoreGL::Selector::IDRender );
-		Gadget::render();
+		SelectionScope selectionScope( this, rasterRegion, selection, IECoreGL::Selector::IDRender );
+		renderInternal( dragging ? RenderReason::DragSelect : RenderReason::Select, filterLayer );
 	}
 
-	for( std::vector<HitRecord>::const_iterator it = selection.begin(); it!= selection.end(); it++ )
+	std::vector< Gadget* > gadgets;
+	for( const HitRecord &it : selection )
 	{
-		GadgetPtr gadget = Gadget::select( it->name );
-		if( gadget )
-		{
-			gadgets.push_back( gadget );
-		}
+		// We can assume that renderInternal has populated m_renderItem, so we can just index into it
+		// using the index passed to loadName ( reversing the increment-by-one used to avoid the reserved
+		// name "0" )
+		gadgets.push_back( const_cast<Gadget*>( m_renderItems[ it.name - 1 ].gadget ) );
 	}
 
 	if( !gadgets.size() )
@@ -912,6 +1097,17 @@ void ViewportGadget::gadgetsAt( const Imath::V2f &rasterPosition, std::vector<Ga
 		{
 			gadgets.push_back( const_cast<Gadget *>( g ) );
 		}
+	}
+	return gadgets;
+}
+
+// DEPRECATED
+void ViewportGadget::gadgetsAt( const Imath::V2f &rasterPosition, std::vector<GadgetPtr> &gadgets ) const
+{
+	std::vector< Gadget* > retGadgets = gadgetsAt( rasterPosition );
+	for( Gadget *g : retGadgets )
+	{
+		gadgets.push_back( g );
 	}
 }
 
@@ -975,12 +1171,290 @@ void ViewportGadget::render() const
 	glMultMatrixf( camera->getTransform().getValue() );
 	glMatrixMode( GL_MODELVIEW );
 
-	Gadget::render();
+	renderInternal( RenderReason::Draw );
+}
+
+void ViewportGadget::childDirtied( DirtyType dirtyType )
+{
+	if( dirtyType == DirtyType::Layout || dirtyType == DirtyType::RenderBound )
+	{
+		// We need to rebuild the render items list
+		m_renderItems.clear();
+	}
+
+	renderRequestSignal()( this );
+}
+
+void ViewportGadget::renderLayerInternal( RenderReason reason, Gadget::Layer layer, const M44f &viewTransform, const Box3f &bound, const Style *&currentStyle, IECoreGL::Selector *selector ) const
+{
+	for( unsigned int i = 0; i < m_renderItems.size(); i++ )
+	{
+		const RenderItem &renderItem = m_renderItems[i];
+		if( !( renderItem.layerMask & ( (unsigned int)layer ) ) )
+		{
+			continue;
+		}
+
+		if( !renderItem.bound.intersects( bound ) )
+		{
+			continue;
+		}
+
+		glLoadMatrixf( viewTransform.getValue() );
+		glMultMatrixf( renderItem.transform.getValue() );
+		if( selector )
+		{
+			// 0 is a reserved name for when nothing is selected, so start at 1
+			selector->loadName( i + 1 );
+		}
+
+		if( renderItem.style != currentStyle )
+		{
+			renderItem.style->bind( currentStyle );
+			currentStyle = renderItem.style;
+		}
+
+		renderItem.gadget->renderLayer( layer, currentStyle, reason );
+	}
+}
+
+void ViewportGadget::renderInternal( RenderReason reason, Gadget::Layer filterLayer ) const
+{
+
+	bound(); // Updates layout if necessary
+
+	if( !m_renderItems.size() )
+	{
+		getRenderItems( this, M44f(), style(), m_renderItems );
+	}
+
+	M44f viewTransform;
+	glGetFloatv( GL_MODELVIEW_MATRIX, viewTransform.getValue() );
+	M44f projectionTransform;
+	glGetFloatv( GL_PROJECTION_MATRIX, projectionTransform.getValue() );
+
+	M44f combinedInverse = projectionTransform.inverse() * viewTransform.inverse();
+	Box3f bound = transform( Box3f( V3f( -1 ), V3f( 1 ) ), combinedInverse );
+
+
+	const Style *currentStyle = nullptr;
+
+	// If we are using a post process shader, and the render reason is Draw ( ie. not selection ),
+	// then we render the Main layer to a framebuffer, so it can be post processed before being
+	// displayed
+	if(
+		m_postProcessShader && reason == RenderReason::Draw &&
+		!( filterLayer != Layer::None && filterLayer != Layer::Main )
+	)
+	{
+		int currentViewport[4];
+		glGetIntegerv( GL_VIEWPORT, currentViewport );
+		V2i res( currentViewport[2] - currentViewport[0], currentViewport[3] - currentViewport[1] );
+
+		if( res == V2i( 0 ) )
+		{
+			// If there is no resolution, we don't need to draw anything, and it would trigger a GL error
+			// if we tried to create a zero-sized frame buffer
+			return;
+		}
+
+		if( m_framebufferSize != res )
+		{
+			static bool hasTextureFloat = checkGLArbTextureFloat();
+
+			if( m_fbo == 0 )
+			{
+				// Create Framebuffer Texture
+				glGenTextures(1, &m_framebufferTexture);
+				glBindTexture(GL_TEXTURE_2D, m_framebufferTexture);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+				// Create Render Buffer Object
+				glGenRenderbuffers(1, &m_rbo);
+			}
+			else
+			{
+				// Delete framebuffer ( There is contradictory information out there about whether a
+				// framebuffer can handle the attached textures and render buffers being resized ...
+				// sounds like it depends on the driver.  Should be safest to just recreate it ).
+				glDeleteFramebuffers( 1, &m_fbo);
+			}
+
+			// Create Frame Buffer Object
+			glGenFramebuffers(1, &m_fbo);
+			glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+
+			// Resize Framebuffer Texture
+			glBindTexture(GL_TEXTURE_2D, m_framebufferTexture);
+			glTexImage2D(
+				GL_TEXTURE_2D, 0, hasTextureFloat ? GL_RGBA16F : GL_RGBA8,
+				res.x, res.y, 0, GL_RGBA, GL_FLOAT, NULL
+			);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_framebufferTexture, 0);
+
+			// Resize Render Buffer Object
+			glBindRenderbuffer(GL_RENDERBUFFER, m_rbo);
+			glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, res.x, res.y );
+			glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_rbo );
+
+			// Error checking framebuffer
+			GLenum fboStatus = glCheckFramebufferStatus( GL_FRAMEBUFFER );
+			if( fboStatus != GL_FRAMEBUFFER_COMPLETE )
+			{
+				IECore::msg( IECore::Msg::Warning, "GafferUI::ViewportGadget", "Framebuffer error: " + std::to_string( fboStatus ) );
+			}
+
+			m_framebufferSize = res;
+		}
+
+		glBindFramebuffer( GL_FRAMEBUFFER, m_fbo );
+		// Specify the color of the background
+		glClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
+		// Clean the back buffer and depth buffer
+		glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+
+		renderLayerInternal( RenderReason::Draw, Layer::Main, viewTransform, bound, currentStyle, nullptr );
+
+		glBindFramebuffer( GL_FRAMEBUFFER, 0 );
+	}
+
+	IECoreGL::Selector *selector = IECoreGL::Selector::currentSelector();
+
+	for( int layerIndex = (int)Layer::Back; layerIndex <= (int)Layer::Front; layerIndex <<= 1 )
+	{
+		Layer layer = Layer(layerIndex);
+		if( filterLayer != Layer::None && layer != filterLayer )
+		{
+			continue;
+		}
+
+		// If we're using the post process shader, then instead of drawing everything on the layer now,
+		// we just draw a rect over the whole viewport, reading everything from the framebuffer we
+		// rendered earlier, using the shader that applies the post process
+		if( m_postProcessShader && reason == RenderReason::Draw && layer == Layer::Main )
+		{
+			IECoreGL::Shader::Setup::ScopedBinding shaderBinding( *m_postProcessShader );
+			glActiveTexture( GL_TEXTURE0 + m_postProcessShaderTextureParm->textureUnit );
+			glBindTexture( GL_TEXTURE_2D, m_framebufferTexture );
+			glUniform1i( m_postProcessShaderTextureParm->location, m_postProcessShaderTextureParm->textureUnit );
+
+			GLint prevBlendSrc, prevBlendDst;
+			glGetIntegerv( GL_BLEND_SRC, &prevBlendSrc );
+			glGetIntegerv( GL_BLEND_DST, &prevBlendDst );
+			// The framebuffer is already premulted
+			glBlendFunc( GL_ONE, GL_ONE_MINUS_SRC_ALPHA );
+
+			glEnableVertexAttribArrayARB( m_postProcessShaderVertexP->location );
+
+			{
+				IECoreGL::Buffer::ScopedBinding bufferBinding( *rectPBuffer() );
+				glVertexAttribPointerARB( m_postProcessShaderVertexP->location, 3, GL_FLOAT, false, 0, nullptr );
+			}
+
+			glEnableVertexAttribArrayARB( m_postProcessShaderVertexUv->location );
+
+			{
+				IECoreGL::Buffer::ScopedBinding bufferBinding( *rectUvBuffer() );
+				glVertexAttribPointerARB( m_postProcessShaderVertexUv->location, 2, GL_FLOAT, false, 0, nullptr );
+			}
+
+			glDrawArrays( GL_TRIANGLE_STRIP, 0, 4 );
+
+			glDisableVertexAttribArrayARB( m_postProcessShaderVertexP->location );
+			glDisableVertexAttribArrayARB( m_postProcessShaderVertexUv->location );
+
+			glBlendFunc( prevBlendSrc, prevBlendDst );
+			continue;
+		}
+
+		renderLayerInternal( reason, layer, viewTransform, bound, currentStyle, selector );
+	}
+	glLoadMatrixf( viewTransform.getValue() );
+}
+
+void ViewportGadget::getRenderItems( const Gadget *gadget, M44f transform, const Style *style, std::vector<RenderItem> &renderItems )
+{
+	const Box3f bound = gadget->renderBound();
+	bool boundSpecial = bound.isEmpty() || bound == g_infiniteBox;
+
+	if( gadget->getStyle() )
+	{
+		style = gadget->getStyle();
+	}
+
+	if( gadget->m_transform != g_identityMatrix )
+	{
+		transform = gadget->m_transform * transform;
+	}
+
+	unsigned layerMask = gadget->layerMask();
+	if( layerMask )
+	{
+		renderItems.push_back( {
+			gadget, style, transform,
+			boundSpecial ? bound : Imath::transform( bound, transform ),
+			layerMask
+		} );
+	}
+
+	for( const auto &i : gadget->children() )
+	{
+		// Cast is safe because of the guarantees acceptsChild() gives us
+		const Gadget *c = static_cast<const Gadget *>( i.get() );
+		if( !c->getVisible() )
+		{
+			continue;
+		}
+		getRenderItems( c, transform, style, renderItems );
+	}
 }
 
 ViewportGadget::UnarySignal &ViewportGadget::preRenderSignal()
 {
 	return m_preRenderSignal;
+}
+
+void ViewportGadget::setPostProcessShader( const IECoreGL::Shader::ConstSetupPtr &postProcessShader )
+{
+	if( postProcessShader )
+	{
+		const IECoreGL::Shader::Parameter *texParm = postProcessShader->shader()->uniformParameter( "framebufferTexture" );
+		if( texParm && texParm->type == GL_SAMPLER_2D )
+		{
+			m_postProcessShaderTextureParm = texParm;
+		}
+		else
+		{
+			throw Exception("Post process shader must have 2D sampler uniform named \"framebufferTexture\"");
+		}
+
+		m_postProcessShaderVertexP = postProcessShader->shader()->vertexAttribute( "vertexP" );
+		if( !m_postProcessShaderVertexP )
+		{
+			throw Exception("Post process shader must have a vertex attribute named \"vertexP\"");
+		}
+
+		m_postProcessShaderVertexUv = postProcessShader->shader()->vertexAttribute( "vertexuv" );
+		if( !m_postProcessShaderVertexUv )
+		{
+			throw Exception("Post process shader must have a vertex attribute named \"vertexuv\"");
+		}
+	}
+
+	m_postProcessShader = postProcessShader;
+}
+
+IECoreGL::Shader::ConstSetupPtr ViewportGadget::getPostProcessShader() const
+{
+	return m_postProcessShader;
+}
+
+ViewportGadget::UnarySignal &ViewportGadget::renderRequestSignal()
+{
+	return m_renderRequestSignal;
 }
 
 void ViewportGadget::childRemoved( GraphComponent *parent, GraphComponent *child )
@@ -992,6 +1466,11 @@ void ViewportGadget::childRemoved( GraphComponent *parent, GraphComponent *child
 		m_lastButtonPressGadget = nullptr;
 	}
 
+	if( childGadget == m_previousClickGadget || childGadget->isAncestorOf( m_previousClickGadget.get() ) )
+	{
+		m_previousClickGadget = nullptr;
+	}
+
 	if( childGadget == m_gadgetUnderMouse || childGadget->isAncestorOf( m_gadgetUnderMouse.get() ) )
 	{
 		m_gadgetUnderMouse = nullptr;
@@ -1000,6 +1479,18 @@ void ViewportGadget::childRemoved( GraphComponent *parent, GraphComponent *child
 
 bool ViewportGadget::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 {
+	if( m_dragButton != ButtonEvent::None && m_dragButton != ButtonEvent::Middle && event.buttons == ( m_dragButton | ButtonEvent::Middle ) )
+	{
+		m_cameraMotionDuringDrag = true;
+
+		if( getCameraEditable() )
+		{
+			updateMotionState( event, true );
+			m_cameraController->motionStart( CameraController::Track, motionPositionFromEvent( event ) );
+		}
+		return true;
+	}
+
 	// A child's interaction with an unmodifier MMB drag takes precedence over camera moves
 	bool unmodifiedMiddleDrag = event.buttons == ButtonEvent::Middle && event.modifiers == ModifiableEvent::None;
 
@@ -1009,15 +1500,16 @@ bool ViewportGadget::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 		return true;
 	}
 
-	std::vector<GadgetPtr> gadgets;
-	gadgetsAt( V2f( event.line.p0.x, event.line.p0.y ), gadgets );
+	std::vector<Gadget*> gadgets = gadgetsAtInternal( V2f( event.line.p0.x, event.line.p0.y ), false );
 
-	GadgetPtr handler;
+	Gadget* handler;
 	m_lastButtonPressGadget = nullptr;
+	m_previousClickGadget = nullptr;
 	bool result = dispatchEvent( gadgets, &Gadget::buttonPressSignal, event, handler );
 	if( result )
 	{
 		m_lastButtonPressGadget = handler;
+		m_previousClickGadget = handler;
 		return true;
 	}
 
@@ -1032,10 +1524,28 @@ bool ViewportGadget::buttonPress( GadgetPtr gadget, const ButtonEvent &event )
 
 bool ViewportGadget::buttonRelease( GadgetPtr gadget, const ButtonEvent &event )
 {
+	if( m_cameraMotionDuringDrag && !( event.buttons & ButtonEvent::Middle ) )
+	{
+		m_cameraMotionDuringDrag = false;
+
+		if( getCameraEditable() )
+		{
+			updateMotionState( event );
+			const CameraFlags changes = m_cameraController->motionEnd( motionPositionFromEvent( event ), m_variableAspectZoom && ( event.modifiers & ModifiableEvent::Control ) != 0 );
+			if( changes != CameraFlags::None )
+			{
+				m_cameraChangedSignal( this, changes );
+			}
+			m_preciseMotionEnabled = false;
+			dirty( DirtyType::Render );
+		}
+		return true;
+	}
+
 	bool result = false;
 	if( m_lastButtonPressGadget )
 	{
-		result = dispatchEvent( m_lastButtonPressGadget, &Gadget::buttonReleaseSignal, event );
+		result = dispatchEvent( m_lastButtonPressGadget.get(), &Gadget::buttonReleaseSignal, event );
 	}
 
 	m_lastButtonPressGadget = nullptr;
@@ -1044,17 +1554,19 @@ bool ViewportGadget::buttonRelease( GadgetPtr gadget, const ButtonEvent &event )
 
 bool ViewportGadget::buttonDoubleClick( GadgetPtr gadget, const ButtonEvent &event )
 {
-	/// \todo Implement me. I'm not sure who this event should go to - probably
-	/// the last button press gadget, but we erased that in buttonRelease.
+	if( m_previousClickGadget )
+	{
+		return dispatchEvent( m_previousClickGadget.get(), &Gadget::buttonDoubleClickSignal, event );
+	}
+
 	return false;
 }
 
 void ViewportGadget::updateGadgetUnderMouse( const ButtonEvent &event )
 {
-	std::vector<GadgetPtr> gadgets;
-	gadgetsAt( V2f( event.line.p0.x, event.line.p0.y ), gadgets );
+	std::vector<Gadget*> gadgets = gadgetsAtInternal( V2f( event.line.p0.x, event.line.p0.y ), false );
 
-	GadgetPtr newGadgetUnderMouse;
+	Gadget* newGadgetUnderMouse = nullptr;
 	if( gadgets.size() )
 	{
 		newGadgetUnderMouse = gadgets[0];
@@ -1112,9 +1624,9 @@ void ViewportGadget::emitEnterLeaveEvents( GadgetPtr newGadgetUnderMouse, Gadget
 			enterTargets.push_back( enterTarget );
 			enterTarget = enterTarget->parent<Gadget>();
 		}
-		for( std::vector<GadgetPtr>::const_reverse_iterator it = enterTargets.rbegin(); it!=enterTargets.rend(); it++ )
+		for( GadgetPtr &it : enterTargets )
 		{
-			dispatchEvent( *it, &Gadget::enterSignal, event );
+			dispatchEvent( it.get(), &Gadget::enterSignal, event );
 		}
 	}
 
@@ -1142,8 +1654,8 @@ bool ViewportGadget::mouseMove( GadgetPtr gadget, const ButtonEvent &event )
 	// pass the signal through
 	if( m_gadgetUnderMouse )
 	{
-		std::vector<GadgetPtr> gadgetUnderMouse( 1, m_gadgetUnderMouse );
-		GadgetPtr handler;
+		std::vector<Gadget*> gadgetUnderMouse( 1, m_gadgetUnderMouse.get() );
+		Gadget* handler;
 		return dispatchEvent( gadgetUnderMouse, &Gadget::mouseMoveSignal, event, handler );
 	}
 
@@ -1152,6 +1664,7 @@ bool ViewportGadget::mouseMove( GadgetPtr gadget, const ButtonEvent &event )
 
 IECore::RunTimeTypedPtr ViewportGadget::dragBegin( GadgetPtr gadget, const DragDropEvent &event )
 {
+	m_dragButton = event.buttons;
 	m_dragTrackingThreshold = limits<float>::max();
 
 	CameraController::MotionType cameraMotionType = m_cameraController->cameraMotionType( event, m_variableAspectZoom, m_preciseMotionAllowed );
@@ -1160,7 +1673,7 @@ IECore::RunTimeTypedPtr ViewportGadget::dragBegin( GadgetPtr gadget, const DragD
 	if( ( !cameraMotionType || unmodifiedMiddleDrag ) && m_lastButtonPressGadget )
 	{
 		// see if a child gadget would like to start a drag because the camera doesn't handle the event
-		RunTimeTypedPtr data = dispatchEvent( m_lastButtonPressGadget, &Gadget::dragBeginSignal, event );
+		RunTimeTypedPtr data = dispatchEvent( m_lastButtonPressGadget.get(), &Gadget::dragBeginSignal, event );
 		if( data )
 		{
 			const_cast<DragDropEvent &>( event ).sourceGadget = m_lastButtonPressGadget;
@@ -1211,10 +1724,9 @@ bool ViewportGadget::dragEnter( GadgetPtr gadget, const DragDropEvent &event )
 	}
 	else
 	{
-		std::vector<GadgetPtr> gadgets;
-		gadgetsAt( V2f( event.line.p0.x, event.line.p0.y ), gadgets );
+		std::vector<Gadget*> gadgets = gadgetsAtInternal( V2f( event.line.p0.x, event.line.p0.y ), true );
 
-		GadgetPtr dragDestination = updatedDragDestination( gadgets, event );
+		Gadget* dragDestination = updatedDragDestination( gadgets, event );
 		if( dragDestination )
 		{
 			const_cast<DragDropEvent &>( event ).destinationGadget = dragDestination;
@@ -1226,14 +1738,17 @@ bool ViewportGadget::dragEnter( GadgetPtr gadget, const DragDropEvent &event )
 
 bool ViewportGadget::dragMove( GadgetPtr gadget, const DragDropEvent &event )
 {
-	if( m_cameraInMotion )
+	if( m_cameraInMotion || m_cameraMotionDuringDrag )
 	{
 		if( getCameraEditable() )
 		{
 			updateMotionState( event );
-			m_cameraController->motionUpdate( motionPositionFromEvent( event ), m_variableAspectZoom && ( event.modifiers & ModifiableEvent::Control ) != 0 );
-			m_cameraChangedSignal( this );
-			requestRender();
+			const CameraFlags changes = m_cameraController->motionUpdate( motionPositionFromEvent( event ), m_variableAspectZoom && ( event.modifiers & ModifiableEvent::Control ) != 0 );
+			if( changes != CameraFlags::None )
+			{
+				m_cameraChangedSignal( this, changes );
+			}
+			dirty( DirtyType::Render );
 		}
 		return true;
 	}
@@ -1247,14 +1762,13 @@ bool ViewportGadget::dragMove( GadgetPtr gadget, const DragDropEvent &event )
 		// step as an optimisation.
 		if( !event.destinationGadget || !event.data->isInstanceOf( IECore::NullObjectTypeId ) )
 		{
-			std::vector<GadgetPtr> gadgets;
-			gadgetsAt( V2f( event.line.p0.x, event.line.p0.y ), gadgets );
+			std::vector<Gadget*> gadgets = gadgetsAtInternal( V2f( event.line.p0.x, event.line.p0.y ), true );
 
 			// update drag destination
-			GadgetPtr updatedDestination = updatedDragDestination( gadgets, event );
+			Gadget* updatedDestination = updatedDragDestination( gadgets, event );
 			if( updatedDestination != event.destinationGadget )
 			{
-				GadgetPtr previousDestination = event.destinationGadget;
+				Gadget* previousDestination = event.destinationGadget.get();
 				const_cast<DragDropEvent &>( event ).destinationGadget = updatedDestination;
 				if( previousDestination )
 				{
@@ -1266,7 +1780,7 @@ bool ViewportGadget::dragMove( GadgetPtr gadget, const DragDropEvent &event )
 		// dispatch drag move to current destination
 		if( event.destinationGadget )
 		{
-			return dispatchEvent( event.destinationGadget, &Gadget::dragMoveSignal, event );
+			return dispatchEvent( event.destinationGadget.get(), &Gadget::dragMoveSignal, event );
 		}
 	}
 
@@ -1352,6 +1866,12 @@ void ViewportGadget::trackDrag( const DragDropEvent &event )
 
 void ViewportGadget::trackDragIdle()
 {
+	if( m_cameraMotionDuringDrag )
+	{
+		// If the user engages an explicit track using the middle mouse button, don't do autoscrolling
+		return;
+	}
+
 	std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
 	std::chrono::duration<float> duration( now - m_dragTrackingTime );
 	// Avoid excessive movements if some other process causes a large delay
@@ -1368,11 +1888,11 @@ void ViewportGadget::trackDragIdle()
 	// visual representation of the drag.
 	dragMove( this, m_dragTrackingEvent );
 
-	m_cameraChangedSignal( this );
-	requestRender();
+	m_cameraChangedSignal( this, CameraFlags::Transform );
+	dirty( DirtyType::Render );
 }
 
-void ViewportGadget::updateMotionState( const DragDropEvent &event, bool initialEvent )
+void ViewportGadget::updateMotionState( const ButtonEvent &event, bool initialEvent )
 {
 	if( !m_preciseMotionAllowed )
 	{
@@ -1404,7 +1924,7 @@ void ViewportGadget::updateMotionState( const DragDropEvent &event, bool initial
 	m_preciseMotionEnabled = shiftHeld;
 }
 
-V2f ViewportGadget::motionPositionFromEvent( const DragDropEvent &event ) const
+V2f ViewportGadget::motionPositionFromEvent( const ButtonEvent &event ) const
 {
 	V2f eventPosition( event.line.p1.x, event.line.p1.y );
 	if( m_preciseMotionAllowed )
@@ -1418,11 +1938,11 @@ V2f ViewportGadget::motionPositionFromEvent( const DragDropEvent &event ) const
 	}
 }
 
-GadgetPtr ViewportGadget::updatedDragDestination( std::vector<GadgetPtr> &gadgets, const DragDropEvent &event )
+Gadget* ViewportGadget::updatedDragDestination( std::vector<Gadget*> &gadgets, const DragDropEvent &event )
 {
-	for( std::vector<GadgetPtr>::const_iterator it = gadgets.begin(), eIt = gadgets.end(); it != eIt; it++ )
+	for( Gadget *it : gadgets )
 	{
-		GadgetPtr gadget = *it;
+		Gadget* gadget = it;
 		while( gadget && gadget != this )
 		{
 			if( gadget == event.destinationGadget )
@@ -1452,16 +1972,16 @@ GadgetPtr ViewportGadget::updatedDragDestination( std::vector<GadgetPtr> &gadget
 	// keep the existing destination if it's also the source.
 	if( event.destinationGadget && event.destinationGadget == event.sourceGadget )
 	{
-		return event.destinationGadget;
+		return event.destinationGadget.get();
 	}
 
 	// and if that's not the case then give the drag source another chance
 	// to become the destination again.
 	if( event.sourceGadget )
 	{
-		if( dispatchEvent( event.sourceGadget, &Gadget::dragEnterSignal, event ) )
+		if( dispatchEvent( event.sourceGadget.get(), &Gadget::dragEnterSignal, event ) )
 		{
-			return event.sourceGadget;
+			return event.sourceGadget.get();
 		}
 	}
 
@@ -1475,7 +1995,7 @@ bool ViewportGadget::dragLeave( GadgetPtr gadget, const DragDropEvent &event )
 	{
 		GadgetPtr previousDestination = event.destinationGadget;
 		const_cast<DragDropEvent &>( event ).destinationGadget = nullptr;
-		dispatchEvent( previousDestination, &Gadget::dragLeaveSignal, event );
+		dispatchEvent( previousDestination.get(), &Gadget::dragLeaveSignal, event );
 	}
 	return true;
 }
@@ -1490,7 +2010,7 @@ bool ViewportGadget::drop( GadgetPtr gadget, const DragDropEvent &event )
 	{
 		if( event.destinationGadget )
 		{
-			return dispatchEvent( event.destinationGadget, &Gadget::dropSignal, event );
+			return dispatchEvent( event.destinationGadget.get(), &Gadget::dropSignal, event );
 		}
 		else
 		{
@@ -1501,16 +2021,22 @@ bool ViewportGadget::drop( GadgetPtr gadget, const DragDropEvent &event )
 
 bool ViewportGadget::dragEnd( GadgetPtr gadget, const DragDropEvent &event )
 {
+	m_dragButton = ButtonEvent::None;
+	m_cameraMotionDuringDrag = false;
+
 	if( m_cameraInMotion )
 	{
 		m_cameraInMotion = false;
 		if( getCameraEditable() )
 		{
 			updateMotionState( event );
-			m_cameraController->motionEnd( motionPositionFromEvent( event ), m_variableAspectZoom && ( event.modifiers & ModifiableEvent::Control ) != 0 );
-			m_cameraChangedSignal( this );
+			const CameraFlags changes = m_cameraController->motionEnd( motionPositionFromEvent( event ), m_variableAspectZoom && ( event.modifiers & ModifiableEvent::Control ) != 0 );
+			if( changes != CameraFlags::None )
+			{
+				m_cameraChangedSignal( this, changes );
+			}
 			m_preciseMotionEnabled = false;
-			requestRender();
+			dirty( DirtyType::Render );
 		}
 		return true;
 	}
@@ -1519,7 +2045,7 @@ bool ViewportGadget::dragEnd( GadgetPtr gadget, const DragDropEvent &event )
 		m_dragTrackingIdleConnection.disconnect();
 		if( event.sourceGadget )
 		{
-			return dispatchEvent( event.sourceGadget, &Gadget::dragEndSignal, event );
+			return dispatchEvent( event.sourceGadget.get(), &Gadget::dragEndSignal, event );
 		}
 	}
 	return false;
@@ -1527,7 +2053,7 @@ bool ViewportGadget::dragEnd( GadgetPtr gadget, const DragDropEvent &event )
 
 bool ViewportGadget::wheel( GadgetPtr gadget, const ButtonEvent &event )
 {
-	if( m_cameraInMotion )
+	if( m_cameraInMotion || m_cameraMotionDuringDrag )
 	{
 		// we can't embed a dolly inside whatever other motion we already
 		// started - we get here when the user accidentally rotates
@@ -1545,11 +2071,11 @@ bool ViewportGadget::wheel( GadgetPtr gadget, const ButtonEvent &event )
 	m_cameraController->motionStart( CameraController::Dolly, position );
 	const float scaleFactor = event.modifiers & ModifiableEvent::Modifiers::Shift ? 1400.0f : 140.0f;
 	position.x += event.wheelRotation * getViewport().x / scaleFactor ;
-	m_cameraController->motionUpdate( position );
-	m_cameraController->motionEnd( position );
+	CameraFlags changes = m_cameraController->motionUpdate( position );
+	changes |= m_cameraController->motionEnd( position );
 
-	m_cameraChangedSignal( this );
-	requestRender();
+	m_cameraChangedSignal( this, changes );
+	dirty( DirtyType::Render );
 
 	return true;
 }
@@ -1586,11 +2112,11 @@ void ViewportGadget::eventToGadgetSpace( ButtonEvent &event, Gadget *gadget )
 }
 
 template<typename Event, typename Signal>
-typename Signal::result_type ViewportGadget::dispatchEvent( std::vector<GadgetPtr> &gadgets, Signal &(Gadget::*signalGetter)(), const Event &event, GadgetPtr &handler )
+typename Signal::result_type ViewportGadget::dispatchEvent( std::vector<Gadget*> &gadgets, Signal &(Gadget::*signalGetter)(), const Event &event, Gadget* &handler )
 {
-	for( std::vector<GadgetPtr>::const_iterator it = gadgets.begin(), eIt = gadgets.end(); it != eIt; it++ )
+	for( Gadget* it : gadgets )
 	{
-		GadgetPtr gadget = *it;
+		Gadget* gadget = it;
 		if( !gadget->enabled() )
 		{
 			continue;
@@ -1610,12 +2136,12 @@ typename Signal::result_type ViewportGadget::dispatchEvent( std::vector<GadgetPt
 }
 
 template<typename Event, typename Signal>
-typename Signal::result_type ViewportGadget::dispatchEvent( GadgetPtr gadget, Signal &(Gadget::*signalGetter)(), const Event &event )
+typename Signal::result_type ViewportGadget::dispatchEvent( Gadget* gadget, Signal &(Gadget::*signalGetter)(), const Event &event )
 {
 	Event transformedEvent( event );
-	eventToGadgetSpace( transformedEvent, gadget.get() );
-	Signal &s = (gadget.get()->*signalGetter)();
-	return s( gadget.get(), transformedEvent );
+	eventToGadgetSpace( transformedEvent, gadget );
+	Signal &s = (gadget->*signalGetter)();
+	return s( gadget, transformedEvent );
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1642,10 +2168,10 @@ ViewportGadget::SelectionScope::SelectionScope( const Imath::V3f &corner0InGadge
 	begin( viewportGadget, rasterRegion, gadget->fullTransform(), mode );
 }
 
-ViewportGadget::SelectionScope::SelectionScope( const ViewportGadget *viewportGadget, const Imath::V2f &rasterPosition, std::vector<IECoreGL::HitRecord> &selection, IECoreGL::Selector::Mode mode )
+ViewportGadget::SelectionScope::SelectionScope( const ViewportGadget *viewportGadget, const Imath::Box2f &rasterRegion, std::vector<IECoreGL::HitRecord> &selection, IECoreGL::Selector::Mode mode )
 	:	m_selection( selection )
 {
-	begin( viewportGadget, rasterPosition, M44f(), mode );
+	begin( viewportGadget, rasterRegion, M44f(), mode );
 }
 
 ViewportGadget::SelectionScope::~SelectionScope()
@@ -1683,7 +2209,12 @@ void ViewportGadget::SelectionScope::begin( const ViewportGadget *viewportGadget
 	camera->setTransform( viewportGadget->getCameraTransform() );
 	/// \todo It would be better to base this on whether we have a depth buffer or not, but
 	/// we don't have access to that information right now.
-	m_depthSort = camera->isInstanceOf( IECoreGL::PerspectiveCamera::staticTypeId() );
+
+	/// \todo Resolve when to sort or not. For historical reasons this is
+	/// currently hardcoded to `false` and to-sort or not-to-sort is handled by clients
+	/// of `SceneGadget::objectAt()`. For context, see :
+	/// https://github.com/GafferHQ/gaffer/pull/4570#issuecomment-1044709782
+	m_depthSort = false;
 	camera->render( nullptr );
 
 	glClearColor( 0.3f, 0.3f, 0.3f, 0.0f );

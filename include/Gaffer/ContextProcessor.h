@@ -51,7 +51,7 @@ class IECORE_EXPORT ContextProcessor : public ComputeNode
 
 	public :
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( Gaffer::ContextProcessor, ContextProcessorTypeId, ComputeNode );
+		GAFFER_NODE_DECLARE_TYPE( Gaffer::ContextProcessor, ContextProcessorTypeId, ComputeNode );
 
 		ContextProcessor( const std::string &name=GraphComponent::defaultName<ContextProcessor>() );
 		~ContextProcessor() override;
@@ -88,7 +88,7 @@ class IECORE_EXPORT ContextProcessor : public ComputeNode
 		/// Must be implemented to return true if the input is used in `processContext()`.
 		virtual bool affectsContext( const Plug *input ) const = 0;
 		/// Must be implemented to modify context in place.
-		virtual void processContext( Context::EditableScope &context ) const = 0;
+		virtual void processContext( Context::EditableScope &context, IECore::ConstRefCountedPtr &storage ) const = 0;
 
 	private :
 

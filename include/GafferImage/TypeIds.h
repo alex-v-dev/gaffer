@@ -52,7 +52,7 @@ enum TypeId
 	ImageProcessorTypeId = 110756,
 	ChannelDataProcessorTypeId = 110757,
 	ColorSpaceTypeId = 110758,
-	ObjectToImageTypeId = 110759, // Obsolete - available for reuse
+	LookTransformTypeId = 110759,
 	FormatDataTypeId = 110760,
 	AtomicFormatPlugTypeId = 110761,
 	MergeTypeId = 110762,
@@ -69,10 +69,10 @@ enum TypeId
 	CatalogueImageTypeId = 110773,
 	CheckerboardTypeId = 110774,
 	FlatImageSourceTypeId = 110775,
-	BSplineFilterTypeId = 110776, // Obsolete - available for reuse
-	HermiteFilterTypeId = 110777, // Obsolete - available for reuse
-	CubicFilterTypeId = 110778, // Obsolete - available for reuse
-	MitchellFilterTypeId = 110779, // Obsolete - available for reuse
+	CreateViewsTypeId = 110776,
+	SelectViewTypeId = 110777,
+	DeleteViewsTypeId = 110778,
+	CopyViewsTypeId = 110779,
 	CatmullRomFilterTypeId = 110780, // Obsolete - available for reuse
 	SincFilterTypeId = 110781, // Obsolete - available for reuse
 	LanczosFilterTypeId = 110782, // Obsolete - available for reuse
@@ -102,7 +102,7 @@ enum TypeId
 	DisplayTransformTypeId = 110806,
 	FormatPlugTypeId = 110807,
 	OffsetTypeId = 110808,
-	ImagePrimitiveProcessorTypeId = 110809, // Obsolete - available for reuse
+	FormatQueryTypeId = 110809,
 	BlurTypeId = 110810,
 	ShapeTypeId = 110811,
 	TextTypeId = 110812,
@@ -128,6 +128,7 @@ enum TypeId
 	DeepToFlatTypeId = 110832,
 	DeepHoldoutTypeId = 110833,
 	DeepRecolorTypeId = 110834,
+	SaturationTypeId = 110835,
 
 	LastTypeId = 110849
 };

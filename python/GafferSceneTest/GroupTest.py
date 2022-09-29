@@ -457,7 +457,9 @@ class GroupTest( GafferSceneTest.SceneTestCase ) :
 
 		g2["transform"]["translate"].setValue( imath.V3f( 1, 0, 0 ) )
 
-		self.assertSceneHashesEqual( g1["out"], g2["out"], pathsToIgnore = ( "/", "/group", ) )
+
+		self.assertEqual( g1["out"].transformHash( "/group/plane" ), g2["out"].transformHash( "/group/plane" ) )
+		self.assertEqual( g1["out"].boundHash( "/group/plane" ), g2["out"].boundHash( "/group/plane" ) )
 		self.assertSceneHashesEqual( g1["out"], g2["out"], checks = self.allSceneChecks - { "transform", "bound" } )
 		self.assertNotEqual( g1["out"].transformHash( "/group" ), g2["out"].transformHash( "/group" ) )
 		self.assertEqual( g1["out"].boundHash( "/group" ), g2["out"].boundHash( "/group" ) )
@@ -487,7 +489,7 @@ class GroupTest( GafferSceneTest.SceneTestCase ) :
 			self.assertEqual( g1["out"].transformHash( path1 ), g2["out"].transformHash( path2 ) )
 			self.assertEqual( g1["out"].objectHash( path1 ), g2["out"].objectHash( path2 ) )
 			self.assertEqual( g1["out"].attributesHash( path1 ), g2["out"].attributesHash( path2 ) )
-			if path1 is not "/" :
+			if path1 != "/" :
 				self.assertEqual( g1["out"].childNamesHash( path1 ), g2["out"].childNamesHash( path2 ) )
 			else :
 				self.assertNotEqual( g1["out"].childNamesHash( path1 ), g2["out"].childNamesHash( path2 ) )

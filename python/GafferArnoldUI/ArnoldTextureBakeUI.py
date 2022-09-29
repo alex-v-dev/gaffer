@@ -115,6 +115,14 @@ Gaffer.Metadata.registerNode(
 			""",
 		],
 
+		"udims" : [
+			"description",
+			"""
+			If non-empty, only UDIMs in this list will be baked. The formatting is the same as a frame list:
+			comma separated, with dashes indicating ranges.
+			""",
+		],
+
 		"normalOffset" : [
 
 			"description",
@@ -158,7 +166,7 @@ Gaffer.Metadata.registerNode(
 			""",
 			"divider", True,
 		],
-		
+
 		"applyMedianFilter" : [
 			"description",
 			"""
@@ -173,7 +181,6 @@ Gaffer.Metadata.registerNode(
 			""",
 			"layout:activator", "medianActivator",
 		],
-
 
 	}
 

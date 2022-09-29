@@ -55,6 +55,54 @@ using namespace IECore;
 using namespace Gaffer;
 using namespace GafferDispatch;
 
+//////////////////////////////////////////////////////////////////////////
+// Internal utilities
+//////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+/// \todo Consider moving this to PlugAlgo and using it in
+/// `Shader::NetworkBuilder::effectiveParameter()`.
+tuple<const Plug *, ConstContextPtr> computedSource( const Plug *plug )
+{
+	plug = plug->source();
+
+	if( auto sw = runTimeCast<const Switch>( plug->node() ) )
+	{
+		if(
+			sw->outPlug() &&
+			( plug == sw->outPlug() || sw->outPlug()->isAncestorOf( plug ) )
+		)
+		{
+			if( auto activeInPlug = sw->activeInPlug( plug ) )
+			{
+				return computedSource( activeInPlug );
+			}
+		}
+	}
+	else if( auto contextProcessor = runTimeCast<const ContextProcessor>( plug->node() ) )
+	{
+		if(
+			contextProcessor->outPlug() &&
+			( plug == contextProcessor->outPlug() || contextProcessor->outPlug()->isAncestorOf( plug ) )
+		)
+		{
+			ConstContextPtr context = contextProcessor->inPlugContext();
+			Context::Scope scopedContext( context.get() );
+			return computedSource( contextProcessor->inPlug() );
+		}
+	}
+
+	return make_tuple( plug, Context::current() );
+}
+
+} // namespace
+
+//////////////////////////////////////////////////////////////////////////
+// Dispatcher
+//////////////////////////////////////////////////////////////////////////
+
 static InternedString g_frame( "frame" );
 static InternedString g_batchSize( "batchSize" );
 static InternedString g_immediatePlugName( "immediate" );
@@ -73,7 +121,7 @@ Dispatcher::DispatchSignal Dispatcher::g_dispatchSignal;
 Dispatcher::PostDispatchSignal Dispatcher::g_postDispatchSignal;
 std::string Dispatcher::g_defaultDispatcherType = "";
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Dispatcher )
+GAFFER_NODE_DEFINE_TYPE( Dispatcher )
 
 Dispatcher::Dispatcher( const std::string &name )
 	: Node( name )
@@ -179,7 +227,7 @@ void Dispatcher::createJobDirectory( const Gaffer::ScriptNode *script, Gaffer::C
 	long i = -1;
 	for( const auto &d : boost::filesystem::directory_iterator( jobDirectory ) )
 	{
-		i = std::max( i, strtol( d.path().filename().c_str(), nullptr, 10 ) );
+		i = std::max( i, strtol( d.path().filename().string().c_str(), nullptr, 10 ) );
 	}
 
 	// Now create the next directory. We do this in a loop until we
@@ -217,9 +265,8 @@ void Dispatcher::createJobDirectory( const Gaffer::ScriptNode *script, Gaffer::C
 	context->set( g_scriptFileNameContextEntry, scriptFileName.string() );
 }
 
-/*
- * Static functions
- */
+// Static functions
+// ================
 
 Dispatcher::PreDispatchSignal &Dispatcher::preDispatchSignal()
 {
@@ -238,18 +285,7 @@ Dispatcher::PostDispatchSignal &Dispatcher::postDispatchSignal()
 
 void Dispatcher::setupPlugs( Plug *parentPlug )
 {
-	if ( const TaskNode *node = parentPlug->ancestor<const TaskNode>() )
-	{
-		/// \todo: this will always return true until we sort out issue #915.
-		/// But since requiresSequenceExecution() could feasibly return different
-		/// values in different contexts, perhaps the conditional is bogus
-		/// anyway, and if anything we should just grey out the plug in the UI?
-		if( !node->taskPlug()->requiresSequenceExecution() )
-		{
-			parentPlug->addChild( new IntPlug( g_batchSize, Plug::In, 1 ) );
-		}
-	}
-
+	parentPlug->addChild( new IntPlug( g_batchSize, Plug::In, 1 ) );
 	parentPlug->addChild( new BoolPlug( g_immediatePlugName, Plug::In, false ) );
 
 	const CreatorMap &m = creators();
@@ -399,23 +435,19 @@ class Dispatcher::Batcher
 
 		TaskBatchPtr batchTasksWalk( TaskNode::Task task, const std::set<const TaskBatch *> &ancestors = std::set<const TaskBatch *>() )
 		{
-			task = TaskNode::Task( task.plug()->source<TaskNode::TaskPlug>(), task.context() );
-			// Deal with Switch and ContextProcessor nodes. We need to do this manually
-			// because they only know how to deal with ValuePlugs, and we use TaskPlugs.
-			if( auto sw = runTimeCast<const Switch>( task.plug()->node() ) )
+			// Find source task, taking into account
+			// Switches and ContextProcessors.
 			{
 				Context::Scope scopedTaskContext( task.context() );
-				if( auto activeInPlug = sw->activeInPlug( task.plug() ) )
+				const Plug *sourcePlug; ConstContextPtr sourceContext;
+				tie( sourcePlug, sourceContext ) = computedSource( task.plug() );
+				if( auto sourceTaskPlug = runTimeCast<const TaskNode::TaskPlug>( sourcePlug ) )
 				{
-					task = TaskNode::Task( activeInPlug->source<TaskNode::TaskPlug>(), task.context() );
+					task = TaskNode::Task( sourceTaskPlug, sourceContext ? sourceContext.get() : task.context() );
 				}
-			}
-			else if( auto contextProcessor = runTimeCast<const ContextProcessor>( task.plug()->node() ) )
-			{
-				if( task.plug() == contextProcessor->outPlug() )
+				else
 				{
-					Context::Scope scopedTaskContext( task.context() );
-					task = TaskNode::Task( contextProcessor->inPlug()->source<TaskNode::TaskPlug>(), contextProcessor->inPlugContext().get() );
+					return nullptr;
 				}
 			}
 
@@ -489,15 +521,16 @@ class Dispatcher::Batcher
 
 		TaskBatchPtr acquireBatch( const TaskNode::Task &task )
 		{
+			// Several plugs will be evaluated that may vary by context,
+			// so we need to be in the correct context for this task
+			// \todo should we be removing `frame` from the context?
+			Context::Scope scopedTaskContext( task.context() );
+
 			// See if we've previously visited this task, and therefore
 			// have placed it in a batch already, which we can return
 			// unchanged. The `taskHash` is used as the unique identity of
 			// the task.
-			MurmurHash taskHash;
-			{
-				Context::Scope scopedTaskContext( task.context() );
-				taskHash = task.plug()->hash();
-			}
+			MurmurHash taskHash = task.plug()->hash();
 			const bool taskIsNoOp = taskHash == IECore::MurmurHash();
 			if( taskIsNoOp )
 			{
@@ -567,10 +600,6 @@ class Dispatcher::Batcher
 			const BoolPlug *immediatePlug = dispatcherPlug( task )->getChild<const BoolPlug>( g_immediatePlugName );
 			if( immediatePlug && immediatePlug->getValue() )
 			{
-				/// \todo Should we be scoping a context for this, to allow the plug to
-				/// have expressions on it? If so, should we be doing the same before
-				/// calling requiresSequenceExecution()? Or should we instead require that
-				/// they always be constant?
 				batch->blindData()->writable()[g_immediateBlindDataName] = g_trueBoolData;
 			}
 
@@ -613,8 +642,7 @@ class Dispatcher::Batcher
 					continue;
 				}
 
-				result.append( *it );
-				context->get<const IECore::Data>( *it )->hash( result );
+				result.append( context->variableHash( *it ) );
 			}
 			return result;
 		}
@@ -654,8 +682,8 @@ class Dispatcher::Batcher
 			return static_cast<const TaskNode *>( task.plug()->node() )->dispatcherPlug();
 		}
 
-		typedef std::map<IECore::MurmurHash, TaskBatchPtr> BatchMap;
-		typedef std::map<IECore::MurmurHash, TaskBatchPtr> TaskToBatchMap;
+		using BatchMap = std::map<IECore::MurmurHash, TaskBatchPtr>;
+		using TaskToBatchMap = std::map<IECore::MurmurHash, TaskBatchPtr>;
 
 		TaskBatchPtr m_rootBatch;
 		BatchMap m_currentBatches;

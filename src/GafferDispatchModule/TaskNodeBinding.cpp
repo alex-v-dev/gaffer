@@ -133,7 +133,7 @@ boost::python::list taskPlugPostTasks( const TaskNode::TaskPlug &t )
 
 void GafferDispatchModule::bindTaskNode()
 {
-	typedef TaskNodeWrapper<TaskNode> Wrapper;
+	using Wrapper = TaskNodeWrapper<TaskNode>;
 
 	scope s = TaskNodeClass<TaskNode, Wrapper>();
 
@@ -163,7 +163,7 @@ void GafferDispatchModule::bindTaskNode()
 		.def( "postTasks", &taskPlugPostTasks )
 		// Adjusting the name so that it correctly reflects
 		// the nesting, and can be used by the PlugSerialiser.
-		.attr( "__name__" ) = "TaskNode.TaskPlug"
+		.attr( "__qualname__" ) = "TaskNode.TaskPlug"
 	;
 
 }

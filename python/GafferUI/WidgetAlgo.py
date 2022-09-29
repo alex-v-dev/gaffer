@@ -34,8 +34,10 @@
 #
 ##########################################################################
 
+import functools
 import os
 import sys
+import six
 
 import GafferUI
 
@@ -44,27 +46,39 @@ from Qt import QtCore
 from Qt import QtGui
 from Qt import QtWidgets
 
-def joinEdges( listContainer ) :
+def joinEdges( widgets, orientation = None ) :
 
-	if listContainer.orientation() == listContainer.Orientation.Horizontal :
+	if isinstance( widgets, GafferUI.ListContainer ) :
+		assert( orientation is None )
+		orientation = widgets.orientation()
+	else :
+		assert( orientation is not None )
+
+	if orientation == GafferUI.ListContainer.Orientation.Horizontal :
 		lowProperty = "gafferAdjoinedLeft"
 		highProperty = "gafferAdjoinedRight"
 	else :
 		lowProperty = "gafferAdjoinedTop"
 		highProperty = "gafferAdjoinedBottom"
 
-	visibleWidgets = [ w for w in listContainer if w.getVisible() ]
+	joinableTypes = ( QtWidgets.QAbstractButton, QtWidgets.QFrame )
+
+	visibleWidgets = [ w for w in widgets if w.getVisible() ]
 	l = len( visibleWidgets )
 	for i, widget in enumerate( visibleWidgets ) :
 
-		if isinstance( widget, GafferUI.BoolPlugValueWidget ) :
-			# Special case - we need to apply the rounding to
-			# the internal widget.
-			## \todo Is there a better approach here, perhaps
-			# using the stylesheet?
-			qtWidget = widget.boolWidget()._qtWidget()
-		else :
-			qtWidget = widget._qtWidget()
+		qtWidget = widget._qtWidget()
+		# The top-level `QWidget` may be a non-drawable container that
+		# doesn't respond to styling - one common example is when
+		# `GafferUI.Widget.__init__` wraps a `GafferUI.Widget` in a `QWidget``.
+		# In this case, search for a child that does accept styling,
+		# and style that instead.
+		while not isinstance( qtWidget, joinableTypes ) :
+			children = [ c for c in qtWidget.children() if isinstance( c, QtWidgets.QWidget ) ]
+			if len( children ) == 1 :
+				qtWidget = children[0]
+			else :
+				break
 
 		qtWidget.setProperty( lowProperty, i > 0 )
 		qtWidget.setProperty( highProperty, i < l - 1 )
@@ -91,7 +105,11 @@ def grab( widget, imagePath ) :
 		if windowHandle :
 			screen = windowHandle.screen()
 
-		pixmap = screen.grabWindow( long( widget._qtWidget().winId() ) )
+		qtVersion = [ int( x ) for x in Qt.__qt_version__.split( "." ) ]
+		if qtVersion >= [ 5, 12 ] or six.PY3 :
+			pixmap = screen.grabWindow( widget._qtWidget().winId() )
+		else :
+			pixmap = screen.grabWindow( long( widget._qtWidget().winId() ) )
 
 		if sys.platform == "darwin" and pixmap.size() == screen.size() * screen.devicePixelRatio() :
 			# A bug means that the entire screen will have been captured,
@@ -111,3 +129,13 @@ def grab( widget, imagePath ) :
 		pixmap = QtGui.QPixmap.grabWindow( long( widget._qtWidget().winId() ) )
 
 	pixmap.save( imagePath )
+
+## Useful as a workaround when you want to dispose of a GafferUI.Widget immediately,
+# but Qt bugs prevent you from doing so.
+def keepUntilIdle( widget ) :
+
+	def keep( o ) :
+
+		return False # Removes idle callback
+
+	GafferUI.EventLoop.addIdleCallback( functools.partial( keep, widget ) )

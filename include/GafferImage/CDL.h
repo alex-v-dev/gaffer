@@ -53,7 +53,7 @@ class GAFFERIMAGE_API CDL : public OpenColorIOTransform
 		CDL( const std::string &name=defaultName<CDL>() );
 		~CDL() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::CDL, CDLTypeId, OpenColorIOTransform );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::CDL, CDLTypeId, OpenColorIOTransform );
 
 		Gaffer::Color3fPlug *slopePlug();
 		const Gaffer::Color3fPlug *slopePlug() const;
@@ -74,7 +74,7 @@ class GAFFERIMAGE_API CDL : public OpenColorIOTransform
 
 		bool affectsTransform( const Gaffer::Plug *input ) const override;
 		void hashTransform( const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
-		OpenColorIO::ConstTransformRcPtr transform() const override;
+		OCIO_NAMESPACE::ConstTransformRcPtr transform() const override;
 
 	private :
 

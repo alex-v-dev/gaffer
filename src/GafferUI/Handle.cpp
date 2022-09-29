@@ -40,8 +40,6 @@
 #include "GafferUI/Style.h"
 #include "GafferUI/ViewportGadget.h"
 
-#include "IECoreGL/Selector.h"
-
 #include "IECore/Export.h"
 #include "IECore/NullObject.h"
 
@@ -53,9 +51,10 @@ IECORE_POP_DEFAULT_VISIBILITY
 #include "OpenEXR/ImathMatrixAlgo.h"
 #include "OpenEXR/ImathVecAlgo.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/bind/placeholders.hpp"
 
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace IECoreScene;
@@ -90,7 +89,7 @@ void Handle::setRasterScale( float rasterScale )
 	}
 
 	m_rasterScale = rasterScale;
-	renderRequestSignal()( this );
+	dirty( DirtyType::Render );
 }
 
 float Handle::getRasterScale() const
@@ -106,7 +105,7 @@ void Handle::setVisibleOnHover( bool visibleOnHover )
 	}
 
 	m_visibleOnHover = visibleOnHover;
-	renderRequestSignal()( this );
+	dirty( DirtyType::Render );
 }
 
 bool Handle::getVisibleOnHover() const
@@ -122,16 +121,11 @@ Imath::Box3f Handle::bound() const
 	return Box3f( V3f( -1 ), V3f( 1 ) );
 }
 
-bool Handle::hasLayer( Layer layer ) const
-{
-	return layer == Layer::MidFront;
-}
-
-void Handle::doRenderLayer( Layer layer, const Style *style ) const
+void Handle::renderLayer( Layer layer, const Style *style, RenderReason reason ) const
 {
 	if( m_visibleOnHover )
 	{
-		if( !enabled() || (!m_hovering && !IECoreGL::Selector::currentSelector() ) )
+		if( !enabled() || (!m_hovering && !isSelectionRender( reason ) ) )
 		{
 			return;
 		}
@@ -147,6 +141,19 @@ void Handle::doRenderLayer( Layer layer, const Style *style ) const
 	renderHandle( style, state );
 
 	glPopMatrix();
+}
+
+unsigned Handle::layerMask() const
+{
+	return (unsigned)Layer::MidFront;
+}
+
+Imath::Box3f Handle::renderBound() const
+{
+	// Having a raster scale makes our bound somewhat meaningless
+	Box3f b;
+	b.makeInfinite();
+	return b;
 }
 
 Imath::V3f Handle::rasterScaleFactor() const
@@ -188,13 +195,13 @@ Imath::V3f Handle::rasterScaleFactor() const
 void Handle::enter()
 {
 	m_hovering = true;
- 	requestRender();
+	dirty( DirtyType::Render );
 }
 
 void Handle::leave()
 {
 	m_hovering = false;
- 	requestRender();
+	dirty( DirtyType::Render );
 }
 
 bool Handle::buttonPress( const ButtonEvent &event )

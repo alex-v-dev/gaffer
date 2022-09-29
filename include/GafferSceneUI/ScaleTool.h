@@ -54,7 +54,7 @@ class GAFFERSCENEUI_API ScaleTool : public TransformTool
 		ScaleTool( SceneView *view, const std::string &name = defaultName<ScaleTool>() );
 		~ScaleTool() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferSceneUI::ScaleTool, ScaleToolTypeId, TransformTool );
+		GAFFER_NODE_DECLARE_TYPE( GafferSceneUI::ScaleTool, ScaleToolTypeId, TransformTool );
 
 		/// Scales the current selection as if the handles
 		/// had been dragged interactively. Exists mainly for
@@ -88,7 +88,7 @@ class GAFFERSCENEUI_API ScaleTool : public TransformTool
 
 				// Initialised lazily when we first
 				// acquire the transform plug.
-				boost::optional<Imath::V3f> m_originalScale;
+				std::optional<Imath::V3f> m_originalScale;
 
 		};
 

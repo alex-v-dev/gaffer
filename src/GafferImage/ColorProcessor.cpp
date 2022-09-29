@@ -54,7 +54,7 @@ const IECore::InternedString g_layerNameKey( "image:colorProcessor:__layerName" 
 
 } // namespace
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( ColorProcessor );
+GAFFER_NODE_DEFINE_TYPE( ColorProcessor );
 
 size_t ColorProcessor::g_firstPlugIndex = 0;
 
@@ -81,6 +81,7 @@ ColorProcessor::ColorProcessor( const std::string &name )
 	outPlug()->deepPlug()->setInput( inPlug()->deepPlug() );
 	outPlug()->sampleOffsetsPlug()->setInput( inPlug()->sampleOffsetsPlug() );
 	outPlug()->channelNamesPlug()->setInput( inPlug()->channelNamesPlug() );
+	outPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 }
 
 ColorProcessor::~ColorProcessor()
@@ -167,9 +168,9 @@ void ColorProcessor::compute( Gaffer::ValuePlug *output, const Gaffer::Context *
 		{
 			ImagePlug::ChannelDataScope channelDataScope( context );
 
-			if( unpremult && ImageAlgo::channelExists( channelNames, "A" ) )
+			if( unpremult && ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameA ) )
 			{
-				channelDataScope.setChannelName( "A" );
+				channelDataScope.setChannelName( &ImageAlgo::channelNameA );
 				alpha = inPlug()->channelDataPlug()->getValue();
 			}
 
@@ -179,7 +180,7 @@ void ColorProcessor::compute( Gaffer::ValuePlug *output, const Gaffer::Context *
 				string channelName = ImageAlgo::channelName( layerName, baseName );
 				if( ImageAlgo::channelExists( channelNames, channelName ) )
 				{
-					channelDataScope.setChannelName( channelName );
+					channelDataScope.setChannelName( &channelName );
 					rgb[i] = inPlug()->channelDataPlug()->getValue()->copy();
 
 					samples = rgb[i]->readable().size();
@@ -290,7 +291,8 @@ void ColorProcessor::hashChannelData( const GafferImage::ImagePlug *output, cons
 	h.append( baseName );
 	{
 		Context::EditableScope layerScope( context );
-		layerScope.set( g_layerNameKey, ImageAlgo::layerName( channel ) );
+		std::string layerNameStr = ImageAlgo::layerName( channel );
+		layerScope.set( g_layerNameKey, &layerNameStr );
 		colorDataPlug()->hash( h );
 	}
 }
@@ -313,7 +315,8 @@ IECore::ConstFloatVectorDataPtr ColorProcessor::computeChannelData( const std::s
 	ConstObjectVectorPtr colorData;
 	{
 		Context::EditableScope layerScope( context );
-		layerScope.set( g_layerNameKey, ImageAlgo::layerName( channel ) );
+		std::string layerNameStr = ImageAlgo::layerName( channel );
+		layerScope.set( g_layerNameKey, &layerNameStr );
 		colorData = boost::static_pointer_cast<const ObjectVector>( colorDataPlug()->getValue() );
 	}
 	return boost::static_pointer_cast<const FloatVectorData>( colorData->members()[ImageAlgo::colorIndex( baseName)] );
@@ -343,7 +346,7 @@ void ColorProcessor::hashColorData( const Gaffer::Context *context, IECore::Murm
 		string channelName = ImageAlgo::channelName( layerName, baseName );
 		if( ImageAlgo::channelExists( channelNames, channelName ) )
 		{
-			channelDataScope.setChannelName( channelName );
+			channelDataScope.setChannelName( &channelName );
 			inPlug()->channelDataPlug()->hash( h );
 		}
 		else
@@ -352,9 +355,9 @@ void ColorProcessor::hashColorData( const Gaffer::Context *context, IECore::Murm
 		}
 	}
 
-	if( unpremult && ImageAlgo::channelExists( channelNames, "A" ) )
+	if( unpremult && ImageAlgo::channelExists( channelNames, ImageAlgo::channelNameA ) )
 	{
-		channelDataScope.setChannelName( "A" );
+		channelDataScope.setChannelName( &ImageAlgo::channelNameA );
 		inPlug()->channelDataPlug()->hash( h );
 	}
 }

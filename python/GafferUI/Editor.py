@@ -36,6 +36,7 @@
 ##########################################################################
 
 import types
+import six
 
 import IECore
 
@@ -45,7 +46,7 @@ import GafferUI
 from Qt import QtCore
 from Qt import QtWidgets
 
-class _EditorMetaclass( Gaffer.Trackable.__class__ ) :
+class _EditorMetaclass( Gaffer.Signals.Trackable.__class__ ) :
 
 	def __call__( cls, *args, **kw ) :
 
@@ -58,9 +59,7 @@ class _EditorMetaclass( Gaffer.Trackable.__class__ ) :
 
 ## Base class for UI components which display or manipulate a ScriptNode
 # or its children. These make up the tabs in the UI layout.
-class Editor( GafferUI.Widget ) :
-
-	__metaclass__ = _EditorMetaclass
+class Editor( six.with_metaclass( _EditorMetaclass, GafferUI.Widget ) ) :
 
 	def __init__( self, topLevelWidget, scriptNode, **kw ) :
 
@@ -139,7 +138,7 @@ class Editor( GafferUI.Widget ) :
 		previousContext = self.__context
 		self.__context = context
 		if self.__context is not None :
-			self.__contextChangedConnection = self.__context.changedSignal().connect( Gaffer.WeakMethod( self.__contextChanged ) )
+			self.__contextChangedConnection = self.__context.changedSignal().connect( Gaffer.WeakMethod( self.__contextChanged ), scoped = True )
 		else :
 			## \todo I'm not sure why this code allows a None context - surely we
 			# should always have a valid one?
@@ -154,7 +153,7 @@ class Editor( GafferUI.Widget ) :
 			self._updateFromContext( modifiedItems )
 
 	## May be implemented by derived classes to update state based on a change of context.
-	# To temporarily suspend calls to this function, use Gaffer.BlockedConnection( self._contextChangedConnection() ).
+	# To temporarily suspend calls to this function, use Gaffer.Signals.BlockedConnection( self._contextChangedConnection() ).
 	def _updateFromContext( self, modifiedItems ) :
 
 		pass
@@ -180,7 +179,7 @@ class Editor( GafferUI.Widget ) :
 	@classmethod
 	def types( cls ) :
 
-		return cls.__namesToCreators.keys()
+		return list( cls.__namesToCreators.keys() )
 
 	@classmethod
 	def create( cls, name, scriptNode ) :
@@ -201,16 +200,30 @@ class Editor( GafferUI.Widget ) :
 		if s is not None :
 			return s
 
-		s = Gaffer.Signal1()
+		s = Gaffer.Signals.Signal1()
 		setattr( cls, "__instanceCreatedSignal", s )
 		return s
 
 	def __enter( self, widget ) :
 
-		if not isinstance( QtWidgets.QApplication.focusWidget(), ( QtWidgets.QLineEdit, QtWidgets.QPlainTextEdit ) ) :
-			self._qtWidget().setFocus()
+		currentFocusWidget = QtWidgets.QApplication.focusWidget()
+
+		# Don't disrupt in-progress text edits
+		if isinstance( currentFocusWidget, ( QtWidgets.QLineEdit, QtWidgets.QPlainTextEdit ) ) :
+			return
+
+		try :
+			gafferWidget = GafferUI.Widget._owner( currentFocusWidget )
+		except :
+			gafferWidget = None
+
+		# Don't adjust focus if it is already with one of our children. This can happen,
+		# for example, when a popup window launched by a child widget is dismissed.
+		if gafferWidget is not None and ( gafferWidget is self or self.isAncestorOf( gafferWidget ) ) :
+			return
+
+		self._qtWidget().setFocus()
 
 	def __leave( self, widget ) :
 
 		self._qtWidget().clearFocus()
-

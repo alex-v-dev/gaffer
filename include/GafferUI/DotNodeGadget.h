@@ -61,9 +61,11 @@ class GAFFERUI_API DotNodeGadget : public StandardNodeGadget
 		DotNodeGadget( Gaffer::NodePtr node );
 		~DotNodeGadget() override;
 
+		Imath::Box3f bound() const override;
+
 	protected :
 
-		void doRenderLayer( Layer layer, const Style *style ) const override;
+		void renderLayer( Layer layer, const Style *style, RenderReason reason ) const override;
 
 	private :
 
@@ -79,7 +81,7 @@ class GAFFERUI_API DotNodeGadget : public StandardNodeGadget
 		bool dragEnter( const DragDropEvent &event );
 		bool drop( const DragDropEvent &event );
 
-		boost::signals::scoped_connection m_upstreamNameChangedConnection;
+		Gaffer::Signals::ScopedConnection m_upstreamNameChangedConnection;
 
 		std::string m_label;
 		Imath::V2f m_labelPosition;
@@ -89,9 +91,6 @@ class GAFFERUI_API DotNodeGadget : public StandardNodeGadget
 };
 
 IE_CORE_DECLAREPTR( DotNodeGadget )
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<DotNodeGadget> > DotNodeGadgetIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<DotNodeGadget> > RecursiveDotNodeGadgetIterator;
 
 } // namespace GafferUI
 

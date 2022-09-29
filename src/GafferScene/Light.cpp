@@ -53,7 +53,7 @@ using namespace GafferScene;
 static IECore::InternedString g_lightsSetName( "__lights" );
 static IECore::InternedString g_defaultLightsSetName( "defaultLights" );
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Light );
+GAFFER_NODE_DEFINE_TYPE( Light );
 
 size_t Light::g_firstPlugIndex = 0;
 
@@ -78,6 +78,9 @@ Light::Light( const std::string &name )
 	visualiserAttr->addChild( new Gaffer::NameValuePlug( "gl:light:frustumScale", frustumScaleValuePlug, false, "lightFrustumScale" ) );
 
 	visualiserAttr->addChild( new Gaffer::NameValuePlug( "gl:light:drawingMode", new IECore::StringData( "texture" ), false, "lightDrawingMode" ) );
+
+	visualiserAttr->addChild( new Gaffer::NameValuePlug( "gl:light:lookThroughAperture", new IECore::FloatData( 2.0f ), false, "lookThroughAperture" ) );
+	visualiserAttr->addChild( new Gaffer::NameValuePlug( "gl:light:lookThroughClippingPlanes", new IECore::V2fData( Imath::V2f( -100000, 100000 ) ), false, "lookThroughClippingPlanes" ) );
 
 	addChild( visualiserAttr  );
 }

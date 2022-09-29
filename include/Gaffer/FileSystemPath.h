@@ -45,6 +45,15 @@
 namespace Gaffer
 {
 
+/// The FileSystemPath class provides cross-platform file path functions.
+/// Paths can be a native formatted path - elements are separated by "/"
+/// on Linux and MacOS and "\" on Windows - or by the Gaffer standard
+/// path separator "/" on all platforms.
+///
+/// The root of a FileSystemPath will be "" for relative paths. On Linux and
+/// MacOS, an absolute path root will be "/".
+/// On Windows, an absolute path root will be either "<driveLetter>:/" for
+/// drive-letter paths, or "//<serverName>/" for UNC paths.
 class GAFFER_API FileSystemPath : public Path
 {
 
@@ -58,9 +67,9 @@ class GAFFER_API FileSystemPath : public Path
 
 		~FileSystemPath() override;
 
-		bool isValid() const override;
-		bool isLeaf() const override;
-		void propertyNames( std::vector<IECore::InternedString> &names ) const override;
+		bool isValid( const IECore::Canceller *canceller = nullptr ) const override;
+		bool isLeaf( const IECore::Canceller *canceller = nullptr ) const override;
+		void propertyNames( std::vector<IECore::InternedString> &names, const IECore::Canceller *canceller = nullptr ) const override;
 		/// Supported properties :
 		///
 		/// "fileSystem:owner" -> StringData
@@ -68,7 +77,7 @@ class GAFFER_API FileSystemPath : public Path
 		/// "fileSystem:modificationTime" -> DateTimeData, in UTC time
 		/// "fileSystem:size" -> UInt64Data, in bytes
 		/// "fileSystem:frameRange" -> StringData
-		IECore::ConstRunTimeTypedPtr property( const IECore::InternedString &name ) const override;
+		IECore::ConstRunTimeTypedPtr property( const IECore::InternedString &name, const IECore::Canceller *canceller = nullptr ) const override;
 		PathPtr copy() const override;
 
 		// Returns true if this FileSystemPath includes FileSequences
@@ -82,13 +91,23 @@ class GAFFER_API FileSystemPath : public Path
 		// a FileSequence.
 		IECore::FileSequencePtr fileSequence() const;
 
+		// Returns the path converted to the OS native format
+		std::string nativeString() const;
+
 		static PathFilterPtr createStandardFilter( const std::vector<std::string> &extensions = std::vector<std::string>(), const std::string &extensionsLabel = "", bool includeSequenceFilter = false );
 
 	protected :
 
-		void doChildren( std::vector<PathPtr> &children ) const override;
+		void doChildren( std::vector<PathPtr> &children, const IECore::Canceller *canceller ) const override;
 
 	private :
+
+#ifdef _MSC_VER
+
+		/// Sets the path root and names in generic format from an OS native path string
+		void rootAndNames( const std::string &string, IECore::InternedString &root, Names &names ) const override;
+
+#endif
 
 		bool m_includeSequences;
 

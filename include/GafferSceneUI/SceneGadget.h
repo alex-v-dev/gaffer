@@ -38,15 +38,19 @@
 #define GAFFERSCENEUI_SCENEGADGET_H
 
 #include "GafferSceneUI/Export.h"
+#include "GafferSceneUI/Private/OutputBuffer.h"
 #include "GafferSceneUI/TypeIds.h"
 
 #include "GafferScene/RenderController.h"
 #include "GafferScene/ScenePlug.h"
 
 #include "GafferUI/Gadget.h"
+#include "GafferUI/ViewportGadget.h"
 
 #include "Gaffer/Context.h"
 #include "Gaffer/ParallelAlgo.h"
+
+#include "IECore/PathMatcherData.h"
 
 #include "IECoreGL/State.h"
 
@@ -88,6 +92,17 @@ class GAFFERSCENEUI_API SceneGadget : public GafferUI::Gadget
 		/// Sets the selection.
 		void setSelection( const IECore::PathMatcher &selection );
 
+		/// Renderer
+		/// ========
+		///
+		/// By default, the SceneGadget renders using OpenGL, but it can
+		/// optionally be used in a hybrid mode where OpenGL is used for
+		/// bounding boxes and visualisations, and a raytraced renderer
+		/// is used for expanded objects.
+
+		void setRenderer( IECore::InternedString name );
+		IECore::InternedString getRenderer();
+
 		/// Specifies options to control the OpenGL renderer. These are used
 		/// to specify wireframe/point drawing and colours etc. A copy of
 		/// `options` is taken.
@@ -102,6 +117,7 @@ class GAFFERSCENEUI_API SceneGadget : public GafferUI::Gadget
 		/// results as they become available. These methods control
 		/// that process.
 
+		/// Pauses the processing of scene edits.
 		void setPaused( bool paused );
 		bool getPaused() const;
 
@@ -124,7 +140,7 @@ class GAFFERSCENEUI_API SceneGadget : public GafferUI::Gadget
 
 		State state() const;
 
-		typedef boost::signal<void (SceneGadget *)> SceneGadgetSignal;
+		using SceneGadgetSignal = Gaffer::Signals::Signal<void (SceneGadget *)>;
 		SceneGadgetSignal &stateChangedSignal();
 
 		/// Blocks until the update is completed. This is primarily of
@@ -162,29 +178,46 @@ class GAFFERSCENEUI_API SceneGadget : public GafferUI::Gadget
 		) const;
 
 		/// Returns the bounding box of all the selected objects.
+		/// Deprecated, prefer using `bound( true )` below
 		Imath::Box3f selectionBound() const;
+
+		/// Queries the bound with additional parameters - if `selected` is true, queries only
+		/// selected objects, and "omitted" is a PathMatcher with paths to specifically omit
+		Imath::Box3f bound( bool selected, const IECore::PathMatcher *omitted = nullptr ) const;
 
 		/// Implemented to return the name of the object under the mouse.
 		std::string getToolTip( const IECore::LineSegment3f &line ) const override;
 
 	protected :
 
-		void doRenderLayer( Layer layer, const GafferUI::Style *style ) const override;
+		void renderLayer( Layer layer, const GafferUI::Style *style, RenderReason reason ) const override;
+		unsigned layerMask() const override;
+		Imath::Box3f renderBound() const override;
 
 	private :
 
+		bool openGLObjectAt( const IECore::LineSegment3f &lineInGadgetSpace, GafferScene::ScenePlug::ScenePath &path, float &depth ) const;
+
 		void updateRenderer();
-		void renderScene() const;
+		void updateCamera( GafferUI::ViewportGadget::CameraFlags changes );
 		IECore::PathMatcher convertSelection( IECore::UIntVectorDataPtr ids ) const;
+		void bufferChanged();
 		void visibilityChanged();
+		void cancelUpdateAndPauseRenderer();
+
+		Gaffer::Signals::Connection m_viewportChangedConnection;
+		Gaffer::Signals::Connection m_viewportCameraChangedConnection;
 
 		bool m_paused;
 		IECore::PathMatcher m_blockingPaths;
 		IECore::PathMatcher m_priorityPaths;
 		SceneGadgetSignal m_stateChangedSignal;
 
+		IECore::InternedString m_rendererName;
 		IECoreScenePreview::RendererPtr m_renderer;
-		mutable GafferScene::RenderController m_controller;
+		IECoreScenePreview::Renderer::ObjectInterfacePtr m_camera;
+		std::unique_ptr<OutputBuffer> m_outputBuffer;
+		std::unique_ptr<GafferScene::RenderController> m_controller;
 		mutable std::shared_ptr<Gaffer::BackgroundTask> m_updateTask;
 		bool m_updateErrored;
 		std::atomic_bool m_renderRequestPending;
@@ -195,9 +228,6 @@ class GAFFERSCENEUI_API SceneGadget : public GafferUI::Gadget
 		IECore::StringVectorDataPtr m_selectionMask;
 
 };
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<SceneGadget> > SceneGadgetIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<SceneGadget> > RecursiveSceneGadgetIterator;
 
 } // namespace GafferUI
 

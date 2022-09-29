@@ -45,6 +45,7 @@ import stat
 import inspect
 import functools
 import six
+import imath
 
 import IECore
 
@@ -92,6 +93,56 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 		s.removeChild( n )
 
 		self.assertNotIn( n, s.selection() )
+
+	def testFocus( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		cs = GafferTest.CapturingSlot( s.focusChangedSignal() )
+
+		f = s.focusSet()
+		self.assertIsInstance( f, Gaffer.Set )
+		self.assertEqual( f.size(), 0 )
+
+		s["n1"] = Gaffer.Node()
+		s["n2"] = Gaffer.Node()
+		n3 = Gaffer.Node()
+
+		s.setFocus( s["n1"] )
+		self.assertEqual( s.getFocus(), s["n1"] )
+		self.assertEqual( set( f ), { s["n1"] } )
+
+		self.assertEqual( len( cs ), 1 )
+		self.assertTrue( cs[0][0].isSame( s ) )
+		self.assertTrue( cs[0][1].isSame( s["n1"] ) )
+
+		s.setFocus( s["n2"] )
+		self.assertEqual( s.getFocus(), s["n2"] )
+		self.assertEqual( set( f ), { s["n2"] } )
+
+		self.assertEqual( len( cs ), 2 )
+		self.assertTrue( cs[1][0].isSame( s ) )
+		self.assertTrue( cs[1][1].isSame( s["n2"] ) )
+
+		with six.assertRaisesRegex( self, Exception, "Node is not a child of this script" ) :
+			s.setFocus( n3 )
+		self.assertEqual( set( f ), { s["n2"] } )
+
+		self.assertEqual( len( cs ), 2 )
+
+		with six.assertRaisesRegex( self, Exception, "Python argument types in.*" ) :
+			s.setFocus( Gaffer.Plug() )
+		self.assertEqual( set( f ), { s["n2"] } )
+
+		self.assertEqual( len( cs ), 2 )
+
+		s.setFocus( None )
+		self.assertEqual( s.getFocus(), None )
+		self.assertEqual( set( f ), set() )
+
+		self.assertEqual( len( cs ), 3 )
+		self.assertTrue( cs[2][0].isSame( s ) )
+		self.assertEqual( cs[2][1], None )
 
 	def testSerialisation( self ) :
 
@@ -287,7 +338,7 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 
 				def __init__( self ) :
 
-					print A
+					print( A )
 
 			a = A()
 			"""
@@ -893,7 +944,7 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 		def f( plug ) :
 			values.append( plug.getValue() )
 
-		c = s["n"].plugSetSignal().connect( f )
+		s["n"].plugSetSignal().connect( f, scoped = False )
 
 		with Gaffer.UndoScope( s ) :
 			s["n"]["p"].setValue( 10 )
@@ -1010,7 +1061,7 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 				self.assertFalse( s.undoAvailable() )
 				self.assertFalse( s.redoAvailable() )
 
-		c = s["n"].plugSetSignal().connect( f )
+		s["n"].plugSetSignal().connect( f, scoped = False )
 
 		self.assertEqual( s.currentActionStage(), Gaffer.Action.Stage.Invalid )
 		self.assertEqual( len( actionStages ), 0 )
@@ -1095,7 +1146,7 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 		s["n"] = GafferTest.AddNode()
 
 		with IECore.CapturingMessageHandler() as c :
-			s.execute( 'parent["n"]["op1"].setValue( 101 )\niWillFail(); parent["n"]["op2"].setValue( 102 )', continueOnError=True )
+			s.execute( 'parent["n"]["op1"].setValue( 101 )\niWillFail()\nparent["n"]["op2"].setValue( 102 )', continueOnError=True )
 
 		self.assertEqual( s["n"]["op1"].getValue(), 101 )
 		self.assertEqual( s["n"]["op2"].getValue(), 102 )
@@ -1288,7 +1339,7 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 		def f( script, child ) :
 			self.__wasExecuting.append( script.isExecuting() )
 
-		c = s.childAddedSignal().connect( f )
+		s.childAddedSignal().connect( f, scoped = False )
 
 		s["n"] = GafferTest.AddNode()
 
@@ -1307,8 +1358,7 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 		s["r"]["op1"].setInput( s["n"]["sum"] )
 
 		s["x"] = GafferTest.AddNode()
-		# verifies that wasExecuting was False throughout this setup stage
-		self.assertEqual( self.__wasExecuting, map( lambda x: False, self.__wasExecuting ) )
+		self.assertFalse( any( self.__wasExecuting ) )
 
 		self.__wasExecuting = []
 
@@ -1317,8 +1367,7 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 
 		ss = s.serialise( filter = Gaffer.StandardSet( [ s["n"], s["r"], s["x"] ] ) )
 		s.execute( ss )
-		# verifies that wasExecuting was True throughout this setup stage
-		self.assertEqual( self.__wasExecuting, map( lambda x: True, self.__wasExecuting ) )
+		self.assertTrue( all( self.__wasExecuting ) )
 
 		self.__wasExecuting = []
 		self.assertRaises( RuntimeError, s.execute, ss + "\nsyntaxError" )
@@ -1464,6 +1513,253 @@ class ScriptNodeTest( GafferTest.TestCase ) :
 
 		s["fileName"].setValue( self.temporaryDirectory() + "/test2.gfr" )
 		self.assertFalse( Gaffer.MetadataAlgo.getReadOnly( s ) )
+
+	def testDisableContextVariable( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		p = Gaffer.NameValuePlug( "test", 10, defaultEnabled = True, name = "test", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["variables"].addChild( p )
+		self.assertEqual( s.context()["test"], 10 )
+
+		p["enabled"].setValue( False )
+		self.assertNotIn( "test", s.context() )
+
+		s2 = Gaffer.ScriptNode()
+		s2.execute( s.serialise() )
+		self.assertNotIn( "test", s2.context() )
+		s2["variables"]["test"]["enabled"].setValue( True )
+		self.assertEqual( s2.context()["test"], 10 )
+
+	def testDeleteContextVariable( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		p = Gaffer.NameValuePlug( "test", 10, defaultEnabled = True, name = "test", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["variables"].addChild( p )
+		self.assertEqual( s.context()["test"], 10 )
+
+		s["variables"].removeChild( p )
+		self.assertNotIn( "test", s.context() )
+
+	def testCompoundNumericContextVariable( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		p = Gaffer.NameValuePlug( "test", imath.V3i( 1, 2, 3 ), flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["variables"].addChild( p )
+		self.assertEqual( s.context()["test"], imath.V3i( 1, 2, 3 ) )
+
+		p["value"]["y"].setValue( 10 )
+		self.assertEqual( s.context()["test"], imath.V3i( 1, 10, 3 ) )
+
+	def testDuplicateContextVariables( self ) :
+
+		# We don't want people to specify the same context variable twice,
+		# but if they do, we want to implement a simple rule : last enabled
+		# one in the list wins. This is the same rule used for CompoundDataPlugs
+		# everywhere.
+
+		s = Gaffer.ScriptNode()
+
+		p1 = Gaffer.NameValuePlug( "test", 1, defaultEnabled = True, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		p2 = Gaffer.NameValuePlug( "test", 2, defaultEnabled = True, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["variables"].addChild( p1 )
+		s["variables"].addChild( p2 )
+		self.assertEqual( s.context()["test"], 2 )
+
+		p1["value"].setValue( 10 )
+		self.assertEqual( s.context()["test"], 2 )
+
+		p2["enabled"].setValue( False )
+		self.assertEqual( s.context()["test"], 10 )
+
+		p2["enabled"].setValue( True )
+		self.assertEqual( s.context()["test"], 2 )
+
+		s["variables"].removeChild( p2 )
+		self.assertEqual( s.context()["test"], 10 )
+
+		s["variables"].removeChild( p1 )
+		self.assertNotIn( "test", s.context() )
+
+	def testExternalContextVariable( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		# We don't really want people to manipulate the context directly like
+		# this; we want them to use `ScriptNode::variablesPlug()` instead. But
+		# it seems plausible that people would do this to implement a sort of
+		# non-persistent "context pinning" for interactive use. Until we support
+		# such a feature natively, make sure that we don't remove variables we
+		# know nothing about.
+		s.context()["externalTest"] = 10
+
+		p = Gaffer.NameValuePlug( "test", 1, defaultEnabled = True, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["variables"].addChild( p )
+		self.assertEqual( s.context()["externalTest"], 10 )
+		self.assertEqual( s.context()["test"], 1 )
+
+		p["enabled"].setValue( False )
+		self.assertEqual( s.context()["externalTest"], 10 )
+		self.assertNotIn( "test", s.context() )
+
+		p["enabled"].setValue( True )
+		self.assertEqual( s.context()["externalTest"], 10 )
+		self.assertEqual( s.context()["test"], 1 )
+
+		s["variables"].removeChild( p )
+		self.assertEqual( s.context()["externalTest"], 10 )
+		self.assertNotIn( "test", s.context() )
+
+	def testChangeContextVariableName( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		p = Gaffer.NameValuePlug( "", 1, defaultEnabled = True, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic )
+		s["variables"].addChild( p )
+		self.assertNotIn( "", s.context() )
+
+		p["name"].setValue( "test" )
+		self.assertEqual( s.context()["test"], 1 )
+
+		p["name"].setValue( "testTwo" )
+		self.assertEqual( s.context()["testTwo"], 1 )
+		self.assertNotIn( "test", s.context() )
+
+		p["name"].setValue( "" )
+		self.assertNotIn( "testTwo", s.context() )
+
+	def testCancellationDuringLoad( self ) :
+
+		s = Gaffer.ScriptNode()
+		s["fileName"].setValue( os.path.join( os.path.dirname( __file__ ), "scripts", "previousSerialisationVersion.gfr" ) )
+
+		context = Gaffer.Context()
+		canceller = IECore.Canceller()
+		with Gaffer.Context( context, canceller ) :
+			canceller.cancel()
+			with self.assertRaises( IECore.Cancelled ) :
+				s.load()
+
+	def testCancellationDuringExecute( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		context = Gaffer.Context()
+		canceller = IECore.Canceller()
+		with Gaffer.Context( context, canceller ) :
+			canceller.cancel()
+			# Execution is done all in one go, and there's no point cancelling
+			# at the end when we've done all of the work anyway.
+			s.execute( "script.addChild( Gaffer.Node() )", continueOnError = False )
+			with self.assertRaises( IECore.Cancelled ) :
+				# Execution is done line-by-line, so making regular cancellation
+				# checks makes sense.
+				s.execute( "script.addChild( Gaffer.Node() )", continueOnError = True )
+
+	def testCancellationDuringSerialise( self ) :
+
+		s = Gaffer.ScriptNode()
+		context = Gaffer.Context()
+		canceller = IECore.Canceller()
+		with Gaffer.Context( context, canceller ) :
+			canceller.cancel()
+			with self.assertRaises( IECore.Cancelled ) :
+				s.serialise()
+
+	def testFrameChangeSignalling( self ) :
+
+		s = Gaffer.ScriptNode()
+		cs = GafferTest.CapturingSlot( s.context().changedSignal() )
+
+		s.context().setFrame( 10 )
+		self.assertEqual( cs, [ ( s.context(), "frame" ) ] )
+		self.assertEqual( s.context().getFrame(), 10 )
+
+		s.context().setFrame( 20 )
+		self.assertEqual( cs, [ ( s.context(), "frame" ) ] * 2 )
+		self.assertEqual( s.context().getFrame(), 20 )
+
+		s.context().setFrame( 30 )
+		self.assertEqual( cs, [ ( s.context(), "frame" ) ] * 3 )
+		self.assertEqual( s.context().getFrame(), 30 )
+
+		s.context().setFrame( 30 )
+		self.assertEqual( cs, [ ( s.context(), "frame" ) ] * 3 )
+		self.assertEqual( s.context().getFrame(), 30 )
+
+		s["frame"].setValue( 40 )
+		self.assertEqual( cs, [ ( s.context(), "frame" ) ] * 4 )
+		self.assertEqual( s.context().getFrame(), 40 )
+
+		s["frame"].setValue( 50 )
+		self.assertEqual( cs, [ ( s.context(), "frame" ) ] * 5 )
+		self.assertEqual( s.context().getFrame(), 50 )
+
+		s["frame"].setValue( 50 )
+		self.assertEqual( cs, [ ( s.context(), "frame" ) ] * 5 )
+		self.assertEqual( s.context().getFrame(), 50 )
+
+	def testDeletingNodeRemovesFocus( self ) :
+
+		s = Gaffer.ScriptNode()
+		n = Gaffer.Node()
+		s["n"] = n
+
+		# Set focus, and check all expected signals are emitted.
+
+		focusChanges = GafferTest.CapturingSlot( s.focusChangedSignal() )
+		memberRemovals = GafferTest.CapturingSlot( s.focusSet().memberRemovedSignal() )
+		memberAdditions = GafferTest.CapturingSlot( s.focusSet().memberAddedSignal() )
+
+		s.setFocus( n )
+		self.assertEqual( s.getFocus(), n )
+
+		self.assertEqual( focusChanges, [ ( s, n ) ] )
+		self.assertEqual( memberRemovals, [] )
+		self.assertEqual( memberAdditions, [ ( s.focusSet(), n ) ] )
+
+		# Delete focus node, and check focus is lost and all expected signals
+		# are emitted.
+
+		del focusChanges[:]
+		del memberRemovals[:]
+		del memberAdditions[:]
+
+		del s["n"]
+		self.assertIsNone( s.getFocus() )
+
+		self.assertEqual( focusChanges, [ ( s, None ) ] )
+		self.assertEqual( memberRemovals, [ ( s.focusSet(), n ) ] )
+		self.assertEqual( memberAdditions, [] )
+
+		del focusChanges[:]
+		del memberRemovals[:]
+		del memberAdditions[:]
+
+		# Repeat, but this time with focus node inside a box.
+
+		s["b"] = Gaffer.Box()
+		s["b"]["n"] = n
+
+		s.setFocus( n )
+		self.assertEqual( s.getFocus(), n )
+
+		self.assertEqual( focusChanges, [ ( s, n ) ] )
+		self.assertEqual( memberRemovals, [] )
+		self.assertEqual( memberAdditions, [ ( s.focusSet(), n ) ] )
+
+		del focusChanges[:]
+		del memberRemovals[:]
+		del memberAdditions[:]
+
+		del s["b"]["n"]
+		self.assertIsNone( s.getFocus() )
+
+		self.assertEqual( focusChanges, [ ( s, None ) ] )
+		self.assertEqual( memberRemovals, [ ( s.focusSet(), n ) ] )
+		self.assertEqual( memberAdditions, [] )
 
 if __name__ == "__main__":
 	unittest.main()

@@ -63,11 +63,17 @@ class NameWidget( GafferUI.TextWidget ) :
 
 		self.__graphComponent = graphComponent
 		if self.__graphComponent is not None :
-			self.__nameChangedConnection = self.__graphComponent.nameChangedSignal().connect( Gaffer.WeakMethod( self.__setText ) )
+			self.__nameChangedConnection = self.__graphComponent.nameChangedSignal().connect(
+				Gaffer.WeakMethod( self.__setText ), scoped = True
+			)
 			if isinstance( self.__graphComponent, Gaffer.Node ) :
-				self.__metadataChangedConnection = Gaffer.Metadata.nodeValueChangedSignal().connect( Gaffer.WeakMethod( self.__nodeMetadataChanged ) )
+				self.__metadataChangedConnection = Gaffer.Metadata.nodeValueChangedSignal().connect(
+					Gaffer.WeakMethod( self.__nodeMetadataChanged ), scoped = True
+				)
 			elif isinstance( self.__graphComponent, Gaffer.Plug ) :
-				self.__metadataChangedConnection = Gaffer.Metadata.plugValueChangedSignal().connect( Gaffer.WeakMethod( self.__plugMetadataChanged ) )
+				self.__metadataChangedConnection = Gaffer.Metadata.plugValueChangedSignal( self.__graphComponent.node() ).connect(
+					Gaffer.WeakMethod( self.__plugMetadataChanged ), scoped = True
+				)
 			else :
 				self.__metadataChangedConnection = None
 		else :
@@ -109,10 +115,10 @@ class NameWidget( GafferUI.TextWidget ) :
 		) :
 			self.__updateEditability()
 
-	def __plugMetadataChanged( self, nodeTypeId, plugPath, key, plug ) :
+	def __plugMetadataChanged( self, plug, key, reason ) :
 
 		if (
-			Gaffer.MetadataAlgo.readOnlyAffectedByChange( self.__graphComponent, nodeTypeId, plugPath, key, plug ) or
+			Gaffer.MetadataAlgo.readOnlyAffectedByChange( self.__graphComponent, plug, key ) or
 			plug == self.__graphComponent and key == "renameable"
 		) :
 			self.__updateEditability()
@@ -127,7 +133,7 @@ class _Validator( QtGui.QValidator ) :
 
 		input = input.replace( " ", "_" )
 		if len( input ) :
-			if re.match( "^[A-Za-z_]+[A-Za-z_0-9]*$", input ) :
+			if re.match( "^(?!__)[A-Za-z_]+[A-Za-z_0-9]*$", input ) :
 				result = QtGui.QValidator.Acceptable
 			else :
 				result = QtGui.QValidator.Invalid

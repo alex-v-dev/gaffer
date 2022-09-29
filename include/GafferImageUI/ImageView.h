@@ -43,8 +43,12 @@
 
 #include "GafferUI/View.h"
 
+#include "Gaffer/BoxPlug.h"
+#include "Gaffer/CompoundNumericPlug.h"
 #include "Gaffer/NumericPlug.h"
+#include "Gaffer/Switch.h"
 #include "Gaffer/TypedPlug.h"
+#include "Gaffer/TypedObjectPlug.h"
 
 #include <functional>
 #include <memory>
@@ -85,7 +89,13 @@ class GAFFERIMAGEUI_API ImageView : public GafferUI::View
 		ImageView( const std::string &name = defaultName<ImageView>() );
 		~ImageView() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImageUI::ImageView, ImageViewTypeId, GafferUI::View );
+		GAFFER_NODE_DECLARE_TYPE( GafferImageUI::ImageView, ImageViewTypeId, GafferUI::View );
+
+		Gaffer::StringVectorDataPlug *channelsPlug();
+		const Gaffer::StringVectorDataPlug *channelsPlug() const;
+
+		Gaffer::IntPlug *soloChannelPlug();
+		const Gaffer::IntPlug *soloChannelPlug() const;
 
 		Gaffer::BoolPlug *clippingPlug();
 		const Gaffer::BoolPlug *clippingPlug() const;
@@ -100,13 +110,56 @@ class GAFFERIMAGEUI_API ImageView : public GafferUI::View
 		Gaffer::StringPlug *displayTransformPlug();
 		const Gaffer::StringPlug *displayTransformPlug() const;
 
+		Gaffer::BoolPlug *lutGPUPlug();
+		const Gaffer::BoolPlug *lutGPUPlug() const;
+
+		Gaffer::StringPlug *viewPlug();
+		const Gaffer::StringPlug *viewPlug() const;
+		Gaffer::StringPlug *compareModePlug();
+		const Gaffer::StringPlug *compareModePlug() const;
+		Gaffer::BoolPlug *compareWipePlug();
+		const Gaffer::BoolPlug *compareWipePlug() const;
+		Gaffer::StringPlug *compareViewPlug();
+		const Gaffer::StringPlug *compareViewPlug() const;
+
+		/// The gadget responsible for displaying the image.
+		ImageGadget *imageGadget();
+		const ImageGadget *imageGadget() const;
+
 		void setContext( Gaffer::ContextPtr context ) override;
 
-		typedef std::function<GafferImage::ImageProcessorPtr ()> DisplayTransformCreator;
+		using DisplayTransformCreator = std::function<GafferImage::ImageProcessorPtr ()>;
 
 		static void registerDisplayTransform( const std::string &name, DisplayTransformCreator creator );
 		static void registeredDisplayTransforms( std::vector<std::string> &names );
 		static GafferImage::ImageProcessorPtr createDisplayTransform( const std::string &name );
+
+		class GAFFERIMAGEUI_API ColorInspectorPlug : public Gaffer::ValuePlug
+		{
+			public :
+				enum class GAFFERIMAGEUI_API Mode
+				{
+					Cursor,
+					Pixel,
+					Area
+				};
+
+				GAFFER_PLUG_DECLARE_TYPE( ColorInspectorPlug, ColorInspectorPlugTypeId, Gaffer::ValuePlug );
+
+				ColorInspectorPlug( const std::string &name = defaultName<ColorInspectorPlug>(), Direction direction=In, unsigned flags=Default );
+
+				Gaffer::IntPlug *modePlug();
+				const Gaffer::IntPlug *modePlug() const;
+
+				Gaffer::V2iPlug *pixelPlug();
+				const Gaffer::V2iPlug *pixelPlug() const;
+
+				Gaffer::Box2iPlug *areaPlug();
+				const Gaffer::Box2iPlug *areaPlug() const;
+
+				bool acceptsChild( const GraphComponent *potentialChild ) const override;
+				Gaffer::PlugPtr createCounterpart( const std::string &name, Plug::Direction direction ) const override;
+		};
 
 	protected :
 
@@ -122,36 +175,50 @@ class GAFFERIMAGEUI_API ImageView : public GafferUI::View
 
 	private :
 
-		GafferImage::DeepState *deepStateNode();
-		const GafferImage::DeepState *deepStateNode() const;
-
-		GafferImage::Clamp *clampNode();
-		const GafferImage::Clamp *clampNode() const;
-
-		GafferImage::Grade *gradeNode();
-		const GafferImage::Grade *gradeNode() const;
-
-		GafferImage::ImageProcessor *displayTransformNode();
-		const GafferImage::ImageProcessor *displayTransformNode() const;
-
 		void plugSet( Gaffer::Plug *plug );
 		bool keyPress( const GafferUI::KeyEvent &event );
 		void preRender();
 
 		void insertDisplayTransform();
+		void updateDisplayTransform();
 
-		typedef std::map<std::string, GafferImage::ImageProcessorPtr> DisplayTransformMap;
+		struct DisplayTransformEntry
+		{
+			GafferImage::ImageProcessorPtr displayTransform;
+			IECoreGL::Shader::SetupPtr shader;
+			bool supportsShader;
+		};
+
+		void setWipeActive( bool active );
+
+		using DisplayTransformMap = std::map<std::string, DisplayTransformEntry>;
 		DisplayTransformMap m_displayTransforms;
+		DisplayTransformEntry *m_displayTransformAndShader;
 
-		ImageGadgetPtr m_imageGadget;
+		IECore::BoolDataPtr m_absoluteValueParameter;
+		IECore::BoolDataPtr m_clippingParameter;
+		IECore::Color3fDataPtr m_multiplyParameter;
+		IECore::Color3fDataPtr m_powerParameter;
+		IECore::IntDataPtr m_soloChannelParameter;
+		bool m_lutGPU;
+
+		ImageGadgetPtr m_imageGadgets[2];
 		bool m_framed;
 
-		class ChannelChooser;
-		std::unique_ptr<ChannelChooser> m_channelChooser;
+		IE_CORE_FORWARDDECLARE( WipeHandle );
+		WipeHandlePtr m_wipeHandle;
+
 		class ColorInspector;
 		std::unique_ptr<ColorInspector> m_colorInspector;
 
-		typedef std::map<std::string, DisplayTransformCreator> DisplayTransformCreatorMap;
+		GafferImage::ImagePlugPtr m_imageBeforeColorTransform;
+		Gaffer::FloatPlugPtr m_cpuSaturationPlug;
+		Gaffer::BoolPlugPtr m_cpuClippingPlug;
+		Gaffer::Color4fPlugPtr m_cpuMultiplyPlug;
+		Gaffer::Color4fPlugPtr m_cpuGammaPlug;
+		Gaffer::SwitchPtr m_colorTransformSwitch;
+
+		using DisplayTransformCreatorMap = std::map<std::string, DisplayTransformCreator>;
 		static DisplayTransformCreatorMap &displayTransformCreators();
 
 		static ViewDescription<ImageView> g_viewDescription;

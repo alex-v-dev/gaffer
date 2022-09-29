@@ -58,10 +58,6 @@ TaskNode::Task::Task( ConstTaskPlugPtr plug, const Gaffer::Context *context )
 {
 }
 
-TaskNode::Task::Task( const Task &t ) : m_plug( t.m_plug ), m_context( t.m_context )
-{
-}
-
 TaskNode::Task::Task( TaskNodePtr n, const Context *c ) : m_plug( n->taskPlug() ), m_context( new Context( *c ) )
 {
 }
@@ -131,7 +127,7 @@ InternedString TaskNodeProcess::postTasksProcessType( "taskNode:postTasks" );
 
 } // namespace
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( TaskNode::TaskPlug );
+GAFFER_PLUG_DEFINE_TYPE( TaskNode::TaskPlug );
 
 TaskNode::TaskPlug::TaskPlug( const std::string &name, Direction direction, unsigned flags )
 	:	Plug( name, direction, flags )
@@ -278,7 +274,7 @@ void TaskNode::TaskPlug::postTasks( Tasks &tasks ) const
 // TaskNode implementation
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( TaskNode )
+GAFFER_NODE_DEFINE_TYPE( TaskNode )
 
 size_t TaskNode::g_firstPlugIndex;
 
@@ -366,7 +362,7 @@ bool TaskNode::affectsTask( const Plug *input ) const
 
 void TaskNode::preTasks( const Context *context, Tasks &tasks ) const
 {
-	for( TaskPlugIterator cIt( preTasksPlug() ); !cIt.done(); ++cIt )
+	for( TaskPlug::Iterator cIt( preTasksPlug() ); !cIt.done(); ++cIt )
 	{
 		tasks.push_back( Task( *cIt, context ) );
 	}
@@ -374,7 +370,7 @@ void TaskNode::preTasks( const Context *context, Tasks &tasks ) const
 
 void TaskNode::postTasks( const Context *context, Tasks &tasks ) const
 {
-	for( TaskPlugIterator cIt( postTasksPlug() ); !cIt.done(); ++cIt )
+	for( TaskPlug::Iterator cIt( postTasksPlug() ); !cIt.done(); ++cIt )
 	{
 		tasks.push_back( Task( *cIt, context ) );
 	}

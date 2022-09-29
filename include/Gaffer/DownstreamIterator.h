@@ -113,13 +113,21 @@ class DownstreamIterator : public boost::iterator_facade<DownstreamIterator, con
 				}
 
 				Level( const Level &other )
-					:	plugs( other.plugs ), it( plugs.begin() + (other.it - other.plugs.begin()) ), end( plugs.end() )
 				{
+					*this = other;
 				}
 
 				bool operator == ( const Level &other ) const
 				{
 					return plugs == other.plugs && ( it - plugs.begin() == other.it - other.plugs.begin() );
+				}
+
+				Level &operator=( const Level &rhs )
+				{
+					plugs = rhs.plugs;
+					it = plugs.begin() + (rhs.it - rhs.plugs.begin());
+					end = plugs.end();
+					return *this;
 				}
 
 				DependencyNode::AffectedPlugsContainer plugs;
@@ -141,8 +149,10 @@ class DownstreamIterator : public boost::iterator_facade<DownstreamIterator, con
 					}
 
 					const DependencyNode *node = IECore::runTimeCast<const DependencyNode>( plug->node() );
-					if( !node )
+					if( !node || !node->refCount() )
 					{
+						// No node, or node constructing or destructing.
+						// We can't call `DependencyNode::affects()`.
 						return;
 					}
 
@@ -227,7 +237,7 @@ class DownstreamIterator : public boost::iterator_facade<DownstreamIterator, con
 
 		};
 
-		typedef std::vector<Level> Levels;
+		using Levels = std::vector<Level>;
 		Levels m_stack;
 		const Plug *m_root;
 		bool m_pruned;

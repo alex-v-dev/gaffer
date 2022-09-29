@@ -42,7 +42,7 @@
 using namespace Gaffer;
 using namespace GafferImage;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( FlatImageProcessor );
+GAFFER_NODE_DEFINE_TYPE( FlatImageProcessor );
 
 FlatImageProcessor::FlatImageProcessor( const std::string &name )
 	:	ImageProcessor( name )
@@ -69,18 +69,36 @@ Gaffer::ValuePlug::CachePolicy FlatImageProcessor::computeCachePolicy( const Gaf
 	return ImageProcessor::computeCachePolicy( output );
 }
 
+void FlatImageProcessor::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const
+{
+	ImageProcessor::affects( input, outputs );
+
+	auto imagePlug = input->parent<ImagePlug>();
+	if(
+		imagePlug &&
+		( imagePlug == inPlug() || imagePlug->parent() == inPlugs() ) &&
+		input == imagePlug->deepPlug()
+	)
+	{
+		outputs.push_back( outPlug()->deepPlug() );
+	}
+}
+
 void FlatImageProcessor::hashDeep( const GafferImage::ImagePlug *parent, const Gaffer::Context *context, IECore::MurmurHash &h ) const
 {
 	ImageProcessor::hashDeep( parent, context, h );
 	if( inPlugs() )
 	{
-		for( ImagePlugIterator it( inPlugs() ); !it.done(); ++it )
+		for( ImagePlug::Iterator it( inPlugs() ); !it.done(); ++it )
 		{
 			// We ignore unconnected inputs when determining the hash - this is the correct
 			// behaviour for merge, and hopefully any other deep nodes that use inPlugs()
 			if( (*it)->getInput<ValuePlug>() )
 			{
-				h.append( (*it)->deepPlug()->hash() );
+				if( ImageAlgo::viewIsValid( context, (*it)->viewNames()->readable() ) )
+				{
+					h.append( (*it)->deepPlug()->hash() );
+				}
 			}
 		}
 	}
@@ -97,9 +115,12 @@ bool FlatImageProcessor::computeDeep( const Gaffer::Context *context, const Imag
 	const ImagePlug *badInput = nullptr;
 	if( inPlugs() )
 	{
-		for( ImagePlugIterator it( inPlugs() ); !it.done(); ++it )
+		for( ImagePlug::Iterator it( inPlugs() ); !it.done(); ++it )
 		{
-			if( (*it)->deepPlug()->getValue() )
+			if(
+				ImageAlgo::viewIsValid( context, (*it)->viewNames()->readable() ) &&
+				(*it)->deepPlug()->getValue()
+			)
 			{
 				badInput = it->get();
 			}

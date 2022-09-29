@@ -38,7 +38,10 @@
 import math
 
 import imath
+import inspect
 import six
+import time
+import unittest
 
 import IECore
 import IECoreScene
@@ -125,6 +128,61 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 			self.assertEqual( instancer["out"].bound( instancePath ), sphere.bound() )
 			self.assertEqual( instancer["out"].childNames( instancePath ), IECore.InternedStringVectorData() )
 
+
+		# Test paths that don't exist - the transform will trigger an error, the other functions don't depend on
+		# the index, so will just return a reasonable value
+		six.assertRaisesRegex( self,
+			Gaffer.ProcessException,
+			'Instancer.out.transform : Instance id "77" is invalid, instancer produces only 4 children.  Topology may have changed during shutter.',
+			instancer["out"].transform, "/seeds/instances/sphere/77"
+		)
+		self.assertEqual( instancer["out"].object( "/seeds/instances/sphere/77" ), sphere )
+		self.assertEqual( instancer["out"].bound( "/seeds/instances/sphere/77" ), sphere.bound() )
+		self.assertEqual( instancer["out"].childNames( "/seeds/instances/sphere/77" ), IECore.InternedStringVectorData() )
+
+		# Test passthrough when disabled
+		instancer["enabled"].setValue( False )
+		self.assertScenesEqual( instancer["in"], instancer["out"] )
+		instancer["enabled"].setValue( True )
+
+		# Test encapsulation options
+		encapInstancer = GafferScene.Instancer()
+		encapInstancer["in"].setInput( seedsInput["out"] )
+		encapInstancer["prototypes"].setInput( instanceInput["out"] )
+		encapInstancer["parent"].setValue( "/seeds" )
+		encapInstancer["name"].setValue( "instances" )
+		encapInstancer["encapsulateInstanceGroups"].setValue( True )
+
+		unencapFilter = GafferScene.PathFilter()
+		unencapFilter["paths"].setValue( IECore.StringVectorData( [ "/..." ] ) )
+
+		unencap = GafferScene.Unencapsulate()
+		unencap["in"].setInput( encapInstancer["out"] )
+		unencap["filter"].setInput( unencapFilter["out"] )
+
+		self.assertTrue( isinstance( encapInstancer["out"].object( "/seeds/instances/sphere/" ), GafferScene.Capsule ) )
+		self.assertEqual( encapInstancer["out"].childNames( "/seeds/instances/sphere/" ), IECore.InternedStringVectorData() )
+		self.assertScenesEqual( unencap["out"], instancer["out"] )
+
+		# Edit seeds object
+		freezeTransform = GafferScene.FreezeTransform()
+		freezeTransform["in"].setInput( seedsInput["out"] )
+		freezeTransform["filter"].setInput( unencapFilter["out"] )
+
+		instancer["in"].setInput( freezeTransform["out"] )
+		encapInstancer["in"].setInput( freezeTransform["out"] )
+
+		self.assertScenesEqual( unencap["out"], instancer["out"] )
+
+		# Then set it back ( to make sure that returning to a previously cached value after
+		# changing the seeds doesn't pull an expired Capsule out of the cache )
+		freezeTransform["enabled"].setValue( False )
+		self.assertScenesEqual( unencap["out"], instancer["out"] )
+
+		# Test passthrough when disabled
+		instancer["enabled"].setValue( False )
+		self.assertScenesEqual( instancer["in"], instancer["out"] )
+
 	def testThreading( self ) :
 
 		sphere = IECoreScene.SpherePrimitive()
@@ -203,7 +261,14 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		instancer["parent"].setValue( "/plane" )
 		instancer["name"].setValue( "" )
 
-		self.assertScenesEqual( instancer["out"], plane["out"], pathsToIgnore = ( "/plane", ) )
+		f = GafferScene.PathFilter()
+		f["paths"].setValue( IECore.StringVectorData( [ "/plane" ] ) )
+
+		deleteObject = GafferScene.DeleteObject()
+		deleteObject["in"].setInput( plane["out"] )
+		deleteObject["filter"].setInput( f["out"] )
+
+		self.assertScenesEqual( instancer["out"], deleteObject["out"] )
 
 	def testEmptyParent( self ) :
 
@@ -394,7 +459,7 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		# python on another thread to evaluate the expression. We increment the frame
 		# between each test to ensure the expression result is not cached and
 		# we do truly enter python.
-		traverseConnection = Gaffer.ScopedConnection( GafferSceneTest.connectTraverseSceneToPlugDirtiedSignal( script["outputs"]["out"] ) )
+		traverseConnection = Gaffer.Signals.ScopedConnection( GafferSceneTest.connectTraverseSceneToPlugDirtiedSignal( script["outputs"]["out"] ) )
 		with Gaffer.Context() as c :
 
 			c.setFrame( 1 )
@@ -463,7 +528,7 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		script["attributes"] = GafferScene.CustomAttributes()
 		script["attributes"]["in"].setInput( script["reference"]["out"] )
 
-		traverseConnection = Gaffer.ScopedConnection( GafferSceneTest.connectTraverseSceneToPlugDirtiedSignal( script["attributes"]["out"] ) )
+		traverseConnection = Gaffer.Signals.ScopedConnection( GafferSceneTest.connectTraverseSceneToPlugDirtiedSignal( script["attributes"]["out"] ) )
 		with Gaffer.Context() as c :
 
 			script["reference"].load( self.temporaryDirectory() + "/test.grf" )
@@ -486,7 +551,7 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		script["instancer"]["parent"].setValue( "/plane" )
 
 		context = Gaffer.Context()
-		traverseConnection = Gaffer.ScopedConnection( GafferSceneTest.connectTraverseSceneToContextChangedSignal( script["instancer"]["out"], context ) )
+		traverseConnection = Gaffer.Signals.ScopedConnection( GafferSceneTest.connectTraverseSceneToContextChangedSignal( script["instancer"]["out"], context ) )
 		with context :
 
 			context.setFrame( 10 )
@@ -513,7 +578,7 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 			context["b"] = imath.Color3f()
 			context["b"] = IECore.BoolData( True )
 
-			with Gaffer.BlockedConnection( traverseConnection ) :
+			with Gaffer.Signals.BlockedConnection( traverseConnection ) :
 				# Must add it with the connection disabled, otherwise
 				# the addition causes a traversal, and then remove() gets
 				# all its results from the cache.
@@ -521,7 +586,7 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 
 			context.remove( "minRadius" )
 
-			with Gaffer.BlockedConnection( traverseConnection ) :
+			with Gaffer.Signals.BlockedConnection( traverseConnection ) :
 				context["minRadius"] = 0.3
 
 			del context["minRadius"]
@@ -546,7 +611,7 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		script["pythonCommand"] = GafferDispatch.PythonCommand()
 		script["pythonCommand"]["command"].setValue( "pass" )
 
-		traverseConnection = Gaffer.ScopedConnection( GafferSceneTest.connectTraverseSceneToPreDispatchSignal( script["instancer"]["out"] ) )
+		traverseConnection = Gaffer.Signals.ScopedConnection( GafferSceneTest.connectTraverseSceneToPreDispatchSignal( script["instancer"]["out"] ) )
 
 		dispatcher = GafferDispatch.LocalDispatcher()
 		dispatcher["jobsDirectory"].setValue( self.temporaryDirectory() )
@@ -1007,13 +1072,8 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 
 			points = script["objectToScene"]["object"].getValue()
 			points["root"] = IECoreScene.PrimitiveVariable( points["root"].interpolation, roots, indices )
+			self.assertTrue( points.arePrimitiveVariablesValid() )
 			script["objectToScene"]["object"].setValue( points )
-
-		updateRoots( IECore.StringVectorData( [] ), IECore.IntVectorData( [] ) )
-		six.assertRaisesRegex( self,
-			Gaffer.ProcessException, ".*must specify at least one root location.*",
-			script["instancer"]["out"].childNames, "/object/instances",
-		)
 
 		updateRoots( IECore.StringVectorData( [ "", ] ), IECore.IntVectorData( [ 0, 0, 0, 0 ] ) )
 		self.assertUnderspecifiedRoots( script )
@@ -1114,6 +1174,27 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 				"/object/instances/cubeGroup/2/cube",
 			}
 		)
+
+		# Test encapsulation options
+		encapInstancer = GafferScene.Instancer()
+		encapInstancer["in"].setInput( objectToScene["out"] )
+		encapInstancer["prototypes"].setInput( instances["out"] )
+		encapInstancer["parent"].setValue( "/object" )
+		encapInstancer["prototypeIndex"].setValue( "index" )
+		encapInstancer["encapsulateInstanceGroups"].setValue( True )
+
+		unencapFilter = GafferScene.PathFilter()
+		unencapFilter["paths"].setValue( IECore.StringVectorData( [ "/..." ] ) )
+
+		unencap = GafferScene.Unencapsulate()
+		unencap["in"].setInput( encapInstancer["out"] )
+		unencap["filter"].setInput( unencapFilter["out"] )
+
+		# Sets should be empty while encapsulated
+		self.assertEqual( encapInstancer["out"].set( "sphereSet" ).value.paths(), [] )
+		self.assertEqual( encapInstancer["out"].set( "cubeSet" ).value.paths(), [] )
+		# But should match after unencapsulating
+		self.assertScenesEqual( unencap["out"], instancer["out"] )
 
 	def testSetsWithDeepPrototypeRoots( self ) :
 
@@ -1217,6 +1298,12 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		self.assertEqual( instancer["out"].transform( "/object/instances/sphere/111" ), imath.M44f().translate( imath.V3f( 2, 0, 0 ) ) )
 		self.assertEqual( instancer["out"].transform( "/object/instances/cube/100" ), imath.M44f().translate( imath.V3f( 1, 0, 0 ) ) )
 		self.assertEqual( instancer["out"].transform( "/object/instances/cube/5" ), imath.M44f().translate( imath.V3f( 3, 0, 0 ) ) )
+
+		six.assertRaisesRegex( self,
+			Gaffer.ProcessException,
+			'Instancer.out.transform : Instance id "77" is invalid.  Topology may have changed during shutter.',
+			instancer["out"].transform, "/object/instances/cube/77"
+		)
 
 		self.assertSceneValid( instancer["out"] )
 
@@ -1514,12 +1601,12 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		script["instancer"]["prototypeRootsList"].setValue( IECore.StringVectorData( [ "/foo", "/bar" ] ) )
 
 		self.assertEqual( script["instancer"]["out"].attributes( "/object/instances" ), IECore.CompoundObject() )
-		self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/foo" )["gaffer:deformationBlur"].value, False )
-		self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/bar" )["gaffer:deformationBlur"].value, True )
+		self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/foo" ), IECore.CompoundObject() )
+		self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/bar" ), IECore.CompoundObject() )
 
 		for i in [ "0", "3" ] :
 
-			self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/foo/{i}".format( i=i ) ), IECore.CompoundObject() )
+			self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/foo/{i}".format( i=i ) )["gaffer:deformationBlur"].value, False )
 			self.assertEqual( script["instancer"]["out"].fullAttributes( "/object/instances/foo/{i}".format( i=i ) )["gaffer:deformationBlur"].value, False )
 			self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/foo/{i}/bar".format( i=i ) )["gaffer:deformationBlur"].value, True )
 			self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/foo/{i}/bar/sphere" ), IECore.CompoundObject() )
@@ -1527,7 +1614,7 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 
 		for i in [ "1", "2" ] :
 
-			self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/bar/{i}".format( i=i ) ), IECore.CompoundObject() )
+			self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/bar/{i}".format( i=i ) )["gaffer:deformationBlur"].value, True )
 			self.assertEqual( script["instancer"]["out"].fullAttributes( "/object/instances/bar/{i}".format( i=i ) )["gaffer:deformationBlur"].value, True )
 			self.assertEqual( script["instancer"]["out"].attributes( "/object/instances/bar/{i}/baz".format( i=i ) ), IECore.CompoundObject() )
 			self.assertEqual( script["instancer"]["out"].fullAttributes( "/object/instances/bar/{i}/baz".format( i=i ) )["gaffer:deformationBlur"].value, True )
@@ -1581,6 +1668,665 @@ class InstancerTest( GafferSceneTest.SceneTestCase ) :
 		self.assertSceneValid( instancer["out"] )
 		self.assertEqual( instancer["out"].childNames( "/group/instances" ) , IECore.InternedStringVectorData() )
 		self.assertEqual( instancer["out"].set( "setA" ) , IECore.PathMatcherData() )
+
+	def testSetPassThroughs( self ) :
+
+		# If the prototypes don't provide a set, then we should do a perfect
+		# pass through.
+
+		plane = GafferScene.Plane()
+		plane["sets"].setValue( "A" )
+
+		planeFilter = GafferScene.PathFilter()
+		planeFilter["paths"].setValue( IECore.StringVectorData( [ "/plane" ] ) )
+
+		sphere = GafferScene.Sphere()
+
+		instancer = GafferScene.Instancer()
+		instancer["in"].setInput( plane["out"] )
+		instancer["prototypes"].setInput( sphere["out"] )
+		instancer["filter"].setInput( planeFilter["out"] )
+
+		self.assertTrue( instancer["out"].exists( "/plane/instances/sphere/0" ) )
+		self.assertEqual( instancer["out"].setHash( "A" ), instancer["in"].setHash( "A" ) )
+		self.assertEqual( instancer["out"].set( "A" ), instancer["in"].set( "A" ) )
+		self.assertEqual( instancer["out"].set( "A" ).value.paths(), [ "/plane" ] )
+
+	def testContexts( self ):
+
+		points = IECoreScene.PointsPrimitive(
+					IECore.V3fVectorData(
+						[ imath.V3f( i, 0, 0 ) for i in range( 100 ) ]
+					)
+				)
+
+		points["floatVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.FloatVectorData(
+						[ 2 * math.sin( i ) for i in range( 100 ) ]
+					) )
+		points["vectorVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.V3fVectorData(
+						[ imath.V3f( i + 2, i + 3, i + 4 ) for i in range( 100 ) ]
+					) )
+		points["uvVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.V2fVectorData(
+						[ imath.V2f( i * 0.01, i * 0.02 ) for i in range( 100 ) ]
+					) )
+		points["intVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.IntVectorData(
+						[ i for i in range( 100 ) ]
+					) )
+		points["colorVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.Color3fVectorData(
+						[ imath.Color3f( i * 0.1 + 2, i * 0.1 + 3, i * 0.1 + 4 ) for i in range( 100 ) ]
+					) )
+		points["color4fVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.Color4fVectorData(
+						[ imath.Color4f( i * 0.1 + 2, i * 0.1 + 3, i * 0.1 + 4, i * 0.1 + 5 ) for i in range( 100 ) ]
+					) )
+		points["stringVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.StringVectorData(
+						[ "foo%i"%(i//34) for i in range( 100 ) ]
+					) )
+		points["unindexedRoots"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.StringVectorData(
+						[ ["cube","plane","sphere"][i//34] for i in range( 100 ) ]
+					) )
+		points["indexedRoots"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex,
+			IECore.StringVectorData( [ "cube","plane","sphere"] ),
+			IECore.IntVectorData( [(i//34) for i in range( 100 )] ),
+		)
+		pointsSource = GafferScene.ObjectToScene()
+		pointsSource["name"].setValue( "points" )
+		pointsSource["object"].setValue( points )
+
+		attributeSphere = GafferScene.Sphere()
+
+		sphereFilter = GafferScene.PathFilter()
+		sphereFilter["paths"].setValue( IECore.StringVectorData( [ '/sphere' ] ) )
+
+		# In any practical situation where we just needed to set up attributes, we could use the "attributes"
+		# plug to set them up more cheaply.  But for testing, setting up attributes is simpler than any realistic
+		# test
+		customAttributes = GafferScene.CustomAttributes()
+		customAttributes["in"].setInput( attributeSphere["out"] )
+		customAttributes["filter"].setInput( sphereFilter["out"] )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "floatAttr", Gaffer.FloatPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ), True, "member1" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "vectorAttr", Gaffer.V3fPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ), True, "member2" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "uvAttr", Gaffer.V2fPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ), True, "member3" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "intAttr", Gaffer.IntPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ), True, "member4" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "colorAttr", Gaffer.Color3fPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ), True, "member5" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "color4fAttr", Gaffer.Color4fPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ), True, "member6" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "stringAttr", Gaffer.StringPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ), True, "member7" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "seedAttr", Gaffer.IntPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ), True, "member8" ) )
+		customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "frameAttr", Gaffer.FloatPlug( "value", flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ), True, "member9" ) )
+
+		customAttributes["ReadContextExpression"] = Gaffer.Expression()
+		customAttributes["ReadContextExpression"].setExpression( inspect.cleandoc(
+			"""
+			parent["attributes"]["member1"]["value"] = context.get( "floatVar", -1 )
+			parent["attributes"]["member2"]["value"] = context.get( "vectorVar", imath.V3f(-1) )
+			parent["attributes"]["member3"]["value"] = context.get( "uvVar", imath.V2f(-1) )
+			parent["attributes"]["member4"]["value"] = context.get( "intVar", -1 )
+			parent["attributes"]["member5"]["value"] = context.get( "colorVar", imath.Color3f( -1 ) )
+			parent["attributes"]["member6"]["value"] = context.get( "color4fVar", imath.Color4f( -1 ) )
+			parent["attributes"]["member7"]["value"] = context.get( "stringVar", "" )
+			parent["attributes"]["member8"]["value"] = context.get( "seed", -1 )
+			parent["attributes"]["member9"]["value"] = context.get( "frame", -1 )
+			"""
+		) )
+
+		group = GafferScene.Group()
+		group["in"][0].setInput( customAttributes["out"] )
+		group["name"].setValue( 'withAttrs' )
+
+		cube = GafferScene.Cube()
+		plane = GafferScene.Plane()
+		sphere = GafferScene.Sphere()
+
+		parent = GafferScene.Parent()
+		parent["parent"].setValue( '/' )
+		parent["in"].setInput( group["out"] )
+		parent["children"][0].setInput( cube["out"] )
+		parent["children"][1].setInput( plane["out"] )
+		parent["children"][2].setInput( sphere["out"] )
+
+		pointsFilter = GafferScene.PathFilter()
+		pointsFilter["paths"].setValue( IECore.StringVectorData( [ '/points' ] ) )
+
+		instancer = GafferScene.Instancer()
+		instancer["in"].setInput( pointsSource["out"] )
+		instancer["filter"].setInput( pointsFilter["out"] )
+		instancer["prototypes"].setInput( parent["out"] )
+
+		def uniqueCounts():
+			return dict( [ (i[0], i[1].value) for i in instancer["variations"].getValue().items() ] )
+
+		def childNameStrings( location ):
+			return [ i.value() for i in instancer['out'].childNames( location ) ]
+
+		def testAttributes( **expected ):
+			a = [ instancer['out'].attributes( "points/instances/withAttrs/" + i.value() + "/sphere" ) for i in instancer['out'].childNames( "points/instances/withAttrs" ) ]
+			r = {}
+			for n in a[0].keys():
+				r = [ i[n].value for i in a]
+				if n + "_seedCount" in expected:
+					self.assertEqual( len( set( r ) ), expected[ n + "_seedCount" ] )
+				elif n in expected:
+					self.assertEqual( len(r), len(expected[n]) )
+					if type( r[0] ) == float:
+						if r != expected[n]:
+							for i in range( len( r ) ):
+								self.assertAlmostEqual( r[i], expected[n][i], places = 6 )
+					else:
+						self.assertEqual( r, expected[n] )
+				else:
+					if type( r[0] ) == str:
+						self.assertEqual( r, [""] * len( r ) )
+					else:
+						self.assertEqual( r, [type( r[0] )( -1 )] * len( r ) )
+
+		# Compatible with C++ rounding
+		def compatRound( x ):
+			if x >= 0.0:
+				return math.floor(x + 0.5)
+			else:
+				return math.ceil(x - 0.5)
+
+		def quant( x, q ):
+			return compatRound( float( x ) / q ) * q
+
+		self.assertEqual( uniqueCounts(), { "" : 1 } )
+		self.assertEqual( childNameStrings( "points/instances" ), [ "withAttrs", "cube", "plane", "sphere" ] )
+		self.assertEqual( childNameStrings( "points/instances/withAttrs" ), [ str(i) for i in range( 100 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/cube" ), [] )
+		self.assertEqual( childNameStrings( "points/instances/plane" ), [] )
+		self.assertEqual( childNameStrings( "points/instances/sphere" ), [] )
+
+		instancer["prototypeMode"].setValue( GafferScene.Instancer.PrototypeMode.RootPerVertex )
+		instancer["prototypeRoots"].setValue( "indexedRoots" )
+		self.assertEqual( uniqueCounts(), { "" : 3 } )
+		self.assertEqual( childNameStrings( "points/instances/cube" ), [ str(i) for i in range( 0, 34 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/plane" ), [ str(i) for i in range( 34, 68 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/sphere" ), [ str(i) for i in range( 68, 100 ) ] )
+
+		instancer["prototypeRoots"].setValue( "unindexedRoots" )
+		"""
+		# How things should work
+		self.assertEqual( uniqueCounts(), { "" : 3 } )
+		self.assertEqual( childNameStrings( "points/instances/cube" ), [ str(i) for i in range( 0, 34 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/plane" ), [ str(i) for i in range( 34, 68 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/sphere" ), [ str(i) for i in range( 68, 100 ) ] )
+		"""
+		# How things currently work
+		self.assertEqual( uniqueCounts(), { "" : 1 } )
+		self.assertEqual( childNameStrings( "points/instances/cube" ), [ str(i) for i in range( 100 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/plane" ), [] )
+		self.assertEqual( childNameStrings( "points/instances/sphere" ), [] )
+
+		instancer["prototypeMode"].setValue( GafferScene.Instancer.PrototypeMode.IndexedRootsList )
+		instancer["prototypeIndex"].setValue( 'intVar' )
+
+		self.assertEqual( uniqueCounts(), { "" : 4 } )
+		self.assertEqual( childNameStrings( "points/instances/withAttrs" ), [ str(i) for i in range( 0, 100, 4 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/cube" ), [ str(i) for i in range( 1, 100, 4 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/plane" ), [ str(i) for i in range( 2, 100, 4 ) ] )
+		self.assertEqual( childNameStrings( "points/instances/sphere" ), [ str(i) for i in range( 3, 100, 4 ) ] )
+
+		# No context overrides yet
+		testAttributes( frameAttr = [ 1 ] * 25 )
+
+		instancer["contextVariables"].addChild( GafferScene.Instancer.ContextVariablePlug( "context" ) )
+		instancer["contextVariables"][0]["name"].setValue( "floatVar" )
+		instancer["contextVariables"][0]["quantize"].setValue( 0 )
+
+		# With zero quantization, everything is now unique
+		testAttributes( frameAttr = [ 1 ] * 25, floatAttr = [ 2 * math.sin( i ) for i in range(0, 100, 4) ] )
+		# Check both the global unique count, and the per-context variable unique counts
+		self.assertEqual( uniqueCounts(), { "" : 100, "floatVar" : 100 } )
+
+		# With massive quantization, all values collapse
+		instancer["contextVariables"][0]["quantize"].setValue( 100 )
+		testAttributes( frameAttr = [ 1 ] * 25, floatAttr = [ 0 for i in range(0, 100, 4) ] )
+		self.assertEqual( uniqueCounts(), { "" : 4, "floatVar" : 1 } )
+
+		# With moderate quantization, we can see how different prototypes combine with the contexts to produce
+		# more unique values
+		instancer["contextVariables"][0]["quantize"].setValue( 1 )
+		floatExpected = [ compatRound( 2 * math.sin( i ) ) for i in range(0, 100, 4) ]
+		testAttributes( frameAttr = [ 1 ] * 25, floatAttr = floatExpected )
+		self.assertEqual( uniqueCounts(), { "" : 20, "floatVar" : 5 } )
+
+		instancer["prototypeRootsList"].setValue( IECore.StringVectorData( [ "withAttrs", "cube", "plane", "sphere" ] ) )
+		testAttributes( frameAttr = [ 1 ] * 25, floatAttr = floatExpected )
+		self.assertEqual( uniqueCounts(), { "" : 20, "floatVar" : 5 } )
+
+		# Test an empty root
+		instancer["prototypeRootsList"].setValue( IECore.StringVectorData( [ "withAttrs", "", "plane", "sphere" ] ) )
+		self.assertEqual( uniqueCounts(), { "" : 15, "floatVar" : 5 } )
+
+		# Now lets just focus on context variation
+		instancer["prototypeRootsList"].setValue( IECore.StringVectorData( [] ) )
+		instancer["prototypeIndex"].setValue( '' )
+		floatExpected = [ compatRound( 2 * math.sin( i ) ) for i in range(0, 100) ]
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected )
+		self.assertEqual( uniqueCounts(), { "" : 5, "floatVar" : 5 } )
+
+		# Add a second context variation
+		instancer["contextVariables"].addChild( GafferScene.Instancer.ContextVariablePlug( "context" ) )
+		instancer["contextVariables"][1]["name"].setValue( "vectorVar" )
+		instancer["contextVariables"][1]["quantize"].setValue( 0 )
+
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			vectorAttr = [ imath.V3f( i + 2, i + 3, i + 4 ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "vectorVar" : 100, "" : 100 } )
+
+		instancer["contextVariables"][1]["quantize"].setValue( 10 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			vectorAttr = [ imath.V3f( quant( i + 2, 10 ), quant( i + 3, 10 ), quant( i + 4, 10 ) ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "vectorVar" : 31, "" : 64 } )
+
+		# Try all the different types
+		instancer["contextVariables"][1]["name"].setValue( "uvVar" )
+		instancer["contextVariables"][1]["quantize"].setValue( 0 )
+
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			uvAttr = [ imath.V2f( i * 0.01, i * 0.02 ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "uvVar" : 100, "" : 100 } )
+
+		instancer["contextVariables"][1]["quantize"].setValue( 1 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			uvAttr = [ imath.V2f( compatRound( i * 0.01 ), compatRound( i * 0.02 ) ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "uvVar" : 4, "" : 20 } )
+
+
+		instancer["contextVariables"][1]["name"].setValue( "intVar" )
+		instancer["contextVariables"][1]["quantize"].setValue( 0 )
+
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			intAttr = [ i for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "intVar" : 100, "" : 100 } )
+
+		instancer["contextVariables"][1]["quantize"].setValue( 10 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			intAttr = [ quant( i, 10 ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "intVar" : 11, "" : 48 } )
+
+
+		instancer["contextVariables"][1]["name"].setValue( "stringVar" )
+		instancer["contextVariables"][1]["quantize"].setValue( 0 )
+
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			stringAttr = [ "foo%i" % ( i / 34 ) for i in range(100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "stringVar" : 3, "" : 15 } )
+
+		instancer["contextVariables"][1]["quantize"].setValue( 10 )
+		six.assertRaisesRegex( self,
+			Gaffer.ProcessException, 'Instancer.out.attributes : Context variable "0" : cannot quantize variable of type StringVectorData',
+			instancer['out'].attributes, "points/instances/withAttrs/0/sphere"
+		)
+		six.assertRaisesRegex( self,
+			Gaffer.ProcessException, 'Instancer.variations : Context variable "0" : cannot quantize variable of type StringVectorData',
+			uniqueCounts
+		)
+
+
+		instancer["contextVariables"][1]["name"].setValue( "colorVar" )
+		instancer["contextVariables"][1]["quantize"].setValue( 0 )
+
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			colorAttr = [ imath.Color3f( i * 0.1 + 2, i * 0.1 + 3, i * 0.1 + 4 ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "colorVar" : 100, "" : 100 } )
+
+		instancer["contextVariables"][1]["quantize"].setValue( 1 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			colorAttr = [ imath.Color3f( compatRound( i * 0.1 + 2 ), compatRound( i * 0.1 + 3 ), compatRound( i * 0.1 + 4 ) ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "colorVar" : 11, "" : 48 } )
+
+		instancer["contextVariables"][1]["name"].setValue( "color4fVar" )
+		instancer["contextVariables"][1]["quantize"].setValue( 0 )
+
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			color4fAttr = [ imath.Color4f( i * 0.1 + 2, i * 0.1 + 3, i * 0.1 + 4, i * 0.1 + 5 ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 100, "" : 100 } )
+
+		instancer["contextVariables"][1]["quantize"].setValue( 1 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected,
+			color4fAttr = [ imath.Color4f( compatRound( i * 0.1 + 2 ), compatRound( i * 0.1 + 3 ), compatRound( i * 0.1 + 4 ), compatRound( i * 0.1 + 5 ) ) for i in range(0, 100) ]
+		)
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 11, "" : 48 } )
+
+		# Set a high quantize so we can see how these variations interact with other types of variations
+		instancer["contextVariables"][1]["quantize"].setValue( 10 )
+		color4fExpected = [ imath.Color4f( quant( i * 0.1 + 2, 10 ), quant( i * 0.1 + 3, 10 ), quant( i * 0.1 + 4, 10 ), quant( i * 0.1 + 5, 10 ) ) for i in range(0, 100) ]
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected, color4fAttr = color4fExpected )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "" : 20 } )
+
+		instancer["seedEnabled"].setValue( True )
+		instancer["rawSeed"].setValue( True )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected, color4fAttr = color4fExpected, seedAttr = list( range( 100 ) ) )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 100, "" : 100 } )
+
+		instancer["rawSeed"].setValue( False )
+		instancer["seeds"].setValue( 10 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected, color4fAttr = color4fExpected, seedAttr_seedCount = 10 )
+		initialFirstVal = instancer['out'].attributes( '/points/instances/withAttrs/0/sphere' )["seedAttr"]
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 10, "" : 67 } )
+
+		# Changing the seed changes individual values, but not the overall behaviour
+		instancer["seedPermutation"].setValue( 1 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected, color4fAttr = color4fExpected, seedAttr_seedCount = 10 )
+		self.assertNotEqual( initialFirstVal, instancer['out'].attributes( '/points/instances/withAttrs/0/sphere' )["seedAttr"] )
+		# Total variation count is a bit different because the different variation sources line up differently
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 10, "" : 69 } )
+
+		# If we generate 100 seeds from 100 ids, we will get many collisions, and only 67 unique values
+		instancer["seeds"].setValue( 100 )
+		testAttributes( frameAttr = [ 1 ] * 100, floatAttr = floatExpected, color4fAttr = color4fExpected, seedAttr_seedCount = 67 )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 67, "" : 94 } )
+
+		# Now turn on time offset as well and play with everything together
+		instancer["seeds"].setValue( 10 )
+		instancer["timeOffset"]["enabled"].setValue( True )
+		instancer["timeOffset"]["name"].setValue( 'floatVar' )
+		instancer["timeOffset"]["quantize"].setValue( 0.0 )
+		testAttributes( frameAttr = [ 1 + 2 * math.sin( i ) for i in range(0, 100) ], floatAttr = floatExpected, color4fAttr = color4fExpected, seedAttr_seedCount = 10 )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 10, "frame" : 100, "" : 100 } )
+
+		instancer["timeOffset"]["quantize"].setValue( 0.5 )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 10, "frame" : 9, "" : 82 } )
+
+		instancer["timeOffset"]["quantize"].setValue( 1 )
+		testAttributes( frameAttr = [ i + 1 for i in floatExpected ], floatAttr = floatExpected, color4fAttr = color4fExpected, seedAttr_seedCount = 10 )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 10, "frame" : 5, "" : 69 } )
+		c = Gaffer.Context()
+		c["frame"] = IECore.FloatData( 42 )
+		with c:
+			testAttributes( frameAttr = [ i + 42 for i in floatExpected ], floatAttr = floatExpected, color4fAttr = color4fExpected, seedAttr_seedCount = 10 )
+			self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "seed" : 10, "frame" : 5, "" : 69 } )
+
+		# Now reduce back down the variations to test different cumulative combinations
+		instancer["seedEnabled"].setValue( False )
+		testAttributes( frameAttr = [ i + 1 for i in floatExpected ], floatAttr = floatExpected, color4fAttr = color4fExpected )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "color4fVar" : 4, "frame" : 5, "" : 20 } )
+
+		# With just one context var, driven by the same prim var as frame, with the same quantization,
+		# the variations don't multiply
+		del instancer["contextVariables"][1]
+		testAttributes( frameAttr = [ i + 1 for i in floatExpected ], floatAttr = floatExpected )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "frame" : 5, "" : 5 } )
+
+		# Using a different source primVar means the variations will multiply
+		instancer["timeOffset"]["name"].setValue( 'intVar' )
+		instancer["timeOffset"]["quantize"].setValue( 0 )
+		testAttributes( frameAttr = [ i + 1 for i in range(100) ], floatAttr = floatExpected )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "frame" : 100, "" : 100 } )
+
+		instancer["timeOffset"]["quantize"].setValue( 20 )
+		testAttributes( frameAttr = [ ((i+10)//20)*20 + 1 for i in range(100) ], floatAttr = floatExpected )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 5, "frame" : 6, "" : 30 } )
+
+
+		# Test with multiple point sources
+		pointsMerge = GafferScene.Parent()
+		pointsMerge["parent"].setValue( '/' )
+
+		pointSources = []
+
+		for j in range( 3 ):
+			points = IECoreScene.PointsPrimitive(
+						IECore.V3fVectorData(
+							[ imath.V3f( i, 0, 0 ) for i in range( 10 ) ]
+						)
+					)
+
+			points["floatVar"] = IECoreScene.PrimitiveVariable( IECoreScene.PrimitiveVariable.Interpolation.Vertex, IECore.FloatVectorData(
+							[ i * 0.1 + j for i in range( 10 ) ]
+						) )
+			pointSources.append( GafferScene.ObjectToScene() )
+			pointSources[-1]["name"].setValue( "points" )
+			pointSources[-1]["object"].setValue( points )
+			parent["children"][-1].setInput( pointSources[-1]["out"] )
+
+		instancer["in"].setInput( parent["out"] )
+		instancer["timeOffset"]["enabled"].setValue( False )
+		instancer["contextVariables"][0]["quantize"].setValue( 0 )
+		pointsFilter["paths"].setValue( IECore.StringVectorData( [ '/points*' ] ) )
+		self.assertAlmostEqual( instancer['out'].attributes( "points/instances/withAttrs/2/sphere" )["floatAttr"].value, 0.2 )
+		self.assertAlmostEqual( instancer['out'].attributes( "points1/instances/withAttrs/3/sphere" )["floatAttr"].value, 1.3 )
+		self.assertAlmostEqual( instancer['out'].attributes( "points2/instances/withAttrs/5/sphere" )["floatAttr"].value, 2.5 )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 30, "" : 30 } )
+
+		instancer["contextVariables"][0]["quantize"].setValue( 0.2001 )
+		self.assertAlmostEqual( instancer['out'].attributes( "points/instances/withAttrs/2/sphere" )["floatAttr"].value, 0.2001, places = 6 )
+		self.assertAlmostEqual( instancer['out'].attributes( "points1/instances/withAttrs/3/sphere" )["floatAttr"].value, 1.2006, places = 6 )
+		self.assertAlmostEqual( instancer['out'].attributes( "points2/instances/withAttrs/5/sphere" )["floatAttr"].value, 2.4012, places = 6 )
+		self.assertEqual( uniqueCounts(), { "floatVar" : 15, "" : 15 } )
+
+
+		# Test invalid location
+		for func in [ instancer["out"].object, instancer["out"].childNames, instancer["out"].bound, instancer["out"].transform ]:
+			six.assertRaisesRegex( self,
+				Gaffer.ProcessException,
+				'Instancer.out.' + func.__name__ + ' : Instance id "777" is invalid, instancer produces only 10 children.  Topology may have changed during shutter.',
+				func, "/points/instances/withAttrs/777"
+			)
+
+		# Test passthrough when disabled
+		instancer["enabled"].setValue( False )
+		self.assertScenesEqual( instancer["in"], instancer["out"] )
+
+	def testContextSet( self ):
+
+		baseSphere = GafferScene.Sphere()
+		childSphere = GafferScene.Sphere()
+
+		parent = GafferScene.Parent()
+		parent["in"].setInput( baseSphere["out"] )
+		parent["children"][0].setInput( childSphere["out"] )
+		parent["parent"].setValue( '/sphere' )
+		parent["expression"] = Gaffer.Expression()
+
+		# Note that we must supply a default for the value of "seed", since the setNames will be evaluated
+		# with no context set
+		parent["expression"].setExpression( 'parent["enabled"] = context.get( "seed", 0 ) % 2' )
+
+		allFilter = GafferScene.PathFilter()
+		allFilter["paths"].setValue( IECore.StringVectorData( [ '/...' ] ) )
+
+		setNode = GafferScene.Set()
+		setNode["in"].setInput( parent["out"] )
+		setNode["filter"].setInput( allFilter["out"] )
+
+		plane = GafferScene.Plane()
+
+		pathFilter = GafferScene.PathFilter()
+		pathFilter["paths"].setValue( IECore.StringVectorData( [ '/plane' ] ) )
+
+		instancer = GafferScene.Instancer()
+		instancer["in"].setInput( plane["out"] )
+		instancer["filter"].setInput( pathFilter["out"] )
+		instancer["prototypes"].setInput( setNode["out"] )
+		instancer["rawSeed"].setValue( True )
+
+
+		with Gaffer.Context() as c :
+			c["seed"] = 0
+			self.assertEqual(
+				set( instancer["out"].set( "set" ).value.paths() ),
+				set( [ "/plane/instances/sphere/" + i for i in [ "0", "1", "2", "3" ] ] )
+			)
+			c["seed"] = 1
+			self.assertEqual(
+				set( instancer["out"].set( "set" ).value.paths() ),
+				set( [ "/plane/instances/sphere/" + i for i in
+					[ "0", "1", "2", "3", "0/sphere", "1/sphere", "2/sphere", "3/sphere" ] ]
+				)
+			)
+
+		instancer["seedEnabled"].setValue( True )
+		self.assertEqual(
+			set( instancer["out"].set( "set" ).value.paths() ),
+			set( [ "/plane/instances/sphere/" + i for i in [ "0", "1", "2", "3", "1/sphere", "3/sphere" ] ] )
+		)
+
+		# When encapsulating, we shouldn't pay any time cost for evaluating the set, even with a huge
+		# number of instances
+		plane["divisions"].setValue( imath.V2i( 1000 ) )
+		instancer["encapsulateInstanceGroups"].setValue( True )
+		t = time.time()
+		instancer["out"].set( "set" )
+		totalTime = time.time() - t
+		self.assertLess( totalTime, 0.001 )
+
+		# Test passthrough when disabled
+		instancer["enabled"].setValue( False )
+		self.assertScenesEqual( instancer["in"], instancer["out"] )
+
+	def testRootPerVertexWithEmptyPoints( self ) :
+
+		points = IECoreScene.PointsPrimitive( IECore.V3fVectorData() )
+		self.assertEqual( points.numPoints, 0 )
+
+		points["prototypeRoots"] = IECoreScene.PrimitiveVariable(
+			IECoreScene.PrimitiveVariable.Interpolation.Vertex,
+			# OK to have no values to index, because we have no vertices that
+			# need to index them. One common way to end up with data like this
+			# is to use DeletePoints, which will remove any values that aren't
+			# indexed after deletion.
+			IECore.StringVectorData(),
+			# Empty index list, because the primitive has no vertices.
+			IECore.IntVectorData(),
+		)
+		self.assertTrue( points.arePrimitiveVariablesValid() )
+
+		pointsScene = GafferScene.ObjectToScene()
+		pointsScene["object"].setValue( points )
+		pointsScene["name"].setValue( "points" )
+
+		sphere = GafferScene.Sphere()
+		cube = GafferScene.Cube()
+
+		prototypes = GafferScene.Group()
+		prototypes["in"][0].setInput( sphere["out"] )
+		prototypes["in"][1].setInput( cube["out"] )
+
+		pointsFilter = GafferScene.PathFilter()
+		pointsFilter["paths"].setValue( IECore.StringVectorData( [ "/points" ] ) )
+
+		instancer = GafferScene.Instancer()
+		instancer["in"].setInput( pointsScene["out"] )
+		instancer["prototypes"].setInput( prototypes["out"] )
+		instancer["filter"].setInput( pointsFilter["out"] )
+		instancer["prototypeMode"].setValue( instancer.PrototypeMode.RootPerVertex )
+
+		self.assertEqual( instancer["out"].childNames( "/points" ), IECore.InternedStringVectorData( [ "instances" ] ) )
+		self.assertEqual( instancer["out"].childNames( "/points/instances" ), IECore.InternedStringVectorData() )
+		self.assertSceneValid( instancer["out"] )
+
+	def runTestContextSetPerf( self, useContexts, parallelEvaluate ):
+
+		plane = GafferScene.Plane()
+		plane["divisions"].setValue( imath.V2i( 1000 ) )
+		plane["divisionExpression"] = Gaffer.Expression()
+		plane["divisionExpression"].setExpression( 'parent["divisions"] = imath.V2i( 1000 + int( context["collect:rootName"][-1:] ) )' )
+
+		# Duplicate the source points, so that we are measuring the perf of an Instancer targeting multiple locations
+		collectScenes = GafferScene.CollectScenes()
+		collectScenes["in"].setInput( plane["out"] )
+		collectScenes["rootNames"].setValue( IECore.StringVectorData( [ 'plane0', 'plane1', 'plane2', 'plane3', 'plane4' ] ) )
+		collectScenes["sourceRoot"].setValue( '/plane' )
+
+		# Source scene, with a little hierarchy, so paths aren't trivial to merge
+		sphere = GafferScene.Sphere()
+
+		group = GafferScene.Group( "group" )
+		group["in"][0].setInput( sphere["out"] )
+
+
+		# Create a set
+		leafFilter = GafferScene.PathFilter()
+		leafFilter["paths"].setValue( IECore.StringVectorData( [ '/group/sphere' ] ) )
+
+		setNode = GafferScene.Set()
+		setNode["in"].setInput( group["out"] )
+		setNode["filter"].setInput( leafFilter["out"] )
+
+		# Instancer
+		instancerFilter = GafferScene.PathFilter()
+		instancerFilter["paths"].setValue( IECore.StringVectorData( [ '/plane*' ] ) )
+
+		instancer = GafferScene.Instancer()
+		instancer["in"].setInput( collectScenes["out"] )
+		instancer["filter"].setInput( instancerFilter["out"] )
+		instancer["prototypes"].setInput( setNode["out"] )
+		instancer["seedEnabled"].setValue( useContexts )
+
+		if not parallelEvaluate:
+			with GafferTest.TestRunner.PerformanceScope() :
+				instancer["out"].set( "set" )
+		else:
+			# Set up a slightly realistic scene which results in the set plug being
+			# pulled multiple times in parallel, to check whether TaskCollaborate is working
+			setFilter = GafferScene.SetFilter()
+			setFilter["setExpression"].setValue( 'set' )
+
+			customAttributes = GafferScene.CustomAttributes()
+			customAttributes["attributes"].addChild( Gaffer.NameValuePlug( "", Gaffer.BoolPlug( "value", defaultValue = False, flags = Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic, ), True, "member1", Gaffer.Plug.Flags.Default | Gaffer.Plug.Flags.Dynamic ) )
+			customAttributes["in"].setInput( instancer["out"] )
+			customAttributes["filter"].setInput( setFilter["out"] )
+			customAttributes["attributes"]["member1"]["name"].setValue( 'testAttr' )
+			customAttributes["attributes"]["member1"]["value"].setValue( True )
+
+			subTree = GafferScene.SubTree()
+			subTree["in"].setInput( customAttributes["out"] )
+			subTree["root"].setValue( '/plane0/instances/group' )
+
+			isolateFilter = GafferScene.PathFilter()
+			isolateFilter["paths"].setValue( IECore.StringVectorData( [ '/67000*' ] ) )
+
+			isolate = GafferScene.Isolate()
+			isolate["in"].setInput( subTree["out"] )
+			isolate["filter"].setInput( isolateFilter["out"] )
+
+			with GafferTest.TestRunner.PerformanceScope() :
+				GafferSceneTest.traverseScene( isolate["out"] )
+
+	def testEmptyPrototypes( self ) :
+
+		plane = GafferScene.Plane()
+
+		planeFilter = GafferScene.PathFilter()
+		planeFilter["paths"].setValue( IECore.StringVectorData( [ "/plane" ] ) )
+
+		instancer = GafferScene.Instancer()
+		instancer["in"].setInput( plane["out"] )
+		instancer["filter"].setInput( planeFilter["out"] )
+
+		self.assertEqual( instancer["variations"].getValue(), IECore.CompoundData( { "" : IECore.IntData( 0 ) } ) )
+
+	@unittest.skipIf( GafferTest.inCI(), "Performance not relevant on CI platform" )
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testContextSetPerfNoVariationsSingleEvaluate( self ):
+		self.runTestContextSetPerf( False, False )
+
+	@unittest.skipIf( GafferTest.inCI(), "Performance not relevant on CI platform" )
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testContextSetPerfNoVariationsParallelEvaluate( self ):
+		self.runTestContextSetPerf( False, True )
+
+	@unittest.skipIf( GafferTest.inCI(), "Performance not relevant on CI platform" )
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testContextSetPerfWithVariationsSingleEvaluate( self ):
+		self.runTestContextSetPerf( True, False )
+
+	@unittest.skipIf( GafferTest.inCI(), "Performance not relevant on CI platform" )
+	@GafferTest.TestRunner.PerformanceTestMethod()
+	def testContextSetPerfWithVariationsParallelEvaluate( self ):
+		self.runTestContextSetPerf( True, True )
+
 
 if __name__ == "__main__":
 	unittest.main()

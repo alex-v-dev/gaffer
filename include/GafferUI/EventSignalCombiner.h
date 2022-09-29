@@ -43,14 +43,11 @@ namespace GafferUI
 /// The EventSignalCombiner is used in the definition of the various Gadget signals. It
 /// calls each slot in order until one returns true, at which point it shortcuts and returns
 /// without calling the other slots.
-/// \todo Make this suppress exceptions in the same way that CatchingSignalCombiner does,
-/// and then update the various slot callers in the bindings to remove their own exception
-/// handling.
 template<typename T>
 struct EventSignalCombiner
 {
 
-	typedef T result_type;
+	using result_type = T;
 
 	template<typename InputIterator>
 	result_type operator()( InputIterator first, InputIterator last ) const;

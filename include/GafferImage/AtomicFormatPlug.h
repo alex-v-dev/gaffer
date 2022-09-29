@@ -45,17 +45,9 @@
 namespace GafferImage
 {
 
-typedef Gaffer::TypedPlug<GafferImage::Format> AtomicFormatPlug;
+using AtomicFormatPlug = Gaffer::TypedPlug<GafferImage::Format>;
 
 IE_CORE_DECLAREPTR( AtomicFormatPlug );
-
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, AtomicFormatPlug> > AtomicFormatPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, AtomicFormatPlug> > InputAtomicFormatPlugIterator;
-typedef Gaffer::FilteredChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, AtomicFormatPlug> > OutputAtomicFormatPlugIterator;
-
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Invalid, AtomicFormatPlug>, Gaffer::PlugPredicate<> > RecursiveAtomicFormatPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::In, AtomicFormatPlug>, Gaffer::PlugPredicate<> > RecursiveInputAtomicFormatPlugIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::PlugPredicate<Gaffer::Plug::Out, AtomicFormatPlug>, Gaffer::PlugPredicate<> > RecursiveOutputAtomicFormatPlugIterator;
 
 } // namespace GafferImage
 

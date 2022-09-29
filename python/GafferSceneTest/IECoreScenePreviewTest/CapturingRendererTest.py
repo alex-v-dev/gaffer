@@ -59,7 +59,7 @@ class CapturingRendererTest( GafferTest.TestCase ) :
 		coreAttributes = IECore.CompoundObject( { "x" : IECore.IntData( 10 ) } )
 		attributes = renderer.attributes( coreAttributes )
 		self.assertIsInstance( attributes, renderer.CapturedAttributes )
-		self.assertTrue( attributes.attributes().isSame( coreAttributes ) )
+		self.assertEqual( attributes.attributes(), coreAttributes )
 
 	def testCapturedObject( self ) :
 
@@ -74,15 +74,19 @@ class CapturingRendererTest( GafferTest.TestCase ) :
 		self.assertIsInstance( o, renderer.CapturedObject )
 		self.assertTrue( o.isSame( renderer.capturedObject( "o" ) ) )
 		self.assertEqual( o.capturedSamples(), [ IECoreScene.SpherePrimitive() ] )
-		self.assertEqual( o.capturedSampleTimes(), [ 0 ] )
+		self.assertEqual( o.capturedSampleTimes(), [] )
 		self.assertEqual( o.capturedAttributes(), attributes1 )
 		self.assertEqual( o.capturedLinks( "lights" ), None )
 		self.assertEqual( o.numAttributeEdits(), 1 )
 		self.assertEqual( o.numLinkEdits( "lights" ), 0 )
+		self.assertEqual( o.id(), 0 )
 
 		o.attributes( attributes2 )
 		self.assertEqual( o.capturedAttributes(), attributes2 )
 		self.assertEqual( o.numAttributeEdits(), 2 )
+
+		o.assignID( 10 )
+		self.assertEqual( o.id(), 10 )
 
 		l1 = renderer.light( "l1", IECore.NullObject(), attributes1 )
 		l2 = renderer.light( "l2", IECore.NullObject(), attributes1 )
@@ -117,6 +121,49 @@ class CapturingRendererTest( GafferTest.TestCase ) :
 		self.assertEqual( mh.messages[0].context, "CapturingRenderer::object" )
 		self.assertEqual( mh.messages[0].message, "Object named \"o\" already exists" )
 		del o
+
+	def testObjects( self ) :
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+
+		renderableAttr = renderer.attributes( IECore.CompoundObject( {} ) )
+		unrenderableAttr = renderer.attributes( IECore.CompoundObject( { "cr:unrenderable" : IECore.BoolData( True ) } ) )
+
+		self.assertIsNone( renderer.object( "o", IECoreScene.SpherePrimitive(), unrenderableAttr ) )
+		self.assertIsNone( renderer.camera( "c", IECoreScene.Camera(), unrenderableAttr ) )
+		self.assertIsNone( renderer.light( "l", IECore.NullObject(), unrenderableAttr ) )
+		self.assertIsNone( renderer.lightFilter( "lf", IECore.NullObject(), unrenderableAttr ) )
+
+		self.assertIsInstance(
+			renderer.object( "ro", IECoreScene.SpherePrimitive(), renderableAttr ),
+			GafferScene.Private.IECoreScenePreview.Renderer.ObjectInterface
+		)
+		self.assertIsInstance(
+			renderer.camera( "rc", IECoreScene.Camera(), renderableAttr ),
+			GafferScene.Private.IECoreScenePreview.Renderer.ObjectInterface
+		)
+		self.assertIsInstance(
+			renderer.light( "rl", IECore.NullObject(), renderableAttr ),
+			GafferScene.Private.IECoreScenePreview.Renderer.ObjectInterface
+		)
+		self.assertIsInstance(
+			renderer.lightFilter( "rl", IECore.NullObject(), renderableAttr ),
+			GafferScene.Private.IECoreScenePreview.Renderer.ObjectInterface
+		)
+
+	def testDeformingObject( self ) :
+
+		sphere1 = IECoreScene.SpherePrimitive( 1 )
+		sphere2 = IECoreScene.SpherePrimitive( 2 )
+
+		renderer = GafferScene.Private.IECoreScenePreview.CapturingRenderer()
+		o = renderer.object(
+			"o", [ sphere1, sphere2 ], [ 1, 2 ], renderer.attributes( IECore.CompoundObject() )
+		)
+
+		c = renderer.capturedObject( "o" )
+		self.assertEqual( c.capturedSamples(), [ sphere1, sphere2 ] )
+		self.assertEqual( c.capturedSampleTimes(), [ 1, 2 ] )
 
 if __name__ == "__main__":
 	unittest.main()

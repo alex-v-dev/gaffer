@@ -50,13 +50,11 @@ class GAFFERSCENE_API Encapsulate : public FilteredSceneProcessor
 		Encapsulate( const std::string &name=defaultName<Encapsulate>() );
 		~Encapsulate() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferScene::Encapsulate, EncapsulateTypeId, FilteredSceneProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferScene::Encapsulate, EncapsulateTypeId, FilteredSceneProcessor );
 
 		void affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const override;
 
 	protected :
-
-		bool acceptsInput( const Gaffer::Plug *plug, const Gaffer::Plug *inputPlug ) const override;
 
 		void hashObject( const ScenePath &path, const Gaffer::Context *context, const ScenePlug *parent, IECore::MurmurHash &h ) const override;
 		IECore::ConstObjectPtr computeObject( const ScenePath &path, const Gaffer::Context *context, const ScenePlug *parent ) const override;
@@ -69,9 +67,7 @@ class GAFFERSCENE_API Encapsulate : public FilteredSceneProcessor
 
 	private :
 
-		void plugDirtied( const Gaffer::Plug *plug );
-
-		uint64_t m_dirtyCount;
+		IECore::PathMatcher::Result filterValueChecked( const Gaffer::Context *context ) const;
 
 		static size_t g_firstPlugIndex;
 

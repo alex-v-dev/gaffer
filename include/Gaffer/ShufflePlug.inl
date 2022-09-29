@@ -69,12 +69,12 @@ T ShufflesPlug::shuffle( const T &sourceContainer ) const
 	T destinationContainer;
 
 	size_t i = 0;
-	std::vector<::ShuffleValues> shuffleValues( this->children().size() );	
+	std::vector<::ShuffleValues> shuffleValues( this->children().size() );
 	for( auto &plug : ShufflePlug::Range( *this ) )
 	{
 		shuffleValues[i].enabled = plug->enabledPlug()->getValue();
 		shuffleValues[i].deleteSource = plug->deleteSourcePlug()->getValue();
-		shuffleValues[i].sourcePattern = plug->sourcePlug()->getValue();		
+		shuffleValues[i].sourcePattern = plug->sourcePlug()->getValue();
 		++i;
 	}
 
@@ -85,7 +85,9 @@ T ShufflesPlug::shuffle( const T &sourceContainer ) const
 
 	for( const auto &sourceData : sourceContainer )
 	{
-		scope.set<std::string>( g_sourceVariable, sourceData.first );
+		// Quick way to get a string from a key that could be std::string or IECore::InternedString
+		const std::string &source = sourceData.first;
+		scope.set<std::string>( g_sourceVariable, &source );
 
 		i = 0;
 		bool deleteSource = false;

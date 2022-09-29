@@ -46,9 +46,10 @@
 
 #include "OpenEXR/ImathMatrixAlgo.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace Imath;
 using namespace IECore;
 using namespace Gaffer;
@@ -57,38 +58,10 @@ using namespace GafferScene;
 using namespace GafferSceneUI;
 
 //////////////////////////////////////////////////////////////////////////
-// Internal utilities
-//////////////////////////////////////////////////////////////////////////
-
-namespace
-{
-
-M44f signOnlyScaling( const M44f &m )
-{
-	V3f scale;
-	V3f shear;
-	V3f rotate;
-	V3f translate;
-
-	extractSHRT( m, scale, shear, rotate, translate );
-
-	M44f result;
-
-	result.translate( translate );
-	result.rotate( rotate );
-	result.shear( shear );
-	result.scale( V3f( sign( scale.x ), sign( scale.y ), sign( scale.z ) ) );
-
-	return result;
-}
-
-} // namespace
-
-//////////////////////////////////////////////////////////////////////////
 // ScaleTool
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( ScaleTool );
+GAFFER_NODE_DEFINE_TYPE( ScaleTool );
 
 ScaleTool::ToolDescription<ScaleTool, SceneView> ScaleTool::g_toolDescription;
 
@@ -103,8 +76,8 @@ ScaleTool::ScaleTool( SceneView *view, const std::string &name )
 		ScaleHandlePtr handle = new ScaleHandle( axes[i] );
 		handle->setRasterScale( 75 );
 		handles()->setChild( handleNames[i], handle );
-		// connect with group 0, so we get called before the Handle's slot does.
-		handle->dragBeginSignal().connect( 0, boost::bind( &ScaleTool::dragBegin, this, axes[i] ) );
+		// Connect at front, so we get called before the Handle's slot does.
+		handle->dragBeginSignal().connectFront( boost::bind( &ScaleTool::dragBegin, this, axes[i] ) );
 		handle->dragMoveSignal().connect( boost::bind( &ScaleTool::dragMove, this, ::_1, ::_2 ) );
 		handle->dragEndSignal().connect( boost::bind( &ScaleTool::dragEnd, this ) );
 	}
@@ -126,23 +99,11 @@ bool ScaleTool::affectsHandles( const Gaffer::Plug *input ) const
 
 void ScaleTool::updateHandles( float rasterScale )
 {
-	const Selection &primarySelection = this->selection().back();
-
-	V3f translate, rotate, scale, pivot;
-	const M44f transform = primarySelection.transform( translate, rotate, scale, pivot );
-
-	M44f handlesMatrix = M44f().translate( pivot ) * transform * primarySelection.sceneToTransformSpace().inverse();
-	// We want to take the sign of the scaling into account so that
-	// our handles point in the right direction. But we don't want
-	// the magnitude because a non-uniform handle scale breaks the
-	// operation of the xy/xz/yz handles.
-	handlesMatrix = signOnlyScaling( handlesMatrix );
-
 	handles()->setTransform(
-		handlesMatrix
+		this->selection().back().orientedTransform( Local )
 	);
 
-	for( ScaleHandleIterator it( handles() ); !it.done(); ++it )
+	for( ScaleHandle::Iterator it( handles() ); !it.done(); ++it )
 	{
 		bool enabled = true;
 		for( const auto &s : selection() )

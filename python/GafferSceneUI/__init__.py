@@ -47,7 +47,7 @@ from .PrimitiveInspector import PrimitiveInspector
 from .UVInspector import UVInspector
 from .FilterPlugValueWidget import FilterPlugValueWidget
 from .ScenePathPlugValueWidget import ScenePathPlugValueWidget
-from .TweakPlugValueWidget import TweakPlugValueWidget
+from .LightEditor import LightEditor
 from . import SceneHistoryUI
 from . import EditScopeUI
 
@@ -163,6 +163,20 @@ from . import LocaliseAttributesUI
 from . import PrimitiveSamplerUI
 from . import ClosestPointSamplerUI
 from . import CurveSamplerUI
+from . import UnencapsulateUI
+from . import MotionPathUI
+from . import FilterQueryUI
+from . import TransformQueryUI
+from . import BoundQueryUI
+from . import ExistenceQueryUI
+from . import AttributeQueryUI
+from . import UVSamplerUI
+from . import CryptomatteUI
+from . import ShaderQueryUI
+from . import AttributeTweaksUI
+from . import OptionTweaksUI
+from . import OptionQueryUI
+from . import RenameUI
 
 # then all the PathPreviewWidgets. note that the order
 # of import controls the order of display.

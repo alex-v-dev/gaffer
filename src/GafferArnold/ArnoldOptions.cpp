@@ -40,7 +40,7 @@
 using namespace Imath;
 using namespace GafferArnold;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( ArnoldOptions );
+GAFFER_NODE_DEFINE_TYPE( ArnoldOptions );
 
 ArnoldOptions::ArnoldOptions( const std::string &name )
 	:	GafferScene::Options( name )
@@ -57,7 +57,6 @@ ArnoldOptions::ArnoldOptions( const std::string &name )
 	// Sampling parameters
 
 	options->addChild( new Gaffer::NameValuePlug( "ai:AA_samples", new IECore::IntData( 3 ), false, "aaSamples" ) );
-	options->addChild( new Gaffer::NameValuePlug( "ai:progressive_min_AA_samples", new IECore::IntData( -4 ), false, "progressiveMinAASamples" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:GI_diffuse_samples", new IECore::IntData( 2 ), false, "giDiffuseSamples" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:GI_specular_samples", new IECore::IntData( 2 ), false, "giSpecularSamples" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:GI_transmission_samples", new IECore::IntData( 2 ), false, "giTransmissionSamples" ) );
@@ -70,9 +69,15 @@ ArnoldOptions::ArnoldOptions( const std::string &name )
 	options->addChild( new Gaffer::NameValuePlug( "ai:low_light_threshold", new IECore::FloatData( 0.001 ), false, "lowLightThreshold" ) );
 
 	// Adaptive sampling parameters
+
 	options->addChild( new Gaffer::NameValuePlug( "ai:enable_adaptive_sampling", new IECore::BoolData( false ), false, "enableAdaptiveSampling" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:AA_samples_max", new IECore::IntData( 0 ), false, "aaSamplesMax" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:AA_adaptive_threshold", new IECore::FloatData( 0.05 ), false, "aaAdaptiveThreshold" ) );
+
+	// Interactive rendering parameters
+
+	options->addChild( new Gaffer::NameValuePlug( "ai:enable_progressive_render", new IECore::BoolData( true ), false, "enableProgressiveRender" ) );
+	options->addChild( new Gaffer::NameValuePlug( "ai:progressive_min_AA_samples", new Gaffer::IntPlug( "value", Gaffer::Plug::In, -4, -10, 0 ), false, "progressiveMinAASamples" ) );
 
 	// Ray depth parameters
 
@@ -106,8 +111,8 @@ ArnoldOptions::ArnoldOptions( const std::string &name )
 	options->addChild( new Gaffer::NameValuePlug( "ai:ignore_subdivision", new IECore::BoolData( false ), false, "ignoreSubdivision" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:ignore_displacement", new IECore::BoolData( false ), false, "ignoreDisplacement" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:ignore_bump", new IECore::BoolData( false ), false, "ignoreBump" ) );
-	options->addChild( new Gaffer::NameValuePlug( "ai:ignore_motion_blur", new IECore::BoolData( false ), false, "ignoreMotionBlur" ) );
 	options->addChild( new Gaffer::NameValuePlug( "ai:ignore_sss", new IECore::BoolData( false ), false, "ignoreSSS" ) );
+	options->addChild( new Gaffer::NameValuePlug( "ai:ignore_imagers", new IECore::BoolData( false ), false, "ignoreImagers" ) );
 
 	// Searchpath parameters
 

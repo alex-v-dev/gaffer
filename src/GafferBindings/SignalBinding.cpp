@@ -39,8 +39,6 @@
 
 #include "GafferBindings/SignalBinding.h"
 
-#include "boost/signals.hpp"
-
 using namespace boost::python;
 
 namespace GafferBindings
@@ -49,9 +47,29 @@ namespace GafferBindings
 namespace Detail
 {
 
-boost::python::object pythonConnection( const boost::signals::connection &connection, bool scoped )
+boost::python::object pythonConnection( const Gaffer::Signals::Connection &connection, const boost::python::object &scoped )
 {
-	if( scoped )
+	bool useScopedConnection;
+	if( scoped == boost::python::object() )
+	{
+		const char *warning =
+			"The default value for `scoped` is deprecated. "
+			"Please pass `scoped = True` to keep the previous behaviour, "
+			"or consider using an unscoped connection."
+		;
+		if( PyErr_WarnEx( PyExc_DeprecationWarning, warning, 1 ) == -1 )
+		{
+			// Warning being treated as an error.
+			throw_error_already_set();
+		}
+		useScopedConnection = true;
+	}
+	else
+	{
+		useScopedConnection = extract<bool>( scoped );
+	}
+
+	if( useScopedConnection )
 	{
 		// Simply returning `object( scoped_connection( connection ) )`
 		// doesn't work - somehow the scoped_connection dies and the
@@ -59,7 +77,7 @@ boost::python::object pythonConnection( const boost::signals::connection &connec
 		// we construct via the python-bound copy constructor which
 		// avoids the problem.
 		PyTypeObject *type = boost::python::converter::registry::query(
-			boost::python::type_info( typeid( boost::signals::scoped_connection ) )
+			boost::python::type_info( typeid( Gaffer::Signals::ScopedConnection ) )
 		)->get_class_object();
 
 		boost::python::object oType( boost::python::handle<>( boost::python::borrowed( type ) ) );

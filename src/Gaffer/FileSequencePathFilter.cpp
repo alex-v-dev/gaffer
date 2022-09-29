@@ -41,10 +41,11 @@
 #include "IECore/FileSequence.h"
 #include "IECore/FileSequenceFunctions.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/filesystem.hpp"
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace IECore;
 using namespace Gaffer;
 
@@ -75,7 +76,7 @@ void FileSequencePathFilter::setMode( Keep mode )
 	changedSignal()( this );
 }
 
-void FileSequencePathFilter::doFilter( std::vector<PathPtr> &paths ) const
+void FileSequencePathFilter::doFilter( std::vector<PathPtr> &paths, const IECore::Canceller *canceller ) const
 {
 	paths.erase(
 		std::remove_if(

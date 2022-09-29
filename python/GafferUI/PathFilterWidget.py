@@ -47,7 +47,7 @@ class PathFilterWidget( GafferUI.Widget ) :
 		GafferUI.Widget.__init__( self, topLevelWidget, **kw )
 
 		self.__pathFilter = pathFilter
-		self.__pathFilterChangedConnection = self.__pathFilter.changedSignal().connect( Gaffer.WeakMethod( self.__pathFilterChanged ) )
+		self.__pathFilterChangedConnection = self.__pathFilter.changedSignal().connect( Gaffer.WeakMethod( self.__pathFilterChanged ), scoped = False )
 
 	## Returns the PathFilter object this UI represents.
 	def pathFilter( self ) :
@@ -56,7 +56,7 @@ class PathFilterWidget( GafferUI.Widget ) :
 
 	## Must be implemented by subclasses to update the UI when the filter
 	# changes in some way. To temporarily suspend calls to this function, use
-	# Gaffer.BlockedConnection( self._pathFilterChangedConnection() ).
+	# Gaffer.Signals.BlockedConnection( self._pathFilterChangedConnection() ).
 	def _updateFromPathFilter( self ) :
 
 		raise NotImplementedError

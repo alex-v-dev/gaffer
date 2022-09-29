@@ -52,7 +52,7 @@ class GAFFERIMAGE_API DeepRecolor : public ImageProcessor
 		DeepRecolor( const std::string &name=defaultName<DeepRecolor>() );
 		~DeepRecolor() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::DeepRecolor, DeepRecolorTypeId, ImageProcessor );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::DeepRecolor, DeepRecolorTypeId, ImageProcessor );
 
 		GafferImage::ImagePlug *colorSourcePlug();
 		const GafferImage::ImagePlug *colorSourcePlug() const;
@@ -63,6 +63,9 @@ class GAFFERIMAGE_API DeepRecolor : public ImageProcessor
 		void affects( const Gaffer::Plug *input, AffectedPlugsContainer &outputs ) const override;
 
 	protected :
+
+		void hashViewNames( const GafferImage::ImagePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
+		IECore::ConstStringVectorDataPtr computeViewNames( const Gaffer::Context *context, const ImagePlug *parent ) const override;
 
 		void hashChannelData( const GafferImage::ImagePlug *output, const Gaffer::Context *context, IECore::MurmurHash &h ) const override;
 		IECore::ConstFloatVectorDataPtr computeChannelData( const std::string &channelName, const Imath::V2i &tileOrigin, const Gaffer::Context *context, const ImagePlug *parent ) const override;

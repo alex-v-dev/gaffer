@@ -237,7 +237,7 @@ Box2f transform( const Box2f &b, const M33f &m )
 // Resample
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Resample );
+GAFFER_NODE_DEFINE_TYPE( Resample );
 
 size_t Resample::g_firstPlugIndex = 0;
 
@@ -255,14 +255,20 @@ Resample::Resample( const std::string &name )
 
 	// We don't ever want to change these, so we make pass-through connections.
 
+	outPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 	outPlug()->formatPlug()->setInput( inPlug()->formatPlug() );
 	outPlug()->metadataPlug()->setInput( inPlug()->metadataPlug() );
 	outPlug()->channelNamesPlug()->setInput( inPlug()->channelNamesPlug() );
 
+	horizontalPassPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 	horizontalPassPlug()->formatPlug()->setInput( inPlug()->formatPlug() );
 	horizontalPassPlug()->metadataPlug()->setInput( inPlug()->metadataPlug() );
 	horizontalPassPlug()->channelNamesPlug()->setInput( inPlug()->channelNamesPlug() );
 
+	// Sampler checks the deep plug, and FlatImageProcessor doesn't handle the deep
+	// plug for outputs other than outPlug(), so up a passthrough for deep to avoid
+	// needing to implement hash/compute for it
+	horizontalPassPlug()->deepPlug()->setInput( inPlug()->deepPlug() );
 }
 
 Resample::~Resample()

@@ -55,7 +55,7 @@ using namespace GafferScene;
 namespace
 {
 
-// ScenePlug::ScenePath is just a typedef for std::vector<InternedString>,
+// ScenePlug::ScenePath is just an alias for `std::vector<InternedString>`,
 // which doesn't exist in Python. So we register a conversion from
 // InternedStringVectorData which contains just such a vector.
 /// \todo We could instead do this in the Cortex bindings for all
@@ -105,7 +105,8 @@ struct ScenePathFromString
 
 	static void *convertible( PyObject *obj )
 	{
-		if( PyString_Check( obj ) )
+		extract<std::string> e( obj );
+		if( e.check() )
 		{
 			return obj;
 		}
@@ -119,7 +120,7 @@ struct ScenePathFromString
 		data->convertible = storage;
 
 		std::string s = extract<std::string>( obj );
-		typedef boost::tokenizer<boost::char_separator<char> > Tokenizer;
+		using Tokenizer = boost::tokenizer<boost::char_separator<char> >;
 		Tokenizer t( s, boost::char_separator<char>( "/" ) );
 		for( Tokenizer::const_iterator it = t.begin(), eIt = t.end(); it != eIt; it++ )
 		{
@@ -267,6 +268,18 @@ bool existsWrapper2( const ScenePlug &plug )
 	return plug.exists();
 }
 
+Imath::Box3f childBoundsWrapper( const ScenePlug &plug, const ScenePlug::ScenePath &scenePath )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return plug.childBounds( scenePath );
+}
+
+IECore::MurmurHash childBoundsHashWrapper( const ScenePlug &plug, const ScenePlug::ScenePath &scenePath )
+{
+	IECorePython::ScopedGILRelease gilRelease;
+	return plug.childBoundsHash( scenePath );
+}
+
 IECore::InternedStringVectorDataPtr stringToPathWrapper( const char *s )
 {
 	IECore::InternedStringVectorDataPtr p = new IECore::InternedStringVectorData;
@@ -364,6 +377,9 @@ void GafferSceneModule::bindCore()
 		// existence queries
 		.def( "exists", &existsWrapper1 )
 		.def( "exists", &existsWrapper2 )
+		// child bounds queries
+		.def( "childBounds", &childBoundsWrapper )
+		.def( "childBoundsHash", &childBoundsHashWrapper )
 		// string utilities
 		.def( "stringToPath", &stringToPathWrapper )
 		.staticmethod( "stringToPath" )
@@ -374,21 +390,20 @@ void GafferSceneModule::bindCore()
 	ScenePathFromInternedStringVectorData();
 	ScenePathFromString();
 
-	typedef ComputeNodeWrapper<SceneNode> SceneNodeWrapper;
+	using SceneNodeWrapper = ComputeNodeWrapper<SceneNode>;
 	GafferBindings::DependencyNodeClass<SceneNode, SceneNodeWrapper>();
 
-	typedef ComputeNodeWrapper<SceneProcessor> SceneProcessorWrapper;
+	using SceneProcessorWrapper = ComputeNodeWrapper<SceneProcessor>;
 	GafferBindings::DependencyNodeClass<SceneProcessor, SceneProcessorWrapper>()
 	.def( init<const std::string &, size_t, size_t>(
 				(
 					arg( "name" ) = GraphComponent::defaultName<SceneProcessor>(),
 					arg( "minInputs" ),
-					arg( "maxInputs" ) = Imath::limits<size_t>::max()
+					arg( "maxInputs" ) = std::numeric_limits<size_t>::max()
 				)
 			)
 		)
 	;
 
 	Serialisation::registerSerialiser( SceneProcessor::staticTypeId(), new SceneProcessorSerialiser );
-
 }

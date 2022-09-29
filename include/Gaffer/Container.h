@@ -38,19 +38,20 @@
 #define GAFFER_CONTAINER_H
 
 #include "Gaffer/Export.h"
+#include "Gaffer/GraphComponent.h"
 
 namespace Gaffer
 {
 
 template<typename Base, typename T>
-class GAFFER_API Container : public Base
+class IECORE_EXPORT Container : public Base
 {
 
 	public :
 
 		IE_CORE_DECLAREMEMBERPTR( Container );
 
-		Container();
+		Container( const std::string &name=GraphComponent::defaultName<Container>() );
 		~Container() override;
 
 		//! @name RunTimeTyped interface
@@ -64,7 +65,7 @@ class GAFFER_API Container : public Base
 		static const char *staticTypeName();
 		static bool inheritsFrom( IECore::TypeId typeId );
 		static bool inheritsFrom( const char *typeName );
-		typedef Base BaseClass;
+		using BaseClass = Base;
 		//@}
 
 		/// Accepts only type T.
@@ -92,7 +93,5 @@ class GAFFER_API Container : public Base
 
 
 } // namespace Gaffer
-
-#include "Gaffer/Container.inl"
 
 #endif // GAFFER_CONTAINER_H

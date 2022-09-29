@@ -42,6 +42,31 @@ import GafferUI
 import GafferScene
 import GafferSceneUI
 
+## Menu Presentation
+# -----------------
+# Many facilities have large numbers of sets with structured names. When
+# presented in a flat list, it can be hard to navigate. The path function
+# allows the name of a set to be amended or turned into a hierarchical menu
+# path (ie, by returning a string containing '/'s) - creating sub-menus
+# wherever Gaffer displays a list of sets.
+
+__menuPathFunction = lambda n : n
+
+## 'f' should be a callable that takes a set name, and returns a relative menu
+## path @see IECore.MenuDefinition.
+def setMenuPathFunction( f ) :
+
+	global __menuPathFunction
+	__menuPathFunction = f
+
+def getMenuPathFunction() :
+
+	global __menuPathFunction
+	return __menuPathFunction
+
+## Metadata
+#  --------
+
 Gaffer.Metadata.registerNode(
 
 	GafferScene.Set,
@@ -87,11 +112,24 @@ Gaffer.Metadata.registerNode(
 
 			"description",
 			"""
-			The name of the set that will be created or edited.
-			You can create multiple set names at once by separating them with spaces.
+			The name of the set that will be created or edited. Multiple sets
+			may be created or modified by entering their names separated by
+			spaces. Wildcards may also be used to match multiple input sets to
+			be modified.
 			""",
 
 			"ui:scene:acceptsSetName", True,
+
+		],
+
+		"setVariable" : [
+
+			"description",
+			"""
+			A context variable created to pass the name of the set
+			being processed to the nodes connected to the `filter`
+			plug. This can be used to vary the filter for each set.
+			""",
 
 		],
 
@@ -136,18 +174,22 @@ def __setValue( plug, value, *unused ) :
 	with Gaffer.UndoScope( plug.ancestor( Gaffer.ScriptNode ) ) :
 		plug.setValue( value )
 
-def __downstreamNodes( plug ) :
+def __spreadsheetTargetNode( plug ) :
 
-	result = set()
-	outputs = plug.outputs()
-	if outputs :
-		for output in outputs :
-			result |= __downstreamNodes( output )
-	else :
-		if plug.node() :
-			result.add( plug.node() )
+	# Find the first node the plug's column is connected to
+	# if it is a spreadsheet cell.
 
-	return result
+	cellPlug = plug.ancestor( Gaffer.Spreadsheet.CellPlug )
+
+	# Could be a user plug on a Spreadsheet node
+	if cellPlug is None :
+		return None
+
+	outputs = plug.node()[ "out" ][ cellPlug.getName() ].outputs()
+	if not outputs :
+		return None
+
+	return outputs[ 0 ].node()
 
 def __scenePlugs( node ) :
 
@@ -195,8 +237,12 @@ def __setsPopupMenu( menuDefinition, plugValueWidget ) :
 			insertAt = (cursorPosition, cursorPosition)
 
 	node = plug.node()
+
+	if isinstance( node, Gaffer.Spreadsheet ) :
+		node = __spreadsheetTargetNode( plug ) or node
+
 	if isinstance( node, GafferScene.Filter ) :
-		nodes = __downstreamNodes( node["out"] )
+		nodes = GafferScene.SceneAlgo.filteredNodes( node )
 	else :
 		nodes = { node }
 
@@ -216,6 +262,8 @@ def __setsPopupMenu( menuDefinition, plugValueWidget ) :
 		for name, operator in zip( ("Union", "Intersection", "Difference"), ("|", "&", "-") ) :
 			newValue = ''.join( [ currentExpression[:insertAt[0]], operator, currentExpression[insertAt[1]:] ] )
 			menuDefinition.prepend( "/Operators/%s" % name, { "command" : functools.partial( __setValue, plug, newValue ) } )
+
+	pathFn = getMenuPathFunction()
 
 	for setName in reversed( sorted( list( setNames ) ) ) :
 
@@ -237,7 +285,7 @@ def __setsPopupMenu( menuDefinition, plugValueWidget ) :
 				"active" : plug.settable() and not plugValueWidget.getReadOnly() and not Gaffer.MetadataAlgo.readOnly( plug ),
 			}
 
-		menuDefinition.prepend( "/Sets/%s" % setName, parameters )
+		menuDefinition.prepend( "/Sets/%s" % pathFn( setName ), parameters )
 
 GafferUI.PlugValueWidget.popupMenuSignal().connect( __setsPopupMenu, scoped = False )
 

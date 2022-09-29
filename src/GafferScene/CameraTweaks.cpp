@@ -36,7 +36,7 @@
 
 #include "GafferScene/CameraTweaks.h"
 
-#include "GafferScene/TweakPlug.h"
+#include "Gaffer/TweakPlug.h"
 
 #include "IECoreScene/Camera.h"
 
@@ -46,7 +46,7 @@ using namespace IECoreScene;
 using namespace Gaffer;
 using namespace GafferScene;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( CameraTweaks );
+GAFFER_NODE_DEFINE_TYPE( CameraTweaks );
 
 size_t CameraTweaks::g_firstPlugIndex = 0;
 
@@ -61,14 +61,14 @@ CameraTweaks::~CameraTweaks()
 {
 }
 
-GafferScene::TweaksPlug *CameraTweaks::tweaksPlug()
+Gaffer::TweaksPlug *CameraTweaks::tweaksPlug()
 {
-	return getChild<GafferScene::TweaksPlug>( g_firstPlugIndex );
+	return getChild<Gaffer::TweaksPlug>( g_firstPlugIndex );
 }
 
-const GafferScene::TweaksPlug *CameraTweaks::tweaksPlug() const
+const Gaffer::TweaksPlug *CameraTweaks::tweaksPlug() const
 {
-	return getChild<GafferScene::TweaksPlug>( g_firstPlugIndex );
+	return getChild<Gaffer::TweaksPlug>( g_firstPlugIndex );
 }
 
 bool CameraTweaks::affectsProcessedObject( const Gaffer::Plug *input ) const
@@ -108,7 +108,7 @@ IECore::ConstObjectPtr CameraTweaks::computeProcessedObject( const ScenePath &pa
 
 	IECoreScene::CameraPtr result = inputCamera->copy();
 
-	for( TweakPlugIterator tIt( tweaksPlug ); !tIt.done(); ++tIt )
+	for( TweakPlug::Iterator tIt( tweaksPlug ); !tIt.done(); ++tIt )
 	{
 		if( !(*tIt)->enabledPlug()->getValue() )
 		{

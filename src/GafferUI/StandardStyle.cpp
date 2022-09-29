@@ -119,9 +119,13 @@ IECoreGL::GroupPtr line( const V3f &p0, const V3f &p1 )
 	return result;
 }
 
-IECoreGL::MeshPrimitivePtr cylinder()
+IECoreGL::MeshPrimitivePtr cylinder( bool forSelection )
 {
-	static IECoreGL::MeshPrimitivePtr result;
+	static IECoreGL::MeshPrimitivePtr visualResult;
+	static IECoreGL::MeshPrimitivePtr selectionResult;
+
+	IECoreGL::MeshPrimitivePtr &result = forSelection ? selectionResult : visualResult;
+
 	if( result )
 	{
 		return result;
@@ -138,7 +142,7 @@ IECoreGL::MeshPrimitivePtr cylinder()
 	vector<V3f> &p = pData->writable();
 
 	const float height = 1.0f;
-	const float radius = 0.03f;
+	const float radius = forSelection ? 0.1f : 0.03f;
 
 	const int numDivisions = 30;
 	for( int i = 0; i < numDivisions; ++i )
@@ -166,13 +170,12 @@ IECoreGL::MeshPrimitivePtr cylinder()
 	return result;
 }
 
-IECoreGL::MeshPrimitivePtr torus()
+IECoreGL::MeshPrimitivePtr torus( bool forSelection )
 {
-	static IECoreGL::MeshPrimitivePtr result;
-	if( result )
-	{
-		return result;
-	}
+	static IECoreGL::MeshPrimitivePtr visualResult;
+	static IECoreGL::MeshPrimitivePtr selectionResult;
+
+	IECoreGL::MeshPrimitivePtr &result = forSelection ? selectionResult : visualResult;
 
 	/// \todo Move this bit to IECore::MeshPrimitive::createTorus().
 	IECore::IntVectorDataPtr verticesPerFaceData = new IECore::IntVectorData;
@@ -184,10 +187,10 @@ IECoreGL::MeshPrimitivePtr torus()
 	IECore::V3fVectorDataPtr pData = new IECore::V3fVectorData;
 	vector<V3f> &p = pData->writable();
 
-	const float radiusJ = 0.03;
+	const float radiusJ = forSelection ? 0.1 : 0.03;
 	const float radiusI = 1 + radiusJ;
 
-	const int numDivisionsI = 30;
+	const int numDivisionsI = 60;
 	const int numDivisionsJ = 15;
 	for( int i = 0; i < numDivisionsI; ++i )
 	{
@@ -281,9 +284,15 @@ IECoreGL::MeshPrimitivePtr cube()
 	return result;
 }
 
-IECoreGL::GroupPtr translateHandle( Style::Axes axes )
+using HandleMap = boost::container::flat_map<Style::Axes, IECoreGL::GroupPtr>;
+
+IECoreGL::GroupPtr translateHandle( Style::Axes axes, bool forSelection )
 {
-	static boost::container::flat_map<Style::Axes, IECoreGL::GroupPtr> handles;
+	static HandleMap visualHandles;
+	static HandleMap selectionHandles;
+
+	HandleMap &handles = forSelection ? selectionHandles : visualHandles;
+
 	if( handles[axes] )
 	{
 		return handles[axes];
@@ -306,7 +315,7 @@ IECoreGL::GroupPtr translateHandle( Style::Axes axes )
 		group->addChild( line( V3f( 0 ), V3f( 0, 1, 0 ) ) );
 		// Cylinder provides a chunkier handle for picking when
 		// bigger on screen, like the TranslateHandle.
-		group->addChild( cylinder() );
+		group->addChild( cylinder( forSelection ) );
 		group->addChild( coneGroup );
 
 		if( axes == Style::X )
@@ -346,9 +355,13 @@ IECoreGL::GroupPtr translateHandle( Style::Axes axes )
 	return group;
 }
 
-IECoreGL::GroupPtr rotateHandle( Style::Axes axes )
+IECoreGL::GroupPtr rotateHandle( Style::Axes axes, bool forSelection )
 {
-	static boost::container::flat_map<Style::Axes, IECoreGL::GroupPtr> handles;
+	static HandleMap visualHandles;
+	static HandleMap selectionHandles;
+
+	HandleMap &handles = forSelection ? selectionHandles : visualHandles;
+
 	if( handles[axes] )
 	{
 		return handles[axes];
@@ -357,7 +370,7 @@ IECoreGL::GroupPtr rotateHandle( Style::Axes axes )
 	IECoreGL::GroupPtr group = new IECoreGL::Group;
 	if( axes == Style::X || axes == Style::Y || axes == Style::Z )
 	{
-		group->addChild( torus() );
+		group->addChild( torus( forSelection ) );
 
 		group->getState()->add( new IECoreGL::Color( colorForAxes( axes ) ) );
 		group->getState()->add(
@@ -403,19 +416,18 @@ const IECoreGL::Group *rotateHandleXYZHighlight()
 	return group.get();
 }
 
-IECoreGL::GroupPtr scaleHandle( Style::Axes axes )
+IECoreGL::GroupPtr scaleHandle( Style::Axes axes, bool forSelection )
 {
-	static boost::container::flat_map<Style::Axes, IECoreGL::GroupPtr> handles;
-	if( handles[axes] )
-	{
-		return handles[axes];
-	}
+	static HandleMap visualHandles;
+	static HandleMap selectionHandles;
+
+	HandleMap &handles = forSelection ? selectionHandles : visualHandles;
 
 	IECoreGL::GroupPtr group;
 
 	if( axes == Style::XY || axes == Style::XZ || axes == Style::YZ )
 	{
-		group = translateHandle( axes );
+		group = translateHandle( axes, forSelection );
 	}
 	else
 	{
@@ -427,7 +439,7 @@ IECoreGL::GroupPtr scaleHandle( Style::Axes axes )
 
 		if( axes != Style::XYZ )
 		{
-			group->addChild( cylinder() );
+			group->addChild( cylinder( forSelection ) );
 		}
 		group->addChild( cubeGroup );
 
@@ -494,6 +506,11 @@ V3f auxiliaryConnectionArrowPosition( const Box2f &dstNodeFrame, const V3f &p, c
 	return p + v * t;
 }
 
+float luminance( const Color3f &c )
+{
+	return c.dot( V3f( 0.2126, 0.7152, 0.0722 ) );
+}
+
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
@@ -519,7 +536,7 @@ StandardStyle::StandardStyle()
 	setColor( RaisedColor, Color3f( 0.4 ) );
 	setColor( ForegroundColor, Color3f( 0.9 ) );
 	setColor( HighlightColor, Color3f( 0.466, 0.612, 0.741 ) );
-	setColor( ConnectionColor, Color3f( 0.125, 0.125, 0.125 ) );
+	setColor( ConnectionColor, Color3f( 0.6, 0.6, 0.6 ) );
 	setColor( AuxiliaryConnectionColor, Color3f( 0.3, 0.45, 0.3 ) );
 	setColor( AnimationCurveColor, Color3f( 1.0, 1.0, 1.0 ) );
 }
@@ -530,6 +547,26 @@ StandardStyle::~StandardStyle()
 
 void StandardStyle::bind( const Style *currentStyle ) const
 {
+
+	// Compute pixel size so we can do effects that are a fixed size in pixels.
+	// We do this using glGet, which can be a performance hazard, but hopefully people
+	// don't actually use custom styles, in which case the StandardStyle will only be
+	// bound once per frame.
+	//
+	// Also note: this is based on whatever the current pixel size is - during a selection render,
+	// it will be set to much smaller selection pixels.  It seems like it would be better to always
+	// scale based on the pixels of the main render - if trying to click on something that is a fixed
+	// size in the GL display, it should be that same size when trying to select it.  But this good
+	// enough for now to slightly thicken connections when zoomed out.
+	M44f viewTransform;
+	glGetFloatv( GL_MODELVIEW_MATRIX, viewTransform.getValue() );
+	M44f projectionTransform;
+	glGetFloatv( GL_PROJECTION_MATRIX, projectionTransform.getValue() );
+	M44f combinedInverse = projectionTransform.inverse() * viewTransform.inverse();
+	int viewport[4];
+	glGetIntegerv( GL_VIEWPORT, viewport );
+	m_pixelSize = 2.0f * combinedInverse[0][0] / viewport[2];
+
 	if( currentStyle && currentStyle->typeId()==staticTypeId() )
 	{
 		// binding the shader is actually quite an expensive operation
@@ -616,7 +653,7 @@ void StandardStyle::renderWrappedText( TextType textType, const std::string &tex
 
 	V2f cursor( bound.min.x, bound.max.y - coreFont->bound().size().y );
 
-	typedef boost::tokenizer<boost::char_separator<char> > Tokenizer;
+	using Tokenizer = boost::tokenizer<boost::char_separator<char> >;
 	boost::char_separator<char> separator( "", " \n\t" );
 	Tokenizer tokenizer( text, separator );
 	Tokenizer::iterator it = tokenizer.begin();
@@ -668,35 +705,12 @@ void StandardStyle::renderFrame( const Imath::Box2f &frame, float borderWidth, S
 
 void StandardStyle::renderNodeFrame( const Imath::Box2f &contents, float borderWidth, State state, const Imath::Color3f *userColor ) const
 {
+	renderFrameInternal( contents, borderWidth, 0.15f / borderWidth, colorForState( RaisedColor, state, userColor ) );
+}
 
-	Box2f b = contents;
-	V2f bw( borderWidth );
-	b.min -= bw;
-	b.max += bw;
-
-	V2f cornerSizes = bw / b.size();
-	glUniform1i( g_isCurveParameter, 0 );
-	glUniform1i( g_borderParameter, 1 );
-	glUniform2f( g_borderRadiusParameter, cornerSizes.x, cornerSizes.y );
-	glUniform1f( g_borderWidthParameter, 0.15f / borderWidth );
-	glUniform1i( g_edgeAntiAliasingParameter, 0 );
-	glUniform1i( g_textureTypeParameter, 0 );
-
-	glColor( colorForState( RaisedColor, state, userColor ) );
-
-	glBegin( GL_QUADS );
-
-		glTexCoord2f( 0, 0 );
-		glVertex2f( b.min.x, b.min.y );
-		glTexCoord2f( 0, 1 );
-		glVertex2f( b.min.x, b.max.y );
-		glTexCoord2f( 1, 1 );
-		glVertex2f( b.max.x, b.max.y );
-		glTexCoord2f( 1, 0 );
-		glVertex2f( b.max.x, b.min.y );
-
-	glEnd();
-
+void StandardStyle::renderNodeFocusRegion( const Imath::Box2f &contents, float borderWidth, State state ) const
+{
+	renderFrameInternal( contents, borderWidth, 0.0f, Color3f( 0.878f ) );
 }
 
 void StandardStyle::renderNodule( float radius, State state, const Imath::Color3f *userColor ) const
@@ -726,7 +740,9 @@ void StandardStyle::renderNodule( float radius, State state, const Imath::Color3
 
 void StandardStyle::renderConnection( const Imath::V3f &srcPosition, const Imath::V3f &srcTangent, const Imath::V3f &dstPosition, const Imath::V3f &dstTangent, State state, const Imath::Color3f *userColor ) const
 {
-	glUniform1f( g_lineWidthParameter, 0.5 );
+	float connectionWidth = min( 1.5f, max( 0.5f, m_pixelSize * 3.0f ) );
+	glUniform1f( g_lineWidthParameter, connectionWidth );
+
 	glColor( colorForState( ConnectionColor, state, userColor ) );
 
 	renderConnectionInternal( srcPosition, srcTangent, dstPosition, dstTangent );
@@ -829,6 +845,43 @@ Imath::V3f StandardStyle::closestPointOnConnection( const Imath::V3f &p, const I
 		return straightSegmentCenter + alongSegment * straightSegmentDir;
 	}
 
+}
+
+Imath::V2f StandardStyle::renderAnnotation( const Imath::V2f &origin, const std::string &text, State state, const Imath::Color3f *userColor ) const
+{
+	const Box3f textBounds = textBound( BodyText, text );
+	if( textBounds.isEmpty() )
+	{
+		return origin;
+	}
+
+	const float padding = 0.5;
+	const float borderWidth = 0.1;
+	const float spacing = 0.25;
+	const Color3f defaultColor( 0.05 );
+	const Box3f characterBound = this->characterBound( BodyText );
+
+	glPushMatrix();
+
+		IECoreGL::glTranslate( origin + V2f( padding, -padding - characterBound.max.y ) );
+
+		const Color4f darkGrey( 0.1, 0.1, 0.1, 1.0 );
+		const Color4f midGrey( 0.65, 0.65, 0.65, 1.0 );
+
+		renderFrameInternal(
+			Box2f( V2f( 0, textBounds.min.y ), V2f( textBounds.max.x, characterBound.max.y ) ),
+			padding, borderWidth, colorForState( RaisedColor, state, userColor )
+		);
+
+		const Color3f &color = userColor ? *userColor : defaultColor;
+		renderText(
+			Style::BodyText, text, Style::NormalState,
+			luminance( color ) > 0.4 ? &darkGrey : &midGrey
+		);
+
+	glPopMatrix();
+
+	return origin - V2f( 0, characterBound.max.y - textBounds.min.y + padding * 2 + spacing );
 }
 
 void StandardStyle::renderSolidRectangle( const Imath::Box2f &box ) const
@@ -970,7 +1023,8 @@ void StandardStyle::renderTranslateHandle( Axes axes, State state ) const
 	IECoreGL::State *glState = const_cast<IECoreGL::State *>( IECoreGL::State::defaultState() );
 	IECoreGL::State::ScopedBinding highlight( *m_highlightState, *glState, state == HighlightedState );
 	IECoreGL::State::ScopedBinding disabled( *disabledState(), *glState, state == DisabledState );
-	translateHandle( axes )->render( glState );
+	const bool forSelection = IECoreGL::Selector::currentSelector() != nullptr;
+	translateHandle( axes, forSelection )->render( glState );
 }
 
 void StandardStyle::renderRotateHandle( Axes axes, State state, const Imath::V3f &highlightVector ) const
@@ -980,12 +1034,13 @@ void StandardStyle::renderRotateHandle( Axes axes, State state, const Imath::V3f
 	IECoreGL::State::ScopedBinding highlight( *m_highlightState, *glState, state == HighlightedState );
 	IECoreGL::State::ScopedBinding disabled( *disabledState(), *glState, state == DisabledState );
 
-	if( !IECoreGL::Selector::currentSelector() && axes == XYZ )
+	const bool forSelection = IECoreGL::Selector::currentSelector() != nullptr;
+	if( !forSelection && axes == XYZ )
 	{
 		// XYZ sphere holds out other handles, but does not draw.
 		glColorMask( false, false, false, false );
 	}
-	rotateHandle( axes )->render( glState );
+	rotateHandle( axes, forSelection )->render( glState );
 	glColorMask( true, true, true, true );
 
 	if( state == HighlightedState && axes == XYZ )
@@ -1004,7 +1059,8 @@ void StandardStyle::renderScaleHandle( Axes axes, State state ) const
 	IECoreGL::State *glState = const_cast<IECoreGL::State *>( IECoreGL::State::defaultState() );
 	IECoreGL::State::ScopedBinding highlight( *m_highlightState, *glState, state == HighlightedState );
 	IECoreGL::State::ScopedBinding disabled( *disabledState(), *glState, state == DisabledState );
-	scaleHandle( axes )->render( glState );
+	const bool forSelection = IECoreGL::Selector::currentSelector() != nullptr;
+	scaleHandle( axes, forSelection )->render( glState );
 }
 
 void StandardStyle::renderImage( const Imath::Box2f &box, const IECoreGL::Texture *texture ) const
@@ -1187,12 +1243,59 @@ unsigned int StandardStyle::connectionDisplayList()
 	return g_list;
 }
 
+void StandardStyle::renderFrameInternal( const Imath::Box2f &contents, float padding, float borderWidth, const Imath::Color3f &userColor ) const
+{
+	Box2f b = contents;
+	V2f p( padding );
+	b.min -= p;
+	b.max += p;
+
+	V2f cornerSizes = p / b.size();
+	glUniform1i( g_isCurveParameter, 0 );
+	glUniform1i( g_borderParameter, 1 );
+	glUniform2f( g_borderRadiusParameter, cornerSizes.x, cornerSizes.y );
+	glUniform1f( g_borderWidthParameter, borderWidth );
+	glUniform1i( g_edgeAntiAliasingParameter, 0 );
+	glUniform1i( g_textureTypeParameter, 0 );
+
+	glColor( userColor );
+
+	glBegin( GL_QUADS );
+
+		glTexCoord2f( 0, 0 );
+		glVertex2f( b.min.x, b.min.y );
+		glTexCoord2f( 0, 1 );
+		glVertex2f( b.min.x, b.max.y );
+		glTexCoord2f( 1, 1 );
+		glVertex2f( b.max.x, b.max.y );
+		glTexCoord2f( 1, 0 );
+		glVertex2f( b.max.x, b.min.y );
+
+	glEnd();
+}
+
 Imath::Color3f StandardStyle::colorForState( Color c, State s, const Imath::Color3f *userColor ) const
 {
 	Color3f result = userColor ? *userColor : m_colors[c];
 	if( s == Style::HighlightedState )
 	{
 		result = m_colors[HighlightColor];
+	}
+	else if( s == Style::DisabledState )
+	{
+		if( c == ConnectionColor )
+		{
+			result = lerp( result, Color3f( 0.26 ), 0.5 ); // Desaturate 50%
+			result *= 0.31 / luminance( result ); // Fix luminance to a bit brighter than background
+		}
+		else if( c == ForegroundColor )
+		{
+			result = lerp( result, Color3f( 0.26 ), 0.5 );
+		}
+		else
+		{
+			result = lerp( result, Color3f( 0.26 ), 0.75 );
+		}
 	}
 
 	return result;
@@ -1313,7 +1416,10 @@ static const std::string &fragmentSource()
 		"		v /= borderRadius;"
 		"		float r = length( v );"
 
-		"		OUTCOLOR = mix( OUTCOLOR, vec4( 0.15, 0.15, 0.15, OUTCOLOR.a ), ieFilteredStep( 1.0 - borderWidth, r ) );"
+		"		if( borderWidth != 0.0 )"
+		"		{"
+		"			OUTCOLOR = mix( OUTCOLOR, vec4( 0.15, 0.15, 0.15, OUTCOLOR.a ), ieFilteredStep( 1.0 - borderWidth, r ) );"
+		"		}"
 		"		OUTCOLOR.a *= ( 1.0 - ieFilteredStep( 1.0, r ) );"
 		"	}"
 
@@ -1333,7 +1439,14 @@ static const std::string &fragmentSource()
 		"	if( textureType==1 )"
 		"	{"
 		"		OUTCOLOR = texture2D( texture, gl_TexCoord[0].xy );"
-		"		OUTCOLOR = vec4( ieLinToSRGB( OUTCOLOR.r ), ieLinToSRGB( OUTCOLOR.g ), ieLinToSRGB( OUTCOLOR.b ), ieLinToSRGB( OUTCOLOR.a ) );"
+		"		if( OUTCOLOR.a != 0.0 )"
+		"		{"
+		"			OUTCOLOR = vec4( OUTCOLOR.a * ieLinToSRGB( OUTCOLOR.r / OUTCOLOR.a ), OUTCOLOR.a * ieLinToSRGB( OUTCOLOR.g / OUTCOLOR.a ), OUTCOLOR.a * ieLinToSRGB( OUTCOLOR.b / OUTCOLOR.a ), OUTCOLOR.a );"
+		"		}"
+		"		else"
+		"		{"
+		"			OUTCOLOR = vec4( ieLinToSRGB( OUTCOLOR.r ), ieLinToSRGB( OUTCOLOR.g ), ieLinToSRGB( OUTCOLOR.b ), OUTCOLOR.a );"
+		"		}"
 		"	}"
 		"	else if( textureType==2 )"
 		"	{"

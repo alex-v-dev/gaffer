@@ -38,6 +38,7 @@
 #ifndef GAFFERUI_VIEW_H
 #define GAFFERUI_VIEW_H
 
+#include "GafferUI/Tool.h"
 #include "GafferUI/ViewportGadget.h"
 
 #include "Gaffer/Node.h"
@@ -83,7 +84,7 @@ class GAFFERUI_API View : public Gaffer::Node
 
 		~View() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferUI::View, ViewTypeId, Gaffer::Node );
+		GAFFER_NODE_DECLARE_TYPE( GafferUI::View, ViewTypeId, Gaffer::Node );
 
 		/// The contents for the view are provided by the input to this plug.
 		/// The view can be switched by connecting a new input - this is how
@@ -116,12 +117,17 @@ class GAFFERUI_API View : public Gaffer::Node
 		ViewportGadget *viewportGadget();
 		const ViewportGadget *viewportGadget() const;
 
+		/// All Tools connected to this View. Use `Tool::registeredTools()` to
+		/// query the available tools and `Tool::create()` to add a tool.
+		ToolContainer *tools();
+		const ToolContainer *tools() const;
+
 		/// @name Factory
 		///////////////////////////////////////////////////////////////////
 		//@{
 		/// Creates a View for the specified plug.
 		static ViewPtr create( Gaffer::PlugPtr input );
-		typedef std::function<ViewPtr ( Gaffer::PlugPtr )> ViewCreator;
+		using ViewCreator = std::function<ViewPtr ( Gaffer::PlugPtr )>;
 		/// Registers a function which will return a View instance for a
 		/// plug of a specific type.
 		static void registerView( IECore::TypeId plugType, ViewCreator creator );
@@ -168,7 +174,7 @@ class GAFFERUI_API View : public Gaffer::Node
 		/// Returns the connection used to trigger the call to contextChanged(). Derived
 		/// classes may block this temporarily if they want to prevent the triggering -
 		/// this can be useful when modifying the context.
-		boost::signals::connection &contextChangedConnection();
+		Gaffer::Signals::Connection &contextChangedConnection();
 
 		template<class T>
 		struct ViewDescription
@@ -180,17 +186,20 @@ class GAFFERUI_API View : public Gaffer::Node
 
 	private :
 
+		void toolsChildAdded( Gaffer::GraphComponent *child ) const;
+		void toolPlugSet( Gaffer::Plug *plug ) const;
+
 		ViewportGadgetPtr m_viewportGadget;
 		Gaffer::ContextPtr m_context;
 		UnarySignal m_contextChangedSignal;
-		boost::signals::scoped_connection m_contextChangedConnection;
+		Gaffer::Signals::ScopedConnection m_contextChangedConnection;
 
-		typedef std::map<IECore::TypeId, ViewCreator> CreatorMap;
+		using CreatorMap = std::map<IECore::TypeId, ViewCreator>;
 		static CreatorMap &creators();
 
-		typedef std::pair<boost::regex, ViewCreator> RegexAndCreator;
-		typedef std::vector<RegexAndCreator> RegexAndCreatorVector;
-		typedef std::map<IECore::TypeId, RegexAndCreatorVector> NamedCreatorMap;
+		using RegexAndCreator = std::pair<boost::regex, ViewCreator>;
+		using RegexAndCreatorVector = std::vector<RegexAndCreator>;
+		using NamedCreatorMap = std::map<IECore::TypeId, RegexAndCreatorVector>;
 		static NamedCreatorMap &namedCreators();
 
 		static size_t g_firstPlugIndex;

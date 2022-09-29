@@ -60,6 +60,7 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 			self["defaultFileName"] = Gaffer.StringPlug( "defaultFileName", Gaffer.Plug.Direction.In, "${bakeDirectory}/<AOV>/<AOV>.<UDIM>.exr" )
 			self["defaultResolution"] = Gaffer.IntPlug( "defaultResolution", Gaffer.Plug.Direction.In, 512 )
 			self["uvSet"] = Gaffer.StringPlug( "uvSet", Gaffer.Plug.Direction.In, "uv" )
+			self["udims"] = Gaffer.StringPlug( "udims", Gaffer.Plug.Direction.In, "" )
 			self["normalOffset"] = Gaffer.FloatPlug( "normalOffset", Gaffer.Plug.Direction.In, 0.1 )
 			self["aovs"] = Gaffer.StringPlug( "aovs", Gaffer.Plug.Direction.In, "beauty:rgba" )
 			self["tasks"] = Gaffer.IntPlug( "tasks", Gaffer.Plug.Direction.In, 1 )
@@ -84,13 +85,27 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 			self["__chunkExpression"].setExpression( inspect.cleandoc(
 				"""
 				import collections
+				import re
+
 				rawInfo = parent["__udimQuery"]["out"]
 
 				defaultFileName = parent["defaultFileName"]
 				defaultResolution = parent["defaultResolution"]
 
+				selectUdimsStr = parent["udims"]
+
+				# FrameList really ought to take care of this check, instead of just doing
+				# something obviously wrong
+				if re.match( ".*[0-9] +[0-9].*", selectUdimsStr ):
+					raise RuntimeError( "ArnoldTextureBake : Udim list must be comma separated." )
+
+				selectUdims = set( IECore.FrameList.parse( selectUdimsStr ).asList() )
+
 				allMeshes = collections.defaultdict( lambda : [] )
 				for udim, meshes in rawInfo.items():
+					if selectUdims and not int( udim ) in selectUdims:
+						continue
+
 					for mesh, extraAttributes in meshes.items():
 						resolution = defaultResolution
 						if "bake:resolution" in extraAttributes:
@@ -111,8 +126,8 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 
 				if taskIndex < numTasks:
 
-					chunkStart = ( taskIndex * len( fileList ) ) / numTasks
-					chunkEnd = ( ( taskIndex + 1 ) * len( fileList ) ) / numTasks
+					chunkStart = ( taskIndex * len( fileList ) ) // numTasks
+					chunkEnd = ( ( taskIndex + 1 ) * len( fileList ) ) // numTasks
 
 					dupeCount = 0
 					prevFileName = ""
@@ -189,14 +204,14 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 
 			self["__cameraTweaks"] = GafferScene.CameraTweaks()
 			self["__cameraTweaks"]["in"].setInput( self["__camera"]["out"] )
-			self["__cameraTweaks"]["tweaks"]["projection"] = GafferScene.TweakPlug( "projection", "uv_camera" )
-			self["__cameraTweaks"]["tweaks"]["resolution"] = GafferScene.TweakPlug( "resolution", imath.V2i( 0 ) )
-			self["__cameraTweaks"]["tweaks"]["u_offset"] = GafferScene.TweakPlug( "u_offset", 0.0 )
-			self["__cameraTweaks"]["tweaks"]["v_offset"] = GafferScene.TweakPlug( "v_offset", 0.0 )
-			self["__cameraTweaks"]["tweaks"]["mesh"] = GafferScene.TweakPlug( "mesh", "" )
-			self["__cameraTweaks"]["tweaks"]["uv_set"] = GafferScene.TweakPlug( "uv_set", "" )
-			self["__cameraTweaks"]["tweaks"]["extend_edges"] = GafferScene.TweakPlug( "extend_edges", False )
-			self["__cameraTweaks"]["tweaks"]["offset"] = GafferScene.TweakPlug( "offset", 0.1 )
+			self["__cameraTweaks"]["tweaks"]["projection"] = Gaffer.TweakPlug( "projection", "uv_camera" )
+			self["__cameraTweaks"]["tweaks"]["resolution"] = Gaffer.TweakPlug( "resolution", imath.V2i( 0 ) )
+			self["__cameraTweaks"]["tweaks"]["u_offset"] = Gaffer.TweakPlug( "u_offset", 0.0 )
+			self["__cameraTweaks"]["tweaks"]["v_offset"] = Gaffer.TweakPlug( "v_offset", 0.0 )
+			self["__cameraTweaks"]["tweaks"]["mesh"] = Gaffer.TweakPlug( "mesh", "" )
+			self["__cameraTweaks"]["tweaks"]["uv_set"] = Gaffer.TweakPlug( "uv_set", "" )
+			self["__cameraTweaks"]["tweaks"]["extend_edges"] = Gaffer.TweakPlug( "extend_edges", False )
+			self["__cameraTweaks"]["tweaks"]["offset"] = Gaffer.TweakPlug( "offset", 0.1 )
 
 			self["__cameraTweaks"]["tweaks"]["offset"]["value"].setInput( self["normalOffset"] )
 
@@ -233,7 +248,7 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 				udimOffset = i["udim"].value - 1001
 				parent["__cameraTweaks"]["tweaks"]["resolution"]["value"] = imath.V2i( i["resolution"].value )
 				parent["__cameraTweaks"]["tweaks"]["u_offset"]["value"] = -( udimOffset % 10 )
-				parent["__cameraTweaks"]["tweaks"]["v_offset"]["value"] = -( udimOffset / 10 )
+				parent["__cameraTweaks"]["tweaks"]["v_offset"]["value"] = -( udimOffset // 10 )
 				parent["__cameraTweaks"]["tweaks"]["mesh"]["value"] = i["mesh"].value
 				parent["__cameraTweaks"]["tweaks"]["uv_set"]["value"] = parent["uvSet"] if parent["uvSet"] != "uv" else ""
 				"""
@@ -252,10 +267,12 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 		self["defaultFileName"] = Gaffer.StringPlug( "defaultFileName", defaultValue = "${bakeDirectory}/<AOV>/<AOV>.<UDIM>.exr" )
 		self["defaultResolution"] = Gaffer.IntPlug( "defaultResolution", defaultValue = 512 )
 		self["uvSet"] = Gaffer.StringPlug( "uvSet", defaultValue = 'uv' )
+		self["udims"] = Gaffer.StringPlug( "udims", defaultValue = "" )
 		self["normalOffset"] = Gaffer.FloatPlug( "offset", defaultValue = 0.1 )
 		self["aovs"] = Gaffer.StringPlug( "aovs", defaultValue = 'beauty:RGBA' )
 		self["tasks"] = Gaffer.IntPlug( "tasks", defaultValue = 1 )
 		self["cleanupIntermediateFiles"] = Gaffer.BoolPlug( "cleanupIntermediateFiles", defaultValue = True )
+
 
 		self["applyMedianFilter"] = Gaffer.BoolPlug( "applyMedianFilter", Gaffer.Plug.Direction.In, False )
 		self["medianRadius"] = Gaffer.IntPlug( "medianRadius", Gaffer.Plug.Direction.In, 1 )
@@ -344,7 +361,6 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 		self["__OptionOverrides"]["options"]["resolutionMultiplier"]["enabled"].setValue( True )
 		self["__OptionOverrides"]["options"]["overscan"]["enabled"].setValue( True )
 		self["__OptionOverrides"]["options"]["renderCropWindow"]["enabled"].setValue( True )
-		self["__OptionOverrides"]["options"]["cameraBlur"]["enabled"].setValue( True )
 		self["__OptionOverrides"]["options"]["transformBlur"]["enabled"].setValue( True )
 		self["__OptionOverrides"]["options"]["deformationBlur"]["enabled"].setValue( True )
 
@@ -357,6 +373,7 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 		self["__CameraSetup"]["aovs"].setInput( self["aovs"] )
 		self["__CameraSetup"]["normalOffset"].setInput( self["normalOffset"] )
 		self["__CameraSetup"]["tasks"].setInput( self["tasks"] )
+		self["__CameraSetup"]["udims"].setInput( self["udims"] )
 
 		self["__Expression"] = Gaffer.Expression()
 		self["__Expression"].setExpression( 'parent["__CameraSetup"]["taskIndex"] = context.get( "BAKE_WEDGE:index", 0 )', "python" )
@@ -426,13 +443,24 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 		self["__SizeLoop"] = Gaffer.LoopComputeNode()
 		self["__SizeLoop"].setup( Gaffer.IntPlug() )
 
-		self["__SizeMaxExpression"] = Gaffer.Expression()
-		self["__SizeMaxExpression"].setExpression( inspect.cleandoc(
+		# Calling .width() on the ImageReader, and combining it with the previous max size from
+		# the loop is broken across two expressions, since dealing with the format can only be
+		# done from Python, but having Python inside the loop iteration leads to blowing out
+		# the recursion stack
+		self["__imageSize"] = Gaffer.IntPlug()
+		self["__SizeExpression"] = Gaffer.Expression()
+		self["__SizeExpression"].setExpression( inspect.cleandoc(
 			"""
 			f = parent["__ImageReader"]["out"]["format"]
-			parent["__SizeLoop"]["next"] = max( f.width(), parent["__SizeLoop"]["previous"] )
+			parent["__imageSize"] = f.width()
 			"""
 		), "python" )
+
+		self["__SizeMaxExpression"] = Gaffer.Expression()
+		self["__SizeMaxExpression"].setExpression(
+			"parent.__SizeLoop.next = max( int( parent.__imageSize ), parent.__SizeLoop.previous )",
+			"OSL"
+		)
 
 		# Loop over all input files for this output file, and merge them all together
 		self["__ImageLoop"] = Gaffer.LoopComputeNode()
@@ -579,4 +607,3 @@ class ArnoldTextureBake( GafferDispatch.TaskNode ) :
 
 
 IECore.registerRunTimeTyped( ArnoldTextureBake, typeName = "GafferArnold::ArnoldTextureBake" )
-

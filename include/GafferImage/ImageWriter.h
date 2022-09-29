@@ -50,6 +50,7 @@ namespace Gaffer
 {
 	IE_CORE_FORWARDDECLARE( ValuePlug )
 	IE_CORE_FORWARDDECLARE( StringPlug )
+	IE_CORE_FORWARDDECLARE( ContextQuery )
 } // namespace Gaffer
 
 namespace GafferImage
@@ -72,7 +73,7 @@ class GAFFERIMAGE_API ImageWriter : public GafferDispatch::TaskNode
 		ImageWriter( const std::string &name=defaultName<ImageWriter>() );
 		~ImageWriter() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferImage::ImageWriter, ImageWriterTypeId, TaskNode );
+		GAFFER_NODE_DECLARE_TYPE( GafferImage::ImageWriter, ImageWriterTypeId, TaskNode );
 
 		Gaffer::StringPlug *fileNamePlug();
 		const Gaffer::StringPlug *fileNamePlug() const;
@@ -89,27 +90,34 @@ class GAFFERIMAGE_API ImageWriter : public GafferDispatch::TaskNode
 		Gaffer::StringPlug *colorSpacePlug();
 		const Gaffer::StringPlug *colorSpacePlug() const;
 
+		Gaffer::StringPlug *layoutPartNamePlug();
+		const Gaffer::StringPlug *layoutPartNamePlug() const;
+
+		Gaffer::StringPlug *layoutChannelNamePlug();
+		const Gaffer::StringPlug *layoutChannelNamePlug() const;
+
+		Gaffer::BoolPlug *matchDataWindowsPlug();
+		const Gaffer::BoolPlug *matchDataWindowsPlug() const;
+
 		Gaffer::ValuePlug *fileFormatSettingsPlug( const std::string &fileFormat );
 		const Gaffer::ValuePlug *fileFormatSettingsPlug( const std::string &fileFormat ) const;
-
-		IECore::MurmurHash hash( const Gaffer::Context *context ) const override;
-
-		void execute() const override;
 
 		const std::string currentFileFormat() const;
 
 		/// Note that this is intentionally identical to the ImageReader's DefaultColorSpaceFunction
 		/// definition, so that the same function can be used with both nodes.
-		typedef std::function<const std::string ( const std::string &fileName, const std::string &fileFormat, const std::string &dataType, const IECore::CompoundData *metadata )> DefaultColorSpaceFunction;
+		using DefaultColorSpaceFunction = std::function<const std::string ( const std::string &fileName, const std::string &fileFormat, const std::string &dataType, const IECore::CompoundData *metadata )>;
 		static void setDefaultColorSpaceFunction( DefaultColorSpaceFunction f );
 		static DefaultColorSpaceFunction getDefaultColorSpaceFunction();
 
+	protected :
+
+		IECore::MurmurHash hash( const Gaffer::Context *context ) const override;
+		void execute() const override;
+
 	private :
 
-		std::string colorSpace() const;
-
-		ColorSpace *colorSpaceUnpremultedNode();
-		const ColorSpace *colorSpaceUnpremultedNode() const;
+		std::string colorSpace( const std::string &dataType ) const;
 
 		ColorSpace *colorSpaceNode();
 		const ColorSpace *colorSpaceNode() const;
@@ -119,6 +127,10 @@ class GAFFERIMAGE_API ImageWriter : public GafferDispatch::TaskNode
 		static size_t g_firstPlugIndex;
 
 		static DefaultColorSpaceFunction &defaultColorSpaceFunction();
+
+		// Friendship for the bindings
+		friend struct GafferDispatchBindings::Detail::TaskNodeAccessor;
+
 };
 
 IE_CORE_DECLAREPTR( ImageWriter )

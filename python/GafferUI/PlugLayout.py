@@ -40,6 +40,8 @@ import sys
 import functools
 import collections
 
+import IECore
+
 import Gaffer
 import GafferUI
 
@@ -52,8 +54,10 @@ from Qt import QtWidgets
 #	- "<layoutName>:index" controls ordering of plugs within the layout
 #	- "<layoutName>:section" places the plug in a named section of the layout
 #	- "<layoutName>:divider" specifies whether or not a plug should be followed by a divider
-#	- "<layoutName>:activator" the name of an activator to control editability
-#	- "<layoutName>:visibilityActivator" the name of an activator to control visibility
+#	- "<layoutName>:activator" the name of an activator to control editability,
+#	  or a boolean value to control it directly
+#	- "<layoutName>:visibilityActivator" the name of an activator to control visibility,
+#	  or a boolean value to control it directly
 #	- "<layoutName>:accessory" groups as an accessory to the previous widget
 #	- "<layoutName>:width" gives a specific width to the plug's widget
 #
@@ -114,7 +118,7 @@ class PlugLayout( GafferUI.Widget ) :
 
 		# since our layout is driven by metadata, we must respond dynamically
 		# to changes in that metadata.
-		Gaffer.Metadata.plugValueChangedSignal().connect( Gaffer.WeakMethod( self.__plugMetadataChanged ), scoped = False )
+		Gaffer.Metadata.plugValueChangedSignal( self.__node() ).connect( Gaffer.WeakMethod( self.__plugMetadataChanged ), scoped = False )
 
 		# and since our activations are driven by plug values, we must respond
 		# when the plugs are dirtied.
@@ -159,7 +163,9 @@ class PlugLayout( GafferUI.Widget ) :
 	def setContext( self, context ) :
 
 		self.__context = context
-		self.__contextChangedConnection = self.__context.changedSignal().connect( Gaffer.WeakMethod( self.__contextChanged ) )
+		self.__contextChangedConnection = self.__context.changedSignal().connect(
+			Gaffer.WeakMethod( self.__contextChanged ), scoped = True
+		)
 
 		for widget in self.__widgets.values() :
 			self.__applyContext( widget, context )
@@ -196,7 +202,7 @@ class PlugLayout( GafferUI.Widget ) :
 			sectionName = ".".join( sectionPath )
 			d[sectionName] = 1
 
-		return d.keys()
+		return list( d.keys() )
 
 	## Returns the child plugs of the parent in the order in which they
 	# will be laid out, based on "<layoutName>:index" Metadata entries. If
@@ -324,18 +330,29 @@ class PlugLayout( GafferUI.Widget ) :
 
 		activators = { k : v.value for k, v in activators.items() } # convert CompoundData of BoolData to dict of booleans
 
-		def active( activatorName ) :
+		def active( activatorMetadata ) :
 
-			result = True
-			if activatorName :
+			if activatorMetadata is None or activatorMetadata == "" :
+				return True
+			elif isinstance( activatorMetadata, bool ) :
+				return activatorMetadata
+			else :
+				assert( isinstance( activatorMetadata, str ) )
+				activatorName = activatorMetadata
 				result = activators.get( activatorName )
 				if result is None :
 					with self.getContext() :
-						result = self.__metadataValue( self.__parent, self.__layoutName + ":activator:" + activatorName )
+						metadataName = self.__layoutName + ":activator:" + activatorName
+						result = self.__metadataValue( self.__parent, metadataName )
+						if result is None and metadataName not in Gaffer.Metadata.registeredValues( self.__parent ) :
+							IECore.msg(
+								IECore.Msg.Level.Warning, "PlugLayout",
+								"Activator metadata `{}` not registered".format( metadataName )
+							)
 					result = result if result is not None else False
 					activators[activatorName] = result
 
-			return result
+				return result
 
 		for item, widget in self.__widgets.items() :
 			if widget is not None :
@@ -350,8 +367,55 @@ class PlugLayout( GafferUI.Widget ) :
 			# a compute.
 			section.summary = self.__metadataValue( self.__parent, self.__layoutName + ":section:" + section.fullName + ":summary" ) or ""
 
+		section.valuesChanged = False
+
 		for subsection in section.subsections.values() :
 			self.__updateSummariesWalk( subsection )
+			# If one of our subsections has changed, we don't need to
+			# check any of our own plugs, we just propagate the flag.
+			if subsection.valuesChanged :
+				section.valuesChanged = True
+
+		if not section.valuesChanged :
+			# Check our own widgets, this is a little icky, the alternative
+			# would be to iterate our items, reverse engineer the section
+			# then update that, but this allows us to early-out much sooner.
+			for widget in section.widgets :
+				if self.__widgetPlugValuesChanged( widget ) :
+					section.valuesChanged = True
+					break
+
+	@staticmethod
+	def __widgetPlugValuesChanged( widget ) :
+
+		plugs = []
+		if isinstance( widget, GafferUI.PlugWidget ) :
+			widget = widget.plugValueWidget()
+		if hasattr( widget, 'getPlugs' ) :
+			plugs = widget.getPlugs()
+
+		for plug in plugs :
+			if PlugLayout.__plugValueChanged( plug ) :
+				return True
+
+		return False
+
+	@staticmethod
+	def __plugValueChanged( plug ) :
+
+		## \todo This mirrors LabelPlugValueWidget. This doesn't handle child plug defaults/connections
+		# properly. We need to improve NodeAlgo when we have the next API break.
+
+		if plug.direction() == Gaffer.Plug.Direction.Out :
+			return False
+		elif plug.getInput() is not None :
+			return True
+		elif not isinstance( plug, Gaffer.ValuePlug ) :
+			return False
+		elif Gaffer.NodeAlgo.hasUserDefault( plug ) :
+			return not Gaffer.NodeAlgo.isSetToUserDefault( plug )
+		else :
+			return not plug.isSetToDefault()
 
 	def __import( self, path ) :
 
@@ -479,11 +543,9 @@ class PlugLayout( GafferUI.Widget ) :
 		elif hasattr( widget, "plugValueWidget" ) :
 			widget.plugValueWidget().setContext( context )
 
-	def __plugMetadataChanged( self, nodeTypeId, plugPath, key, plug ) :
+	def __plugMetadataChanged( self, plug, key, reason ) :
 
-		parentAffected = isinstance( self.__parent, Gaffer.Plug ) and Gaffer.MetadataAlgo.affectedByChange( self.__parent, nodeTypeId, plugPath, plug )
-		childAffected = Gaffer.MetadataAlgo.childAffectedByChange( self.__parent, nodeTypeId, plugPath, plug )
-		if not parentAffected and not childAffected :
+		if plug != self.__parent and plug.parent() != self.__parent :
 			return
 
 		if key in (
@@ -504,7 +566,7 @@ class PlugLayout( GafferUI.Widget ) :
 
 	def __plugDirtied( self, plug ) :
 
-		if not self.visible() or plug.direction() != plug.Direction.In :
+		if plug.direction() != plug.Direction.In :
 			return
 
 		self.__activationsDirty = True
@@ -555,6 +617,7 @@ class _Section( object ) :
 		self.widgets = []
 		self.subsections = collections.OrderedDict()
 		self.summary = ""
+		self.valuesChanged = False
 
 	def saveState( self, name, value ) :
 
@@ -610,7 +673,8 @@ class _TabLayout( _Layout ) :
 					self.__tabbedContainer._qtWidget().setSizePolicy( QtWidgets.QSizePolicy( QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Expanding ) )
 
 		self.__currentTabChangedConnection = self.__tabbedContainer.currentChangedSignal().connect(
-			Gaffer.WeakMethod( self.__currentTabChanged )
+			Gaffer.WeakMethod( self.__currentTabChanged ),
+			scoped = False
 		)
 
 	def update( self, section ) :
@@ -628,7 +692,7 @@ class _TabLayout( _Layout ) :
 			if tab is None :
 				# Use scroll bars only when the TabLayout is not embedded
 				if self.__embedded :
-					tab = GafferUI.Frame( borderWidth = 0, borderStyle = GafferUI.Frame.BorderStyle.None )
+					tab = GafferUI.Frame( borderWidth = 0, borderStyle = GafferUI.Frame.BorderStyle.None_ )
 				else :
 					tab = GafferUI.ScrolledContainer( borderWidth = 8 )
 					if self.orientation() == GafferUI.ListContainer.Orientation.Vertical :
@@ -641,7 +705,7 @@ class _TabLayout( _Layout ) :
 			updatedTabs[name] = tab
 
 		if existingTabs.keys() != updatedTabs.keys() :
-			with Gaffer.BlockedConnection( self.__currentTabChangedConnection ) :
+			with Gaffer.Signals.BlockedConnection( self.__currentTabChangedConnection ) :
 				del self.__tabbedContainer[:]
 				for name, tab in updatedTabs.items() :
 					self.__tabbedContainer.append( tab, label = name )
@@ -706,9 +770,20 @@ class _CollapsibleLayout( _Layout ) :
 				self.__collapsibles[name] = collapsible
 
 			collapsible.getChild().update( subsection )
+
+			collapsible.setVisible(
+				any( [ w.getVisible() for w in subsection.widgets ] ) or
+				any( [ w.getVisible() for w in collapsible.getChild().__collapsibles.values() ] )
+			)
+
 			collapsible.getCornerWidget().setText(
 				"<small>" + "&nbsp;( " + subsection.summary + " )</small>" if subsection.summary else ""
 			)
+
+			currentValueChanged = collapsible._qtWidget().property( "gafferValueChanged" )
+			if subsection.valuesChanged != currentValueChanged :
+				collapsible._qtWidget().setProperty( "gafferValueChanged", GafferUI._Variant.toVariant( subsection.valuesChanged ) )
+				collapsible._repolish()
 
 			widgets.append( collapsible )
 

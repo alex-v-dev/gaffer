@@ -41,6 +41,7 @@ import time
 import tempfile
 import resource
 import collections
+import six
 
 import IECore
 
@@ -118,10 +119,29 @@ class stats( Gaffer.Application ) :
 					allowEmptyList = True,
 				),
 
+				IECore.StringVectorParameter(
+					name = "context",
+					description = "The Context used during stats evaluation. Note that the frames "
+						"parameter will be used to vary the Context frame entry. Arguments are specified "
+						"in the same format as used by the `execute` app.",
+					defaultValue = IECore.StringVectorData( [] ),
+					userData = {
+						"parser" : {
+							"acceptFlags" : IECore.BoolData( True ),
+						},
+					},
+				),
+
 				IECore.BoolParameter(
 					name = "nodeSummary",
 					description = "Turns on a summary of nodes in the script.",
 					defaultValue = True,
+				),
+
+				IECore.BoolParameter(
+					name = "serialise",
+					description = "Reports serialisation time for the script.",
+					defaultValue = False,
 				),
 
 				IECore.StringParameter(
@@ -130,6 +150,14 @@ class stats( Gaffer.Application ) :
 						"A Render node or TaskPlug on a Render node may also be passed, "
 						"to perform profiling of the render output process without "
 						"performing the actual image generation.",
+					defaultValue = "",
+				),
+
+				IECore.StringParameter(
+					name = "location",
+					description = "The path to a location in the scene. If this is specified "
+						"then that single location will be generated profiled, otherwise "
+						"the entire scene will generated.",
 					defaultValue = "",
 				),
 
@@ -301,7 +329,7 @@ class stats( Gaffer.Application ) :
 		else :
 			self.__vtuneMonitor = None
 
-		self.__output = file( args["outputFile"].value, "w" ) if args["outputFile"].value else sys.stdout
+		self.__output = open( args["outputFile"].value, "w" ) if args["outputFile"].value else sys.stdout
 
 		self.__writeVersion( script )
 
@@ -322,6 +350,9 @@ class stats( Gaffer.Application ) :
 		if args["nodeSummary"].value :
 
 			self.__writeNodes( script )
+
+		if args["serialise"].value :
+			self.__serialise( script, args )
 
 		if args["scene"].value :
 
@@ -447,11 +478,17 @@ class stats( Gaffer.Application ) :
 
 	def __context( self, script, args ) :
 
+		context = Gaffer.Context( script.context() )
+
+		for i in range( 0, len( args["context"] ), 2 ) :
+			entry = args["context"][i].lstrip( "-" )
+			context[entry] = eval( args["context"][i+1] )
+
 		if args["canceller"].value :
 			self.__canceller = IECore.Canceller()
-			return Gaffer.Context( script.context(), self.__canceller )
+			return Gaffer.Context( context, self.__canceller )
 		else :
-			return Gaffer.Context( script.context() )
+			return context
 
 	def __frames( self, script, args ) :
 
@@ -460,6 +497,18 @@ class stats( Gaffer.Application ) :
 			frames = [ script.context().getFrame() ]
 
 		return frames
+
+	def __serialise( self, script, args ) :
+
+		memory = _Memory.maxRSS()
+		# We don't expect serialisation to trigger any processes that the monitors would see,
+		# but we definitely want to know if they do.
+		with self.__performanceMonitor or _NullContextManager(), self.__contextMonitor or _NullContextManager(), self.__vtuneMonitor or _NullContextManager() :
+			with _Timer() as timer :
+				script.serialise()
+
+		self.__timers["Serialisation"] = timer
+		self.__memory["Serialisation"] = _Memory.maxRSS() - memory
 
 	def __writeScene( self, script, args ) :
 
@@ -481,28 +530,38 @@ class stats( Gaffer.Application ) :
 		if args["contextSanitiser"].value :
 			contextSanitiser = GafferSceneTest.ContextSanitiser()
 
+		frames = self.__frames( script, args )
+
 		def computeScene() :
 
 			with self.__context( script, args ) as context :
-				for frame in self.__frames( script, args ) :
+				for frame in frames :
 					context.setFrame( frame )
 
 					if isinstance( scene, GafferDispatch.TaskNode.TaskPlug ) :
+						if args["location"].value :
+							IECore.msg( IECore.Msg.Level.Warning, "stats", "`-location` argument is not compatible with TaskPlugs" )
 						context["scene:render:sceneTranslationOnly"] = IECore.BoolData( True )
 						scene.execute()
 					else :
 						if args["sets"] :
 							GafferScene.SceneAlgo.sets( scene, args["sets"] )
 						else :
-							GafferSceneTest.traverseScene( scene )
+							if args["location"].value :
+								scene.transform( args["location"].value )
+								scene.bound( args["location"].value )
+								scene.attributes( args["location"].value )
+								scene.object( args["location"].value )
+							else :
+								GafferSceneTest.traverseScene( scene )
 
 		if args["preCache"].value :
 			computeScene()
 
 		memory = _Memory.maxRSS()
-		with _Timer() as sceneTimer :
-			with self.__performanceMonitor or _NullContextManager(), self.__contextMonitor or _NullContextManager(), self.__vtuneMonitor or _NullContextManager() :
-				with contextSanitiser :
+		with self.__performanceMonitor or _NullContextManager(), self.__contextMonitor or _NullContextManager(), self.__vtuneMonitor or _NullContextManager() :
+			with contextSanitiser :
+				with _Timer() as sceneTimer :
 					computeScene()
 
 		self.__timers["Scene generation"] = sceneTimer
@@ -529,10 +588,12 @@ class stats( Gaffer.Application ) :
 		if args["contextSanitiser"].value :
 			contextSanitiser = GafferImageTest.ContextSanitiser()
 
+		frames = self.__frames( script, args )
+
 		def computeImage() :
 
 			with self.__context( script, args ) as context :
-				for frame in self.__frames( script, args ) :
+				for frame in frames :
 					context.setFrame( frame )
 					GafferImageTest.processTiles( image )
 
@@ -540,9 +601,9 @@ class stats( Gaffer.Application ) :
 			computeImage()
 
 		memory = _Memory.maxRSS()
-		with _Timer() as imageTimer :
-			with self.__performanceMonitor or _NullContextManager(), self.__contextMonitor or _NullContextManager(), self.__vtuneMonitor or _NullContextManager() :
-				with contextSanitiser :
+		with self.__performanceMonitor or _NullContextManager(), self.__contextMonitor or _NullContextManager(), self.__vtuneMonitor or _NullContextManager() :
+			with contextSanitiser :
+				with _Timer() as imageTimer :
 					computeImage()
 
 		self.__timers["Image generation"] = imageTimer
@@ -576,7 +637,7 @@ class stats( Gaffer.Application ) :
 		memory = _Memory.maxRSS()
 		with _Timer() as taskTimer :
 			with self.__performanceMonitor or _NullContextManager(), self.__contextMonitor or _NullContextManager(), self.__vtuneMonitor or _NullContextManager() :
-				with Gaffer.Context( script.context() ) as context :
+				with self.__context( script, args ) as context :
 					for frame in self.__frames( script, args ) :
 						context.setFrame( frame )
 						dispatcher.dispatch( [ task ] )
@@ -588,7 +649,7 @@ class stats( Gaffer.Application ) :
 
 		objectPool = IECore.ObjectPool.defaultObjectPool()
 
-		items = self.__memory.items()
+		items = list( self.__memory.items() )
 
 		items.extend( [
 			( "", "" ),
@@ -653,21 +714,26 @@ class stats( Gaffer.Application ) :
 
 class _Timer( object ) :
 
+	if six.PY3 :
+		__cpuClock = time.process_time
+	else :
+		__cpuClock = time.clock
+
 	def __enter__( self ) :
 
 		self.__time = time.time()
-		self.__clock = time.clock()
+		self.__cpuTime = self.__cpuClock()
 
 		return self
 
 	def __exit__( self, type, value, traceBack ) :
 
 		self.__time = time.time() - self.__time
-		self.__clock = time.clock() - self.__clock
+		self.__cpuTime = self.__cpuClock() - self.__cpuTime
 
 	def __str__( self ) :
 
-		return "%.3fs (wall), %.3fs (CPU)" % ( self.__time, self.__clock )
+		return "%.3fs (wall), %.3fs (CPU)" % ( self.__time, self.__cpuTime )
 
 class _Memory( object ) :
 

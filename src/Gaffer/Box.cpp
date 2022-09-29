@@ -60,9 +60,9 @@ namespace
 std::unordered_set<const Node *> boxOutPassThroughSources( const Node *parent )
 {
 	std::unordered_set<const Node *> result;
-	for( BoxOutIterator it( parent ); !it.done(); ++it )
+	for( const auto &boxOut : BoxOut::Range( *parent ) )
 	{
-		Plug *plug = (*it)->passThroughPlug();
+		Plug *plug = boxOut->passThroughPlug();
 		while( plug )
 		{
 			if( const Node *node = plug->node() )
@@ -89,7 +89,7 @@ std::unordered_set<const Node *> boxOutPassThroughSources( const Node *parent )
 // Box
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Box );
+GAFFER_NODE_DEFINE_TYPE( Box );
 
 Box::Box( const std::string &name )
 	:	SubGraph( name )
@@ -168,7 +168,7 @@ void Box::exportForReference( const std::string &fileName ) const
 	}
 
 	ContextPtr context = new Context;
-	context->set( "valuePlugSerialiser:resetParentPlugDefaults", true );
+	context->set( "valuePlugSerialiser:omitParentNodePlugValues", true );
 	context->set( "serialiser:includeParentMetadata", true );
 	Context::Scope scopedContext( context.get() );
 
@@ -188,29 +188,29 @@ BoxPtr Box::create( Node *parent, const Set *childNodes )
 	// which should remain where they are.
 	std::unordered_set<const Node *> boxOutPassThroughSources = ::boxOutPassThroughSources( parent );
 	StandardSetPtr verifiedChildNodes = new StandardSet();
-	for( NodeIterator nodeIt( parent ); !nodeIt.done(); ++nodeIt )
+	for( const auto &node : Node::Range( *parent ) )
 	{
-		if( !childNodes->contains( nodeIt->get() ) )
+		if( !childNodes->contains( node.get() ) )
 		{
 			continue;
 		}
-		if( IECore::runTimeCast<BoxIO>( *nodeIt ) )
+		if( IECore::runTimeCast<BoxIO>( node.get() ) )
 		{
 			continue;
 		}
-		if( boxOutPassThroughSources.find( nodeIt->get() ) != boxOutPassThroughSources.end() )
+		if( boxOutPassThroughSources.find( node.get() ) != boxOutPassThroughSources.end() )
 		{
 			continue;
 		}
-		verifiedChildNodes->add( *nodeIt );
+		verifiedChildNodes->add( node );
 	}
 
 	// When a node we're putting in the box has connections to
 	// a node remaining outside, we need to reroute the connection
 	// via a promoted plug. This mapping maps source plugs (be they
 	// internal or external) to promoted plugs.
-	typedef std::pair<const Plug *, Plug *> PlugPair;
-	typedef std::map<const Plug *, Plug *> PlugMap;
+	using PlugPair = std::pair<const Plug *, Plug *>;
+	using PlugMap = std::map<const Plug *, Plug *>;
 	PlugMap plugMap;
 
 	for( size_t i = 0, e = verifiedChildNodes->size(); i < e; i++ )
@@ -219,7 +219,7 @@ BoxPtr Box::create( Node *parent, const Set *childNodes )
 		Node *childNode = static_cast<Node *>( verifiedChildNodes->member( i ) );
 		result->addChild( childNode );
 		// Reroute any connections to external nodes
-		for( RecursivePlugIterator plugIt( childNode ); !plugIt.done(); ++plugIt )
+		for( Plug::RecursiveIterator plugIt( childNode ); !plugIt.done(); ++plugIt )
 		{
 			Plug *plug = plugIt->get();
 			if( plug->direction() == Plug::In )
@@ -249,7 +249,7 @@ BoxPtr Box::create( Node *parent, const Set *childNodes )
 				Plug::OutputContainer outputs = plug->outputs();
 				if( !outputs.empty() )
 				{
-					typedef Plug::OutputContainer::const_iterator OutputIterator;
+					using OutputIterator = Plug::OutputContainer::const_iterator;
 					for( OutputIterator oIt = outputs.begin(), eIt = outputs.end(); oIt != eIt; oIt++ )
 					{
 						Plug *output = *oIt;

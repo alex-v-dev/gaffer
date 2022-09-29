@@ -2,7 +2,11 @@
 
 import os
 import tempfile
-import subprocess32 as subprocess
+import sys
+if os.name == 'posix' and sys.version_info[0] < 3:
+	import subprocess32 as subprocess
+else:
+	import subprocess
 import imath
 import IECore
 
@@ -19,10 +23,7 @@ def __dispatchScript( script, tasks, settings ) :
 		" ".join( settings ),
 		__temporaryDirectory
 		)
-	process = subprocess.Popen( command, shell=True, stderr = subprocess.PIPE )
-	process.wait()
-
-	return process
+	subprocess.check_call( command, shell=True )
 
 # Example: Macbeth Chart
 __dispatchScript(

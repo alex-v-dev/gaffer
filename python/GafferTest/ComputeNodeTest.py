@@ -443,7 +443,7 @@ class ComputeNodeTest( GafferTest.TestCase ) :
 			self.fRan = True
 
 		n = GafferTest.BadNode()
-		c = n.errorSignal().connect( f )
+		c = n.errorSignal().connect( f, scoped = True )
 
 		with IECore.IgnoredExceptions( Exception ) :
 			n["out1"].getValue()
@@ -496,9 +496,9 @@ class ComputeNodeTest( GafferTest.TestCase ) :
 
 		s["n"] = GafferTest.AddNode()
 		s["e1"] = Gaffer.Expression()
-		s["e1"].setExpression( "import time; time.sleep( 1 ); parent['n']['op1'] = 10" )
+		s["e1"].setExpression( "import time; time.sleep( 0.9 ); parent['n']['op1'] = 10" )
 		s["e2"] = Gaffer.Expression()
-		s["e2"].setExpression( "import time; time.sleep( 1 ); parent['n']['op2'] = 20" )
+		s["e2"].setExpression( "import time; time.sleep( 0.9 ); parent['n']['op2'] = 20" )
 
 		cs = GafferTest.CapturingSlot( s["n"].errorSignal() )
 
@@ -561,9 +561,54 @@ class ComputeNodeTest( GafferTest.TestCase ) :
 		# is not an error.
 		self.assertEqual( len( cs ), 0 )
 
+	def testSlowCancellationWarnings( self ) :
+
+		s = Gaffer.ScriptNode()
+
+		s["n"] = GafferTest.AddNode()
+		s["e"] = Gaffer.Expression()
+		s["e"].setExpression( inspect.cleandoc(
+			"""
+			import time
+			parent['n']['op1'] = 10
+			time.sleep( 1.5 )
+			"""
+		) )
+
+		messageHandler = IECore.CapturingMessageHandler()
+
+		def f( context ) :
+
+			with context, messageHandler :
+				s["n"]["sum"].getValue()
+
+		canceller = IECore.Canceller()
+		thread = threading.Thread(
+			target = f,
+			args = [  Gaffer.Context( s.context(), canceller ) ]
+		)
+		thread.start()
+
+		# Give the background thread time to get into the infinite
+		# loop in the Expression, and then cancel it.
+		time.sleep( 0.1 )
+		canceller.cancel()
+		thread.join()
+
+		# Check that we have been warned about the slow cancellation.
+		# Currently we're not smart enough to omit a message only for
+		# the problematic compute - there is a message for each parent
+		# process too.
+		self.assertEqual( len( messageHandler.messages ), 3 )
+		self.assertEqual( messageHandler.messages[0].level, IECore.Msg.Level.Warning )
+		self.assertEqual( messageHandler.messages[0].context, "Process::~Process" )
+		self.assertTrue( messageHandler.messages[0].message.startswith( "Cancellation for `ScriptNode.e.__execute` (computeNode:compute) took" ) )
+
 	class ThrowingNode( Gaffer.ComputeNode ) :
 
 		def __init__( self, name="ThrowingNode" ) :
+
+			self.hashFail = False
 
 			Gaffer.ComputeNode.__init__( self, name )
 
@@ -581,7 +626,10 @@ class ComputeNodeTest( GafferTest.TestCase ) :
 		def hash( self, plug, context, h ) :
 
 			if plug == self["out"] :
-				self["in"].hash( h )
+				if self.hashFail :
+					raise RuntimeError( "HashEeek!" )
+				else:
+					self["in"].hash( h )
 
 		def compute( self, plug, context ) :
 
@@ -622,6 +670,18 @@ class ComputeNodeTest( GafferTest.TestCase ) :
 		self.assertEqual( raised.exception.plug(), thrower["out"] )
 		self.assertEqual( raised.exception.context(), context )
 		self.assertEqual( raised.exception.processType(), "computeNode:compute" )
+
+		# Make sure hash failures are reported correctly as well
+
+		thrower.hashFail = True
+		with Gaffer.Context() as context :
+			context["test"] = 2
+			with six.assertRaisesRegex( self, Gaffer.ProcessException, r'thrower.out : [\s\S]*HashEeek!' ) as raised :
+				add["sum"].getValue()
+
+		self.assertEqual( raised.exception.plug(), thrower["out"] )
+		self.assertEqual( raised.exception.context(), context )
+		self.assertEqual( raised.exception.processType(), "computeNode:hash" )
 
 	def testProcessExceptionNotShared( self ) :
 

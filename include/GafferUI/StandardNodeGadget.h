@@ -101,12 +101,25 @@ class GAFFERUI_API StandardNodeGadget : public NodeGadget
 
 		Imath::Box3f bound() const override;
 
+		/// This currently needs to be public so that AnnotationsGadget can manually account for
+		/// the thick border on focussed StandardNodeGadgets.  This is a bit of a weird dependency:
+		/// the long term solution may involve giving a NodeGadget more responsibility over how
+		/// it's annotations are drawn
+		float focusBorderWidth() const;
+
+		void setHighlighted( bool highlighted ) override;
+
 	protected :
 
-		void doRenderLayer( Layer layer, const Style *style ) const override;
-		bool hasLayer( Layer layer ) const override;
+		StandardNodeGadget( Gaffer::NodePtr node, bool auxillary );
+
+		void renderLayer( Layer layer, const Style *style, RenderReason reason ) const override;
+		unsigned layerMask() const override;
+		Imath::Box3f renderBound() const override;
 
 		const Imath::Color3f *userColor() const;
+
+		void activeForFocusNode( bool active ) override;
 
 	private :
 
@@ -115,6 +128,9 @@ class GAFFERUI_API StandardNodeGadget : public NodeGadget
 
 		NoduleLayout *noduleLayout( Edge edge );
 		const NoduleLayout *noduleLayout( Edge edge ) const;
+
+		LinearContainer *contentsColumn();
+		const LinearContainer *contentsColumn() const;
 
 		LinearContainer *paddingRow();
 		const LinearContainer *paddingRow() const;
@@ -138,13 +154,16 @@ class GAFFERUI_API StandardNodeGadget : public NodeGadget
 
 		ConnectionCreator *closestDragDestination( const DragDropEvent &event ) const;
 
-		void nodeMetadataChanged( IECore::TypeId nodeTypeId, IECore::InternedString key, const Gaffer::Node *node );
+		void nodeMetadataChanged( IECore::InternedString key );
 
 		bool updateUserColor();
+		void updateMinWidth();
 		void updatePadding();
 		void updateNodeEnabled( const Gaffer::Plug *dirtiedPlug = nullptr );
 		void updateIcon();
 		bool updateShape();
+		void updateFocusGadgetVisibility();
+		void updateTextDimming();
 
 		IE_CORE_FORWARDDECLARE( ErrorGadget );
 		ErrorGadget *errorGadget( bool createIfMissing = true );
@@ -159,15 +178,15 @@ class GAFFERUI_API StandardNodeGadget : public NodeGadget
 		// the user with a bigger drag target that is easier
 		// to hit.
 		ConnectionCreator *m_dragDestination;
-		boost::optional<Imath::Color3f> m_userColor;
+		std::optional<Imath::Color3f> m_userColor;
 		bool m_oval;
+		bool m_auxiliary;
+
+		GadgetPtr m_focusGadget;
 
 };
 
 IE_CORE_DECLAREPTR( StandardNodeGadget )
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<StandardNodeGadget> > StandardNodeGadgetIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<StandardNodeGadget> > RecursiveStandardNodeGadgetIterator;
 
 } // namespace GafferUI
 

@@ -135,7 +135,6 @@ from .CameraTweaksTest import CameraTweaksTest
 from .FilterProcessorTest import FilterProcessorTest
 from .UDIMQueryTest import UDIMQueryTest
 from .WireframeTest import WireframeTest
-from .TweakPlugTest import TweakPlugTest
 from .ContextSanitiserTest import ContextSanitiserTest
 from .SetVisualiserTest import SetVisualiserTest
 from .OrientationTest import OrientationTest
@@ -149,6 +148,21 @@ from .EditScopeAlgoTest import EditScopeAlgoTest
 from .LocaliseAttributesTest import LocaliseAttributesTest
 from .ClosestPointSamplerTest import ClosestPointSamplerTest
 from .CurveSamplerTest import CurveSamplerTest
+from .DeleteSetsTest import DeleteSetsTest
+from .UnencapsulateTest import UnencapsulateTest
+from .MotionPathTest import MotionPathTest
+from .FilterQueryTest import FilterQueryTest
+from .TransformQueryTest import TransformQueryTest
+from .BoundQueryTest import BoundQueryTest
+from .ExistenceQueryTest import ExistenceQueryTest
+from .AttributeQueryTest import AttributeQueryTest
+from .NameSwitchTest import NameSwitchTest
+from .CryptomatteTest import CryptomatteTest
+from .ShaderQueryTest import ShaderQueryTest
+from .AttributeTweaksTest import AttributeTweaksTest
+from .OptionTweaksTest import OptionTweaksTest
+from .OptionQueryTest import OptionQueryTest
+from .RenameTest import RenameTest
 
 from .IECoreScenePreviewTest import *
 from .IECoreGLPreviewTest import *

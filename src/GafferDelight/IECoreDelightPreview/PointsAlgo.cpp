@@ -47,7 +47,7 @@ using namespace IECoreDelight;
 namespace
 {
 
-static float g_one = 1.0f;
+float g_one = 1.0f;
 
 void staticParameters( const IECoreScene::PointsPrimitive *object, ParameterList &parameters )
 {
@@ -59,7 +59,8 @@ void staticParameters( const IECoreScene::PointsPrimitive *object, ParameterList
 			&g_one,
 			NSITypeFloat,
 			0,
-			1
+			1,
+			0
 		} );
 	}
 }

@@ -134,7 +134,6 @@ class GAFFER_API NameValuePlug : public Gaffer::ValuePlug
 
 };
 
-typedef FilteredChildIterator<PlugPredicate<Plug::Invalid, NameValuePlug> > NameValuePlugIterator;
 IE_CORE_DECLAREPTR( NameValuePlug );
 
 } // namespace Gaffer

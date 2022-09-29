@@ -102,6 +102,15 @@ from .DeepStateTest import DeepStateTest
 from .EmptyTest import EmptyTest
 from .DeepHoldoutTest import DeepHoldoutTest
 from .DeepRecolorTest import DeepRecolorTest
+from .ContextSanitiserTest import ContextSanitiserTest
+from .SaturationTest import SaturationTest
+from .FormatQueryTest import FormatQueryTest
+from .CreateViewsTest import CreateViewsTest
+from .SelectViewTest import SelectViewTest
+from .DeleteViewsTest import DeleteViewsTest
+from .CopyViewsTest import CopyViewsTest
+from .AnaglyphTest import AnaglyphTest
+from .LookTransformTest import LookTransformTest
 
 if __name__ == "__main__":
 	import unittest

@@ -51,7 +51,7 @@ using namespace IECoreScene;
 using namespace Gaffer;
 using namespace GafferScene;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( FreezeTransform );
+GAFFER_NODE_DEFINE_TYPE( FreezeTransform );
 
 size_t FreezeTransform::g_firstPlugIndex = 0;
 
@@ -60,6 +60,8 @@ FreezeTransform::FreezeTransform( const std::string &name )
 {
 	storeIndexOfNextChild( g_firstPlugIndex );
 	addChild( new M44fPlug( "__transform", Plug::Out ) );
+
+	outPlug()->childBoundsPlug()->setFlags( Plug::AcceptsDependencyCycles, true );
 
 	// pass through the things we don't want to change
 	outPlug()->attributesPlug()->setInput( inPlug()->attributesPlug() );
@@ -87,21 +89,38 @@ void FreezeTransform::affects( const Gaffer::Plug *input, AffectedPlugsContainer
 {
 	FilteredSceneProcessor::affects( input, outputs );
 
-	if( input == inPlug()->transformPlug() )
+	if(
+		input == inPlug()->transformPlug() ||
+		input == outPlug()->transformPlug()
+	)
 	{
 		outputs.push_back( transformPlug() );
 	}
-	else if( input == inPlug()->objectPlug() )
+
+	if(
+		input == filterPlug() ||
+		input == outPlug()->childBoundsPlug() ||
+		input == inPlug()->boundPlug() ||
+		input == transformPlug()
+	)
 	{
-		outputs.push_back( outPlug()->objectPlug() );
+		outputs.push_back( outPlug()->boundPlug() );
 	}
-	else if(
-		input == transformPlug() ||
-		input == filterPlug()
+
+	if(
+		input == filterPlug() ||
+		input == inPlug()->transformPlug()
 	)
 	{
 		outputs.push_back( outPlug()->transformPlug() );
-		outputs.push_back( outPlug()->boundPlug() );
+	}
+
+	if(
+		input == filterPlug() ||
+		input == inPlug()->objectPlug() ||
+		input == transformPlug()
+	)
+	{
 		outputs.push_back( outPlug()->objectPlug() );
 	}
 }
@@ -145,7 +164,7 @@ void FreezeTransform::hashBound( const ScenePath &path, const Gaffer::Context *c
 		// thus changing the bounds - so we must compute them properly from
 		// children.
 		SceneProcessor::hashBound( path, context, parent, h );
-		h.append( hashOfTransformedChildBounds( path, outPlug() ) );
+		outPlug()->childBoundsPlug()->hash( h );
 		// we may also be changing the bounds at this specific location.
 		inPlug()->boundPlug()->hash( h );
 		transformPlug()->hash( h );
@@ -166,7 +185,7 @@ Imath::Box3f FreezeTransform::computeBound( const ScenePath &path, const Gaffer:
 	const unsigned m = filterValue( context );
 	if( m & ( IECore::PathMatcher::AncestorMatch | IECore::PathMatcher::ExactMatch ) )
 	{
-		Box3f result = unionOfTransformedChildBounds( path, outPlug() );
+		Box3f result = outPlug()->childBoundsPlug()->getValue();
 		Box3f b = inPlug()->boundPlug()->getValue();
 		b = transform( b, transformPlug()->getValue() );
 		result.extendBy( b );

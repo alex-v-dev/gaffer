@@ -35,6 +35,8 @@
 #
 ##########################################################################
 
+import six
+
 import Gaffer
 import GafferUI
 
@@ -50,7 +52,10 @@ class Button( GafferUI.Widget ) :
 
 		GafferUI.Widget.__init__( self, QtWidgets.QPushButton(), **kw )
 
+		self.__highlightForHover = False
+
 		self._qtWidget().setAttribute( QtCore.Qt.WA_LayoutUsesWidgetRect )
+		self._qtWidget().setFocusPolicy( QtCore.Qt.TabFocus )
 		# allow return and enter keys to click button
 		self._qtWidget().setAutoDefault( True )
 
@@ -85,7 +90,7 @@ class Button( GafferUI.Widget ) :
 
 	def setText( self, text ) :
 
-		assert( isinstance( text, basestring ) )
+		assert( isinstance( text, six.string_types ) )
 
 		self._qtWidget().setText( text )
 
@@ -95,10 +100,14 @@ class Button( GafferUI.Widget ) :
 
 	def setImage( self, imageOrImageFileName ) :
 
-		assert( isinstance( imageOrImageFileName, ( basestring, GafferUI.Image, type( None ) ) ) )
+		assert( isinstance( imageOrImageFileName, ( six.string_types, GafferUI.Image, type( None ) ) ) )
 
-		if isinstance( imageOrImageFileName, basestring ) :
+		if isinstance( imageOrImageFileName, six.string_types ) :
+			# Avoid our image getting parented to the wrong thing
+			# if our caller is in a `with container` block.
+			GafferUI.Widget._pushParent( None )
 			self.__image = GafferUI.Image( imageOrImageFileName )
+			GafferUI.Widget._popParent()
 		else :
 			self.__image = imageOrImageFileName
 
@@ -120,6 +129,16 @@ class Button( GafferUI.Widget ) :
 	def getHasFrame( self ) :
 
 		return self._qtWidget().property( "gafferWithFrame" )
+
+	def setEnabled( self, enabled ) :
+
+		# Once we're disabled, mouse leave events will be skipped, and we'll
+		# remain in a highlighted state once re-enabled.
+		if not enabled and self.__highlightForHover :
+			self.__highlightForHover = False
+			self.__updateIcon()
+
+		GafferUI.Widget.setEnabled( self, enabled )
 
 	def clickedSignal( self ) :
 
@@ -144,22 +163,19 @@ class Button( GafferUI.Widget ) :
 			self._qtWidget().setIcon( QtGui.QIcon() )
 			return
 
-		if not self.getHighlighted() :
-			pixmap = self.__image._qtPixmap()
-		else :
-			pixmap = self.__image._qtPixmapHighlighted()
-
 		# Qt's built-in disabled state generation doesn't work well with dark schemes
-		icon = QtGui.QIcon( pixmap )
-		icon.addPixmap( self.__image._qtPixmapDisabled(), QtGui.QIcon.Disabled )
-
+		# There is no built-in support for QtGui.QIcon.Active in the default
+		# painter, which is why we have to juggle it here.
+		icon = self.__image._qtIcon( highlighted = self.getHighlighted() or self.__highlightForHover )
 		self._qtWidget().setIcon( icon )
-		self._qtWidget().setIconSize( pixmap.size() )
+		self._qtWidget().setIconSize( self.__image._qtPixmap().size() )
 
 	def __enter( self, widget ) :
 
-		self.setHighlighted( True )
+		self.__highlightForHover = True
+		self.__updateIcon()
 
 	def __leave( self, widget ) :
 
-		self.setHighlighted( False )
+		self.__highlightForHover = False
+		self.__updateIcon()

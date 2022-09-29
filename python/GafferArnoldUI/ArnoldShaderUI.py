@@ -42,11 +42,12 @@ import collections
 import arnold
 
 import IECore
-import imath
 import IECoreArnold
+import imath
 
 import Gaffer
 import GafferUI
+import GafferSceneUI
 import GafferArnold
 
 ##########################################################################
@@ -216,6 +217,17 @@ def __translateNodeMetadata( nodeEntry ) :
 	if url is not None :
 		__metadata[nodeName]["documentation:url"] = url
 
+	# Icon. There doesn't appear to be a standard for this, so
+	# we support "gaffer.icon" and "gaffer.iconScale".
+
+	icon = __aiMetadataGetStr( nodeEntry, None, "gaffer.icon" )
+	if icon is not None :
+		__metadata[nodeName]["icon"] = icon
+
+	iconScale = __aiMetadataGetFlt( nodeEntry, None, "gaffer.iconScale" )
+	if iconScale is not None :
+		__metadata[nodeName]["iconScale"] = iconScale
+
 	paramIt = arnold.AiNodeEntryGetParamIterator( nodeEntry )
 	while not arnold.AiParamIteratorFinished( paramIt ) :
 
@@ -223,6 +235,10 @@ def __translateNodeMetadata( nodeEntry ) :
 		# arnold metadata entries.
 		param = arnold.AiParamIteratorGetNext( paramIt )
 		paramName = arnold.AiParamGetName( param )
+		if paramName == "name" :
+			# Arnold node name, never represented as a plug in Gaffer
+			continue
+
 		paramPath = nodeName + ".parameters." + paramName
 		paramType = arnold.AiParamGetType( param )
 
@@ -287,6 +303,14 @@ def __translateNodeMetadata( nodeEntry ) :
 				parent = paramPath.rsplit( '.', 1 )[0]
 				__metadata[parent]["layout:section:%s:collapsed" % page] = collapsed
 
+		if (
+			arnold.AiNodeEntryGetType( nodeEntry ) == arnold.AI_NODE_LIGHT and
+			__aiMetadataGetStr( nodeEntry, paramName, "gaffer.plugType" ) != ""
+		) :
+			GafferSceneUI.LightEditor.registerParameter(
+				"ai:light", paramName, page
+			)
+
 		# Label from OSL "label"
 		label = __aiMetadataGetStr( nodeEntry, paramName, "label" )
 		if label is None :
@@ -349,10 +373,28 @@ def __translateNodeMetadata( nodeEntry ) :
 			nodeName, _, plugName = paramPath.split( "." )
 			Gaffer.Metadata.registerValue( "ai:surface:%s:%s" % ( nodeName, plugName ), "userDefault", userDefault )
 
+		# Activator from Gaffer-specific metadata
+
+		def addActivator( activator ) :
+			parentActivator = "layout:activator:" + activator
+
+			if parentActivator not in __metadata[nodeName + ".parameters"] :
+				activatorCode = __aiMetadataGetStr( nodeEntry, None, "gaffer.layout.activator." + activator )
+				__metadata[nodeName + ".parameters"][parentActivator] = eval( "lambda parameters : " + activatorCode )
+
+		activator = __aiMetadataGetStr( nodeEntry, paramName, "gaffer.layout.activator" )
+		if activator is not None :
+			addActivator( activator )
+			__metadata[paramPath]["layout:activator"] = activator
+
+		visibilityActivator = __aiMetadataGetStr( nodeEntry, paramName, "gaffer.layout.visibilityActivator" )
+		if visibilityActivator is not None :
+			addActivator( visibilityActivator )
+			__metadata[paramPath]["layout:visibilityActivator"] = visibilityActivator
 
 with IECoreArnold.UniverseBlock( writable = False ) :
 
-	nodeIt = arnold.AiUniverseGetNodeEntryIterator( arnold.AI_NODE_SHADER | arnold.AI_NODE_LIGHT | arnold.AI_NODE_COLOR_MANAGER )
+	nodeIt = arnold.AiUniverseGetNodeEntryIterator( arnold.AI_NODE_SHADER | arnold.AI_NODE_LIGHT | arnold.AI_NODE_COLOR_MANAGER | arnold.AI_NODE_DRIVER )
 	while not arnold.AiNodeEntryIteratorFinished( nodeIt ) :
 
 		__translateNodeMetadata( arnold.AiNodeEntryIteratorGetNext( nodeIt ) )
@@ -398,15 +440,20 @@ def __plugMetadata( plug, name ) :
 		return True
 
 	node = plug.node()
+	relativeName = plug.relativeName( node )
 	if isinstance( node, GafferArnold.ArnoldShader ) :
-		key = plug.node()["name"].getValue() + "." + plug.relativeName( node )
+		key = plug.node()["name"].getValue() + "." + relativeName
 	else :
 		# Other nodes hold an internal shader
-		key = plug.node()["__shader"]["name"].getValue() + "." + plug.relativeName( node )
+		key = plug.node()["__shader"]["name"].getValue() + "." + relativeName
 
-	return __metadata[key].get( name )
+	result = __metadata[key].get( name )
+	if callable( result ) :
+		return result( plug )
+	else :
+		return result
 
-for nodeType in ( GafferArnold.ArnoldShader, GafferArnold.ArnoldLight, GafferArnold.ArnoldMeshLight, GafferArnold.ArnoldColorManager ) :
+for nodeType in ( GafferArnold.ArnoldShader, GafferArnold.ArnoldLight, GafferArnold.ArnoldMeshLight, GafferArnold.ArnoldColorManager, GafferArnold.ArnoldLightFilter ) :
 
 	nodeKeys = set()
 	parametersPlugKeys = set()

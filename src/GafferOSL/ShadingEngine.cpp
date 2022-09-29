@@ -46,7 +46,6 @@
 
 #include "IECore/MessageHandler.h"
 #include "IECore/SimpleTypedData.h"
-#include "IECore/SplineData.h"
 #include "IECore/VectorTypedData.h"
 
 #include "OSL/genclosure.h"
@@ -82,7 +81,7 @@ using namespace GafferOSL;
 
 // keyword matrix parameter macro. reference: OSL/genclosure.h
 #define CLOSURE_MATRIX_KEYPARAM(st, fld, key) \
-    { TypeDesc::TypeMatrix44, (int)reckless_offsetof(st, fld), key, fieldsize(st, fld) }
+	{ TypeDesc::TypeMatrix44, (int)reckless_offsetof(st, fld), key, fieldsize(st, fld) }
 
 //////////////////////////////////////////////////////////////////////////
 // Conversion utilities
@@ -282,19 +281,21 @@ class RenderState
 			const Gaffer::Context *context
 		)
 		{
-			for( CompoundDataMap::const_iterator it = shadingPoints->readable().begin(),
-				 eIt = shadingPoints->readable().end(); it != eIt; ++it )
+			for(
+				CompoundDataMap::const_iterator it = shadingPoints->readable().begin(),
+				eIt = shadingPoints->readable().end(); it != eIt; ++it
+			)
 			{
 				UserData userData;
-				userData.dataView = IECoreImage::OpenImageIOAlgo::DataView( it->second.get() );
+				userData.dataView = IECoreImage::OpenImageIOAlgo::DataView( it->second.get(), /* createUStrings = */ true );
 				if( userData.dataView.data )
 				{
+					userData.numValues = std::max( userData.dataView.type.arraylen, 1 );
 					if( userData.dataView.type.arraylen )
 					{
 						// we unarray the TypeDesc so we can use it directly with
 						// convertValue() in get_userdata().
 						userData.dataView.type.unarray();
-						userData.array = true;
 					}
 					m_userData.insert( make_pair( ustring( it->first.c_str() ), userData ) );
 				}
@@ -307,13 +308,14 @@ class RenderState
 
 			for( const auto &name : contextVariablesNeeded )
 			{
+				DataPtr contextEntryData = context->getAsData( name.string(), nullptr );
 				m_contextVariables.insert(
 					make_pair(
 						ustring( name.c_str() ),
-						IECoreImage::OpenImageIOAlgo::DataView(
-							context->get<Data>( name.string(), nullptr ),
-							/* createUStrings = */ true
-						)
+						ContextData{
+							IECoreImage::OpenImageIOAlgo::DataView( contextEntryData.get(), /* createUStrings = */ true ),
+							contextEntryData
+						}
 					)
 				);
 			}
@@ -327,7 +329,7 @@ class RenderState
 				return false;
 			}
 
-			return ShadingSystem::convert_value( value, type, it->second.data, it->second.type );
+			return ShadingSystem::convert_value( value, type, it->second.dataView.data, it->second.dataView.type );
 		}
 
 		bool userData( size_t pointIndex, ustring name, TypeDesc type, void *value ) const
@@ -355,10 +357,7 @@ class RenderState
 			}
 
 			const char *src = static_cast<const char *>( it->second.dataView.data );
-			if( it->second.array )
-			{
-				src += pointIndex * it->second.dataView.type.elementsize();
-			}
+			src += std::min( pointIndex, it->second.numValues - 1 ) * it->second.dataView.type.elementsize();
 
 			return convertValue( value, type, src,  it->second.dataView.type );
 		}
@@ -387,22 +386,23 @@ class RenderState
 
 	private :
 
-		typedef boost::unordered_map< OIIO::ustring, ShadingEngine::Transform, OIIO::ustringHash > RenderStateTransforms;
+		using RenderStateTransforms = boost::unordered_map< OIIO::ustring, ShadingEngine::Transform, OIIO::ustringHash>;
 		RenderStateTransforms m_transforms;
 
 		struct UserData
 		{
-			UserData()
-				:	array( false )
-			{
-			}
-
 			IECoreImage::OpenImageIOAlgo::DataView dataView;
-			bool array;
+			size_t numValues;
+		};
+
+		struct ContextData
+		{
+			IECoreImage::OpenImageIOAlgo::DataView dataView;
+			ConstDataPtr dataStorage;
 		};
 
 		container::flat_map<ustring, UserData, OIIO::ustringPtrIsLess> m_userData;
-		container::flat_map<ustring, IECoreImage::OpenImageIOAlgo::DataView, OIIO::ustringPtrIsLess> m_contextVariables;
+		container::flat_map<ustring, ContextData, OIIO::ustringPtrIsLess> m_contextVariables;
 
 };
 
@@ -479,6 +479,11 @@ class RendererServices : public OSL::RendererServices
 
 			if( object == g_contextVariableAttributeScope )
 			{
+				if( derivatives )
+				{
+					memset( (char*)value + type.size(), 0, 2 * type.size() );
+				}
+
 				return threadRenderState->renderState.contextVariable( name, type, value );
 			}
 
@@ -499,6 +504,12 @@ class RendererServices : public OSL::RendererServices
 			{
 				return false;
 			}
+
+			if( derivatives )
+			{
+				memset( (char*)value + type.size(), 0, 2 * type.size() );
+			}
+
 			return threadRenderState->renderState.userData( threadRenderState->pointIndex,  name, type, value );
 		}
 
@@ -558,7 +569,7 @@ struct DebugParameters
 // Must be held in order to modify the shading system.
 // Should not be acquired before calling shadingSystem(),
 // since shadingSystem() itself will use it.
-typedef tbb::spin_mutex ShadingSystemWriteMutex;
+using ShadingSystemWriteMutex = tbb::spin_mutex;
 ShadingSystemWriteMutex g_shadingSystemWriteMutex;
 
 OSL::ShadingSystem *shadingSystem()
@@ -631,23 +642,6 @@ OSL::ShadingSystem *shadingSystem()
 	return g_shadingSystem;
 }
 
-// This just exists to ensure that release is called
-struct ShadingContextWrapper
-{
-
-	ShadingContextWrapper()
-		:	shadingContext( ::shadingSystem()->get_context() )
-	{
-	}
-
-	~ShadingContextWrapper()
-	{
-		::shadingSystem()->release_context( shadingContext );
-	}
-
-	ShadingContext *shadingContext;
-};
-
 } // namespace
 
 
@@ -694,7 +688,7 @@ class ShadingResults
 			void *basePointer;
 		};
 
-		typedef container::flat_map<ustring, DebugResult, OIIO::ustringPtrIsLess> DebugResultsMap;
+		using DebugResultsMap = container::flat_map<ustring, DebugResult, OIIO::ustringPtrIsLess>;
 
 		void addResult( size_t pointIndex, const ClosureColor *result, DebugResultsMap &threadCache )
 		{
@@ -850,6 +844,28 @@ class ShadingResults
 
 };
 
+// Thread specific information needed during shading - this includes both the per-thread result cache,
+// and the OSL machinery that needs to be stored per "renderer-thread"
+struct ThreadInfo
+{
+	ThreadInfo()
+		: oslThreadInfo( ::shadingSystem()->create_thread_info() ),
+		  shadingContext( ::shadingSystem()->get_context( oslThreadInfo ) )
+	{
+	}
+
+	~ThreadInfo()
+	{
+		::shadingSystem()->release_context( shadingContext );
+		::shadingSystem()->destroy_thread_info( oslThreadInfo );
+	}
+
+	ShadingResults::DebugResultsMap debugResults;
+	OSL::PerThreadInfo *oslThreadInfo;
+	OSL::ShadingContext *shadingContext;
+};
+
+
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
@@ -859,61 +875,10 @@ class ShadingResults
 namespace
 {
 
-template<typename Spline>
-void declareSpline( const InternedString &name, const Spline &spline, ShadingSystem *shadingSystem )
-{
-	vector<typename Spline::XType> positions;
-	vector<typename Spline::YType> values;
-	positions.reserve( spline.points.size() );
-	values.reserve( spline.points.size() );
-	for( typename Spline::PointContainer::const_iterator it = spline.points.begin(), eIt = spline.points.end(); it != eIt; ++it )
-	{
-		positions.push_back( it->first );
-		values.push_back( it->second );
-	}
-
-	const char *basis = "catmull-rom";
-	if( spline.basis == Spline::Basis::bezier() )
-	{
-		basis = "bezier";
-	}
-	else if( spline.basis == Spline::Basis::bSpline() )
-	{
-		basis = "bspline";
-	}
-	else if( spline.basis == Spline::Basis::linear() )
-	{
-		basis = "linear";
-	}
-
-    OSLShader::prepareSplineCVsForOSL( positions, values, basis );
-
-	TypeDesc positionsType = TypeDescFromType<typename Spline::XType>::typeDesc();
-	TypeDesc valuesType = TypeDescFromType<typename Spline::YType>::typeDesc();
-	positionsType.arraylen = positions.size();
-	valuesType.arraylen = values.size();
-
-	shadingSystem->Parameter( name.string() + "Positions", positionsType, &positions.front() );
-	shadingSystem->Parameter( name.string() + "Values", valuesType, &values.front() );
-	shadingSystem->Parameter( name.string() + "Basis", TypeDesc::TypeString, &basis );
-
-}
-
 void declareParameters( const CompoundDataMap &parameters, ShadingSystem *shadingSystem )
 {
 	for( CompoundDataMap::const_iterator it = parameters.begin(), eIt = parameters.end(); it != eIt; ++it )
 	{
-		if( const SplinefColor3fData *spline = runTimeCast<const SplinefColor3fData>( it->second.get() ) )
-		{
-			declareSpline( it->first, spline->readable(), shadingSystem );
-			continue;
-		}
-		else if( const SplineffData *spline = runTimeCast<const SplineffData>( it->second.get() ) )
-		{
-			declareSpline( it->first, spline->readable(), shadingSystem );
-			continue;
-		}
-
 		IECoreImage::OpenImageIOAlgo::DataView dataView( it->second.get() );
 		if( dataView.data )
 		{
@@ -938,7 +903,7 @@ void declareParameters( const CompoundDataMap &parameters, ShadingSystem *shadin
 template <typename T>
 static T uniformValue( const IECore::CompoundData *points, const char *name )
 {
-	typedef TypedData<T> DataType;
+	using DataType = TypedData<T>;
 	const DataType *d = points->member<DataType>( name );
 	if( d )
 	{
@@ -953,7 +918,7 @@ static T uniformValue( const IECore::CompoundData *points, const char *name )
 template<typename T>
 static const T *varyingValue( const IECore::CompoundData *points, const char *name )
 {
-	typedef TypedData<vector<T> > DataType;
+	using DataType = TypedData<vector<T> >;
 	const DataType *d = points->member<DataType>( name );
 	if( d )
 	{
@@ -970,13 +935,9 @@ static const T *varyingValue( const IECore::CompoundData *points, const char *na
 ShadingEngine::ShadingEngine( const IECoreScene::ShaderNetwork *shaderNetwork )
 	:	m_hash( shaderNetwork->Object::hash() ), m_timeNeeded( false ), m_unknownAttributesNeeded( false ), m_hasDeformation( false )
 {
-	ShaderNetworkPtr networkCopy;
-	if( true ) /// \todo Make conditional on OSL < 1.10
-	{
-		networkCopy = shaderNetwork->copy();
-		IECoreScene::ShaderNetworkAlgo::convertOSLComponentConnections( networkCopy.get() );
-		shaderNetwork = networkCopy.get();
-	}
+	ShaderNetworkPtr networkCopy = shaderNetwork->copy();
+	IECoreScene::ShaderNetworkAlgo::convertOSLComponentConnections( networkCopy.get(), OSL_VERSION );
+	shaderNetwork = networkCopy.get();
 
 	ShadingSystem *shadingSystem = ::shadingSystem();
 
@@ -1006,7 +967,11 @@ ShadingEngine::ShadingEngine( const IECoreScene::ShaderNetwork *shaderNetwork )
 
 				// Declare this shader along with its parameters and connections.
 
-				declareParameters( shader->parameters(), shadingSystem );
+				IECore::ConstCompoundDataPtr expandedParameters =
+					IECoreScene::ShaderNetworkAlgo::expandSplineParameters(
+						shader->parametersData()
+					);
+				declareParameters( expandedParameters->readable(), shadingSystem );
 				shadingSystem->Shader( "surface", shader->getName().c_str(), handle.c_str() );
 
 				for( const auto &c : shaderNetwork->inputConnections( handle ) )
@@ -1128,15 +1093,7 @@ void ShadingEngine::hash( IECore::MurmurHash &h ) const
 		}
 		for( const auto &name : m_contextVariablesNeeded )
 		{
-			const IECore::Data *d = context->get<IECore::Data>( name, nullptr );
-			if( d )
-			{
-				d->hash( h );
-			}
-			else
-			{
-				h.append( 0 );
-			}
+			h.append( context->variableHash( name ) );
 		}
 	}
 }
@@ -1162,7 +1119,7 @@ IECore::CompoundDataPtr ShadingEngine::shade( const IECore::CompoundData *points
 	// been provided.
 
 	ShaderGlobals shaderGlobals;
-	memset( &shaderGlobals, 0, sizeof( ShaderGlobals ) );
+	memset( (void *)&shaderGlobals, 0, sizeof( ShaderGlobals ) );
 
 	const Gaffer::Context *context = Gaffer::Context::current();
 	shaderGlobals.time = context->getTime();
@@ -1210,17 +1167,16 @@ IECore::CompoundDataPtr ShadingEngine::shade( const IECore::CompoundData *points
 
 	// Iterate over the input points, doing the shading as we go
 
-	typedef tbb::enumerable_thread_specific<ShadingResults::DebugResultsMap> ThreadLocalDebugResults;
-	ThreadLocalDebugResults debugResultsCache;
+	tbb::enumerable_thread_specific<ThreadInfo> threadInfoCache;
 
 	const IECore::Canceller *canceller = context->canceller();
 
 	ShadingSystem *shadingSystem = ::shadingSystem();
 	ShaderGroup &shaderGroup = **static_cast<ShaderGroupRef *>( m_shaderGroupRef );
 
-	auto f = [&shadingSystem, &renderState, &results, &shaderGlobals, &p, &u, &v, &uv, &n, &shaderGroup, &debugResultsCache, canceller]( const tbb::blocked_range<size_t> &r )
+	auto f = [&shadingSystem, &renderState, &results, &shaderGlobals, &p, &u, &v, &uv, &n, &shaderGroup, &threadInfoCache, canceller]( const tbb::blocked_range<size_t> &r )
 	{
-		ThreadLocalDebugResults::reference resultCache = debugResultsCache.local();
+		ThreadInfo &threadInfo = threadInfoCache.local();
 
 		ThreadRenderState threadRenderState( renderState );
 
@@ -1228,7 +1184,6 @@ IECore::CompoundDataPtr ShadingEngine::shade( const IECore::CompoundData *points
 
 		threadShaderGlobals.renderstate = &threadRenderState;
 
-		ShadingContextWrapper contextWrapper;
 		for( size_t i = r.begin(); i < r.end(); ++i )
 		{
 			IECore::Canceller::check( canceller );
@@ -1260,9 +1215,9 @@ IECore::CompoundDataPtr ShadingEngine::shade( const IECore::CompoundData *points
 			threadShaderGlobals.Ci = nullptr;
 
 			threadRenderState.pointIndex = i;
-			shadingSystem->execute( contextWrapper.shadingContext, shaderGroup, threadShaderGlobals );
+			shadingSystem->execute( threadInfo.shadingContext, shaderGroup, threadShaderGlobals );
 
-			results.addResult( i, threadShaderGlobals.Ci, resultCache );
+			results.addResult( i, threadShaderGlobals.Ci, threadInfo.debugResults );
 		}
 	};
 

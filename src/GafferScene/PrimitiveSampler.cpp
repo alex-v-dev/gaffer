@@ -38,8 +38,6 @@
 
 #include "GafferScene/SceneAlgo.h"
 
-#include "Gaffer/Private/IECorePreview/ParallelAlgo.h"
-
 #include "IECoreScene/MeshAlgo.h"
 #include "IECoreScene/MeshPrimitive.h"
 #include "IECoreScene/PrimitiveEvaluator.h"
@@ -157,7 +155,7 @@ OutputVariableFunction addPrimitiveVariable( Primitive *outputPrimitive, const s
 // Sampler
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( PrimitiveSampler );
+GAFFER_NODE_DEFINE_TYPE( PrimitiveSampler );
 
 size_t PrimitiveSampler::g_firstPlugIndex = 0;
 
@@ -231,11 +229,11 @@ bool PrimitiveSampler::affectsProcessedObject( const Gaffer::Plug *input ) const
 {
 	return
 		Deformer::affectsProcessedObject( input ) ||
-		input == sourcePlug() ||
 		input == sourceLocationPlug() ||
 		input == primitiveVariablesPlug() ||
 		input == prefixPlug() ||
 		input == statusPlug() ||
+		input == sourcePlug()->existsPlug() ||
 		input == sourcePlug()->objectPlug() ||
 		input == inPlug()->transformPlug() ||
 		input == sourcePlug()->transformPlug() ||
@@ -257,7 +255,7 @@ void PrimitiveSampler::hashProcessedObject( const ScenePath &path, const Gaffer:
 
 	ScenePlug::ScenePath sourcePath;
 	ScenePlug::stringToPath( sourceLocation, sourcePath );
-	if( !SceneAlgo::exists( sourcePlug(), sourcePath ) )
+	if( !sourcePlug()->exists( sourcePath ) )
 	{
 		return;
 	}
@@ -296,7 +294,7 @@ IECore::ConstObjectPtr PrimitiveSampler::computeProcessedObject( const ScenePath
 
 	ScenePlug::ScenePath sourcePath;
 	ScenePlug::stringToPath( sourceLocation, sourcePath );
-	if( !SceneAlgo::exists( sourcePlug(), sourcePath ) )
+	if( !sourcePlug()->exists( sourcePath ) )
 	{
 		return inputObject;
 	}
@@ -311,7 +309,7 @@ IECore::ConstObjectPtr PrimitiveSampler::computeProcessedObject( const ScenePath
 	ConstPrimitivePtr preprocessedSourcePrimitive = sourcePrimitive;
 	if( auto mesh = runTimeCast<const MeshPrimitive>( preprocessedSourcePrimitive.get() ) )
 	{
-		preprocessedSourcePrimitive = MeshAlgo::triangulate( mesh );
+		preprocessedSourcePrimitive = MeshAlgo::triangulate( mesh, context->canceller() );
 	}
 	PrimitiveEvaluatorPtr evaluator = PrimitiveEvaluator::create( preprocessedSourcePrimitive );
 	if( !evaluator )
@@ -370,24 +368,16 @@ IECore::ConstObjectPtr PrimitiveSampler::computeProcessedObject( const ScenePath
 		}
 	};
 
-	/// \todo We should be implementing `ComputeNode::computeCachePolicy()` instead
-	/// of doing our own isolation here, and we might even prefer the `TaskCollaboration`
-	/// that would provide. But we might also be filtered to only affect a single
-	/// object in an entire scene, and it seems that changing cache policy for
-	/// `outPlug()->objectPlug()` might give unwanted overhead for the pass-through
-	/// computations (particulary if we used `TaskCollaboration`). We might be able to
-	/// deal with this in ObjectProcessor by performing the non-pass-through computations
-	/// on an internal plug with a custom policy. But we leave that for another time.
-	IECorePreview::ParallelAlgo::isolate(
-		[&] () {
-			tbb::task_group_context taskGroupContext( tbb::task_group_context::isolated );
-			parallel_for( blocked_range<size_t>( 0, size ), rangeSampler, taskGroupContext );
-		}
-	);
+	tbb::task_group_context taskGroupContext( tbb::task_group_context::isolated );
+	parallel_for( blocked_range<size_t>( 0, size ), rangeSampler, taskGroupContext );
 
 	return outputPrimitive;
 }
 
+Gaffer::ValuePlug::CachePolicy PrimitiveSampler::processedObjectComputeCachePolicy() const
+{
+	return ValuePlug::CachePolicy::TaskCollaboration;
+}
 
 bool PrimitiveSampler::adjustBounds() const
 {
@@ -406,4 +396,3 @@ bool PrimitiveSampler::affectsSamplingFunction( const Gaffer::Plug *input ) cons
 void PrimitiveSampler::hashSamplingFunction( IECore::MurmurHash &h ) const
 {
 }
-

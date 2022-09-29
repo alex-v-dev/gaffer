@@ -73,8 +73,9 @@ class GAFFERUI_API StandardNodule : public Nodule
 
 	protected :
 
-		bool hasLayer( Layer layer ) const override;
-		void doRenderLayer( Layer layer, const Style *style ) const override;
+		void renderLayer( Layer layer, const Style *style, RenderReason reason ) const override;
+		unsigned layerMask() const override;
+		Imath::Box3f renderBound() const override;
 
 		void renderLabel( const Style *style ) const;
 
@@ -93,7 +94,7 @@ class GAFFERUI_API StandardNodule : public Nodule
 
 	private :
 
-		void plugMetadataChanged( IECore::TypeId nodeTypeId, const IECore::StringAlgo::MatchPattern &plugPath, IECore::InternedString key, const Gaffer::Plug *plug );
+		void plugMetadataChanged( const Gaffer::Plug *plug, IECore::InternedString key );
 
 		bool updateUserColor();
 
@@ -101,16 +102,13 @@ class GAFFERUI_API StandardNodule : public Nodule
 		bool m_draggingConnection;
 		Imath::V3f m_dragPosition;
 		Imath::V3f m_dragTangent;
-		boost::optional<Imath::Color3f> m_userColor;
+		std::optional<Imath::Color3f> m_userColor;
 
 		static NoduleTypeDescription<StandardNodule> g_noduleTypeDescription;
 
 };
 
 IE_CORE_DECLAREPTR( StandardNodule );
-
-typedef Gaffer::FilteredChildIterator<Gaffer::TypePredicate<StandardNodule> > StandardNoduleIterator;
-typedef Gaffer::FilteredRecursiveChildIterator<Gaffer::TypePredicate<StandardNodule> > RecursiveStandardNoduleIterator;
 
 } // namespace GafferUI
 

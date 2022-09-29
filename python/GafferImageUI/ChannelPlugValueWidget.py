@@ -103,6 +103,8 @@ class ChannelPlugValueWidget( GafferUI.PlugValueWidget ) :
 				if channel not in availableChannels :
 					availableChannels.append( channel )
 
+		availableChannels = GafferImage.ImageAlgo.sortedChannelNames( availableChannels )
+
 		extraChannels = Gaffer.Metadata.value( self.getPlug(), "channelPlugValueWidget:extraChannels" )
 		if extraChannels:
 			availableChannels.append( "___DIVIDER___" )

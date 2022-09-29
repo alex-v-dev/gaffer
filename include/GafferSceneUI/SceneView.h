@@ -45,6 +45,7 @@
 #include "GafferScene/PathFilter.h"
 #include "GafferScene/ScenePlug.h"
 
+#include "GafferUI/FPSGadget.h"
 #include "GafferUI/View.h"
 
 #include <functional>
@@ -74,7 +75,7 @@ class GAFFERSCENEUI_API SceneView : public GafferUI::View
 		SceneView( const std::string &name = defaultName<SceneView>() );
 		~SceneView() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( GafferSceneUI::SceneView, SceneViewTypeId, GafferUI::View );
+		GAFFER_NODE_DECLARE_TYPE( GafferSceneUI::SceneView, SceneViewTypeId, GafferUI::View );
 
 		Gaffer::IntPlug *minimumExpansionDepthPlug();
 		const Gaffer::IntPlug *minimumExpansionDepthPlug() const;
@@ -102,10 +103,14 @@ class GAFFERSCENEUI_API SceneView : public GafferUI::View
 		/// empty bound.
 		const Imath::Box2f &resolutionGate() const;
 
-		typedef std::function<GafferScene::SceneProcessorPtr ()> ShadingModeCreator;
+		using ShadingModeCreator = std::function<GafferScene::SceneProcessorPtr ()>;
 
 		static void registerShadingMode( const std::string &name, ShadingModeCreator );
 		static void registeredShadingModes( std::vector<std::string> &names );
+
+		using RendererSettingsCreator = std::function<GafferScene::SceneProcessorPtr ()>;
+		static void registerRenderer( const std::string &name, const RendererSettingsCreator &settingsCreator );
+		static std::vector<std::string> registeredRenderers();
 
 	protected :
 
@@ -123,10 +128,12 @@ class GAFFERSCENEUI_API SceneView : public GafferUI::View
 		void transferSelectionToContext();
 		void plugSet( Gaffer::Plug *plug );
 
-		boost::signals::scoped_connection m_selectionChangedConnection;
+		Gaffer::Signals::ScopedConnection m_selectionChangedConnection;
 
 		SceneGadgetPtr m_sceneGadget;
 
+		class Renderer;
+		std::unique_ptr<Renderer> m_renderer;
 		class SelectionMask;
 		std::unique_ptr<SelectionMask> m_selectionMask;
 		class DrawingMode;
@@ -139,6 +146,8 @@ class GAFFERSCENEUI_API SceneView : public GafferUI::View
 		std::unique_ptr<Grid> m_grid;
 		class Gnomon;
 		std::unique_ptr<Gnomon> m_gnomon;
+		class FPS;
+		std::unique_ptr<FPS> m_fps;
 
 		static size_t g_firstPlugIndex;
 		static ViewDescription<SceneView> g_viewDescription;

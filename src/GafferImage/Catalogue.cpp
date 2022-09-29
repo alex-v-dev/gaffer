@@ -38,6 +38,7 @@
 
 #include "GafferImage/Constant.h"
 #include "GafferImage/CopyChannels.h"
+#include "GafferImage/DeleteImageMetadata.h"
 #include "GafferImage/Display.h"
 #include "GafferImage/ImageAlgo.h"
 #include "GafferImage/ImageMetadata.h"
@@ -53,15 +54,17 @@
 #include "Gaffer/StringPlug.h"
 
 #include "boost/algorithm/string.hpp"
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/filesystem/operations.hpp"
 #include "boost/filesystem/path.hpp"
 #include "boost/lexical_cast.hpp"
+#include "boost/regex.hpp"
 #include "boost/unordered_map.hpp"
 
 #include <thread>
 
 using namespace std;
+using namespace boost::placeholders;
 using namespace IECore;
 using namespace Gaffer;
 using namespace GafferImage;
@@ -81,6 +84,11 @@ size_t hash_value( const Imath::V2i &v )
 }
 
 IMATH_INTERNAL_NAMESPACE_HEADER_EXIT
+
+namespace
+{
+	std::string g_isRenderingMetadataName = "gaffer:isRendering";
+}
 
 //////////////////////////////////////////////////////////////////////////
 // InternalImage.
@@ -136,12 +144,18 @@ class Catalogue::InternalImage : public ImageNode
 			// Adds on a description to the output
 			addChild( new ImageMetadata() );
 			imageMetadata()->inPlug()->setInput( imageSwitch()->outPlug() );
-			NameValuePlugPtr meta = new NameValuePlug( "ImageDescription", new StringData(), true, "member1" );
-			imageMetadata()->metadataPlug()->addChild( meta );
-			meta->valuePlug()->setInput( descriptionPlug() );
-			meta->enabledPlug()->setInput( descriptionPlug() ); // Enable only for non-empty strings
+
+			NameValuePlugPtr descriptionMeta = new NameValuePlug( "ImageDescription", new StringData(), true, "imageDescription" );
+			imageMetadata()->metadataPlug()->addChild( descriptionMeta );
+			descriptionMeta->valuePlug()->setInput( descriptionPlug() );
+			descriptionMeta->enabledPlug()->setInput( descriptionPlug() ); // Enable only for non-empty strings
+
+			NameValuePlugPtr isRenderingMeta = new NameValuePlug( g_isRenderingMetadataName, new BoolData( true ), true, "isRendering" );
+			imageMetadata()->metadataPlug()->addChild( isRenderingMeta );
 
 			outPlug()->setInput( imageMetadata()->outPlug() );
+
+			isRendering( false );
 		}
 
 		~InternalImage() override
@@ -181,7 +195,7 @@ class Catalogue::InternalImage : public ImageNode
 
 			removeDisplays();
 			size_t numDisplays = 0;
-			for( DisplayIterator it( other ); !it.done(); ++it )
+			for( Display::Iterator it( other ); !it.done(); ++it )
 			{
 				Display *display = it->get();
 				DisplayPtr displayCopy = new Display;
@@ -189,6 +203,8 @@ class Catalogue::InternalImage : public ImageNode
 				addChild( displayCopy );
 				copyChannels()->inPlugs()->getChild<Plug>( numDisplays++ )->setInput( displayCopy->outPlug() );
 			}
+
+			isRendering( false );
 
 			m_saver = nullptr;
 			if( other->m_saver )
@@ -206,8 +222,11 @@ class Catalogue::InternalImage : public ImageNode
 
 		void save( const std::string &fileName ) const
 		{
+			DeleteImageMetadataPtr deleteMetadata = new DeleteImageMetadata();
+			deleteMetadata->inPlug()->setInput( const_cast<ImagePlug *>( outPlug() ) );
+			deleteMetadata->namesPlug()->setValue( g_isRenderingMetadataName );
 			ImageWriterPtr imageWriter = new ImageWriter;
-			imageWriter->inPlug()->setInput( const_cast<ImagePlug *>( outPlug() ) );
+			imageWriter->inPlug()->setInput( deleteMetadata->outPlug() );
 			imageWriter->fileNamePlug()->setValue( fileName );
 			imageWriter->taskPlug()->execute();
 		}
@@ -233,8 +252,21 @@ class Catalogue::InternalImage : public ImageNode
 			// so if the channels in the new driver clash
 			// with the existing channels, we must assume
 			// they're from another render.
+
 			const vector<string> &channels = driver->channelNames();
-			ConstStringVectorDataPtr existingChannelsData = copyChannels()->outPlug()->channelNamesPlug()->getValue();
+
+			if( copyChannels()->outPlug()->viewNames()->readable() != ImagePlug::defaultViewNames()->readable() )
+			{
+				throw IECore::Exception( "Catalogue::insertDriver : Multi-view images not supported" );
+			}
+
+			ConstStringVectorDataPtr existingChannelsData;
+			{
+				ImagePlug::ViewScope viewScope( Context::current() );
+				viewScope.setViewName( &ImagePlug::defaultViewName );
+				existingChannelsData = copyChannels()->outPlug()->channelNamesPlug()->getValue();
+			}
+
 			const vector<string> &existingChannels = existingChannelsData->readable();
 			for( vector<string>::const_iterator it = channels.begin(), eIt = channels.end(); it != eIt; ++it )
 			{
@@ -265,7 +297,27 @@ class Catalogue::InternalImage : public ImageNode
 				m_clientPID = clientPID->readable();
 			}
 
+			if( auto nameData = parameters->member<StringData>( "catalogue:imageName" ) )
+			{
+				if( Plug *p = fileNamePlug()->getInput() )
+				{
+					if( Image *image = p->source()->parent<Image>() )
+					{
+						/// \todo GraphComponent or GraphComponentAlgo really should have
+						/// a utility for sanitising names and/or we should loosen the naming
+						/// restrictions anyway.
+						const std::string name = boost::regex_replace(
+							nameData->readable(),
+							boost::regex( "(^[0-9])|([^0-9a-zA-Z_]+)" ),
+							"_"
+						);
+						image->setName( name );
+					}
+				}
+			}
+
 			updateImageFlags( Plug::Serialisable, false ); // Don't serialise in-progress renders
+			isRendering( true );
 
 			return true;
 		}
@@ -282,6 +334,7 @@ class Catalogue::InternalImage : public ImageNode
 			// Save the image to disk. We do this in the background because
 			// saving large images with many AOVs takes several seconds.
 
+			isRendering( false );
 			m_saver = AsynchronousSaver::create( this );
 		}
 
@@ -313,6 +366,12 @@ class Catalogue::InternalImage : public ImageNode
 
 	private :
 
+		void isRendering( bool rendering )
+		{
+			NameValuePlug *isRendering = static_cast<NameValuePlug *>( imageMetadata()->metadataPlug()->getChild( "isRendering" ) );
+			static_cast<BoolPlug *>( isRendering->enabledPlug() )->setValue( rendering );
+		}
+
 		void updateImageFlags( unsigned flags, bool enable )
 		{
 			Plug *p = fileNamePlug()->getInput();
@@ -329,7 +388,7 @@ class Catalogue::InternalImage : public ImageNode
 		void removeDisplays()
 		{
 			vector<Display *> toDelete;
-			for( DisplayIterator it( this ); !it.done(); ++it )
+			for( Display::Iterator it( this ); !it.done(); ++it )
 			{
 				toDelete.push_back( it->get() );
 			}
@@ -392,8 +451,8 @@ class Catalogue::InternalImage : public ImageNode
 		struct AsynchronousSaver
 		{
 
-			typedef std::shared_ptr<AsynchronousSaver> Ptr;
-			typedef std::weak_ptr<AsynchronousSaver> WeakPtr;
+			using Ptr = std::shared_ptr<AsynchronousSaver>;
+			using WeakPtr = std::weak_ptr<AsynchronousSaver>;
 
 			static Ptr create( InternalImage *client )
 			{
@@ -403,7 +462,7 @@ class Catalogue::InternalImage : public ImageNode
 				InternalImagePtr imageCopy = new InternalImage;
 
 				size_t i = 0;
-				for( DisplayIterator it( client ); !it.done(); ++it )
+				for( Display::Iterator it( client ); !it.done(); ++it )
 				{
 					Display *display = it->get();
 					DisplayPtr displayCopy = new Display;
@@ -470,8 +529,8 @@ class Catalogue::InternalImage : public ImageNode
 				m_clients.erase( client );
 			}
 
-			typedef std::pair<std::string, Imath::V2i> TileIndex;
-			typedef boost::unordered_map<TileIndex, IECore::MurmurHash> ChannelDataHashes;
+			using TileIndex = std::pair<std::string, Imath::V2i>;
+			using ChannelDataHashes = boost::unordered_map<TileIndex, IECore::MurmurHash>;
 			ChannelDataHashes channelDataHashes;
 
 			private :
@@ -489,20 +548,29 @@ class Catalogue::InternalImage : public ImageNode
 
 				void save( WeakPtr forWrapUp )
 				{
-					ImageAlgo::parallelGatherTiles(
-						m_imageCopy->copyChannels()->outPlug(),
-						m_imageCopy->copyChannels()->outPlug()->channelNamesPlug()->getValue()->readable(),
-						// Tile
-						[] ( const ImagePlug *imagePlug, const string &channelName, const Imath::V2i &tileOrigin )
-						{
-							return imagePlug->channelDataPlug()->hash();
-						},
-						// Gather
-						[ this ] ( const ImagePlug *imagePlug, const string &channelName, const Imath::V2i &tileOrigin, const IECore::MurmurHash &tileHash )
-						{
-							channelDataHashes[TileIndex(channelName, tileOrigin)] = tileHash;
-						}
-					);
+					if( m_imageCopy->copyChannels()->outPlug()->viewNames()->readable() != ImagePlug::defaultViewNames()->readable() )
+					{
+						IECore::msg( IECore::Msg::Error, "Saving Catalogue image", "Catalogue does not yet support multi-view images." );
+					}
+
+					{
+						ImagePlug::ViewScope viewScope( Context::current() );
+						viewScope.setViewName( &ImagePlug::defaultViewName );
+						ImageAlgo::parallelGatherTiles(
+							m_imageCopy->copyChannels()->outPlug(),
+							m_imageCopy->copyChannels()->outPlug()->channelNamesPlug()->getValue()->readable(),
+							// Tile
+							[] ( const ImagePlug *imagePlug, const string &channelName, const Imath::V2i &tileOrigin )
+							{
+								return imagePlug->channelDataPlug()->hash();
+							},
+							// Gather
+							[ this ] ( const ImagePlug *imagePlug, const string &channelName, const Imath::V2i &tileOrigin, const IECore::MurmurHash &tileHash )
+							{
+								channelDataHashes[TileIndex(channelName, tileOrigin)] = tileHash;
+							}
+						);
+					}
 
 					try
 					{
@@ -586,6 +654,9 @@ Catalogue::Image::Image( const std::string &name, Direction direction, unsigned 
 {
 	addChild( new StringPlug( "fileName" ) );
 	addChild( new StringPlug( "description" ) );
+	addChild( new StringPlug( "__name", Plug::In, name, Plug::Default & ~Plug::Serialisable ) );
+
+	nameChangedSignal().connect( boost::bind( &Image::nameChanged, this ) );
 }
 
 Gaffer::StringPlug *Catalogue::Image::fileNamePlug()
@@ -606,6 +677,16 @@ Gaffer::StringPlug *Catalogue::Image::descriptionPlug()
 const Gaffer::StringPlug *Catalogue::Image::descriptionPlug() const
 {
 	return getChild<StringPlug>( 1 );
+}
+
+Gaffer::StringPlug *Catalogue::Image::namePlug()
+{
+	return getChild<StringPlug>( 2 );
+}
+
+const Gaffer::StringPlug *Catalogue::Image::namePlug() const
+{
+	return getChild<StringPlug>( 2 );
 }
 
 void Catalogue::Image::copyFrom( const Image *other )
@@ -649,6 +730,33 @@ Gaffer::PlugPtr Catalogue::Image::createCounterpart( const std::string &name, Di
 	return new Image( name, direction, getFlags() );
 }
 
+void Catalogue::Image::nameChanged()
+{
+	if( !getInput() )
+	{
+		namePlug()->setValue( getName() );
+	}
+	else
+	{
+		// We have an input, so can't call `namePlug()->setValue()`.
+		// This typically occurs when `Catalogue.images` has been promoted
+		// to a Box or custom node. Ideally we would override `setInput()`
+		// and update the name when we lose our input, but the virtual
+		// `setInput()` is only called for the top level `setInput()` call
+		// and our input will most likely be managed as a child of the
+		// entire `images` plug. Doing nothing is OK in practice because
+		// we don't expect a promoted `images` plug to be disconnected, and
+		// if it was, we'd be losing all the promoted values for `fileNamePlug()`
+		// etc anyway.
+		//
+		// > Note : ValuePlug.cpp has a todo for replacing the flawed `virtual setInput()`
+		// > with a non-virtual public method and a protected `virtual inputChanging()`
+		// > method. If we added a protected `virtual inputChanged()` method to that
+		// > then we could be 100% reliable here, and the new API would closely
+		// > match `parentChanging()/parentChanged()` from GraphComponent.
+	}
+}
+
 //////////////////////////////////////////////////////////////////////////
 // Catalogue
 //////////////////////////////////////////////////////////////////////////
@@ -672,7 +780,7 @@ bool undoingOrRedoing( const Node *node )
 
 } // namespace
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( Catalogue );
+GAFFER_NODE_DEFINE_TYPE( Catalogue );
 
 size_t Catalogue::g_firstPlugIndex = 0;
 
@@ -686,7 +794,6 @@ Catalogue::Catalogue( const std::string &name )
 	addChild( new StringPlug( "name" ) );
 	addChild( new StringPlug( "directory" ) );
 	addChild( new IntPlug( "__imageIndex", Plug::Out ) );
-	addChild( new AtomicCompoundDataPlug( "__mapping", Plug::In, new CompoundData() ) );
 
 	// Switch used to choose which image to output
 	addChild( new Switch( "__switch" ) );
@@ -769,24 +876,14 @@ const Gaffer::IntPlug *Catalogue::internalImageIndexPlug() const
 	return getChild<IntPlug>( g_firstPlugIndex + 4 );
 }
 
-Gaffer::AtomicCompoundDataPlug *Catalogue::mappingPlug()
-{
-	return getChild<AtomicCompoundDataPlug>( g_firstPlugIndex + 5 );
-}
-
-const Gaffer::AtomicCompoundDataPlug *Catalogue::mappingPlug() const
-{
-	return getChild<AtomicCompoundDataPlug>( g_firstPlugIndex + 5 );
-}
-
 Switch *Catalogue::imageSwitch()
 {
-	return getChild<Switch>( g_firstPlugIndex + 6 );
+	return getChild<Switch>( g_firstPlugIndex + 5 );
 }
 
 const Switch *Catalogue::imageSwitch() const
 {
-	return getChild<Switch>( g_firstPlugIndex + 6 );
+	return getChild<Switch>( g_firstPlugIndex + 5 );
 }
 
 Catalogue::InternalImage *Catalogue::imageNode( Image *image )
@@ -865,7 +962,14 @@ std::string Catalogue::generateFileName( const ImagePlug *image ) const
 	}
 
 	boost::filesystem::path result( directory );
-	result /= ImageAlgo::imageHash( image ).toString();
+
+	// Hash all views of the image
+	IECore::MurmurHash h;
+	for( const std::string &v : image->viewNames()->readable() )
+	{
+		h.append( ImageAlgo::imageHash( image, &v ) );
+	}
+	result /= h.toString();
 	result.replace_extension( "exr" );
 
 	return result.string();
@@ -892,10 +996,6 @@ void Catalogue::imageAdded( GraphComponent *graphComponent )
 
 	ImagePlug *nextSwitchInput = static_cast<ImagePlug *>( imageSwitch()->inPlugs()->children().back().get() );
 	nextSwitchInput->setInput( internalImage->outPlug() );
-
-	image->nameChangedSignal().connect( boost::bind( &Catalogue::computeNameToIndexMapping, this ) );
-
-	computeNameToIndexMapping();
 }
 
 void Catalogue::imageRemoved( GraphComponent *graphComponent )
@@ -906,11 +1006,32 @@ void Catalogue::imageRemoved( GraphComponent *graphComponent )
 		return;
 	}
 
-	Image *image = static_cast<Image *>( graphComponent );
-	// This causes the image to disconnect from
- 	// the switch automatically.
-	removeChild( imageNode( image ) );
-	// So now we go through and shuffle everything down
+	// Remove the InternalImage corresponding to the external Image
+	// plug that was removed. We can't call `imageNode()` to find this
+	// for us, because the connections will have been removed along
+	// with the plug. So we search for an internal image which has
+	// no input connection.
+
+	// `maybe_unused` keeps the compiler happy when release builds omit the
+	// `assert()`.
+	[[maybe_unused]] bool removed = false;
+	for( auto &c : children() )
+	{
+		if( auto *internalImage = dynamic_cast<InternalImage *>( c.get() ) )
+		{
+			if( !internalImage->fileNamePlug()->getInput() )
+			{
+				assert( !removed );
+				// This causes the image to disconnect from
+				// the switch automatically.
+				removeChild( internalImage );
+				removed = true;
+			}
+		}
+	}
+	assert( removed );
+
+	// Now we go through and shuffle everything down
 	// to fill the hole in the switch inputs.
 	/// \todo Should there be an ArrayPlug method to do this for us?
 	ArrayPlug *plug = imageSwitch()->inPlugs();
@@ -933,8 +1054,6 @@ void Catalogue::imageRemoved( GraphComponent *graphComponent )
 			}
 		}
 	}
-
-	computeNameToIndexMapping();
 }
 
 IECoreImage::DisplayDriverServer *Catalogue::displayDriverServer()
@@ -948,9 +1067,16 @@ void Catalogue::driverCreated( IECoreImage::DisplayDriver *driver, const IECore:
 	// Check the image is destined for catalogues in general
 	if( const StringData *portNumberData = parameters->member<StringData>( "displayPort" ) )
 	{
-		if( boost::lexical_cast<int>( portNumberData->readable() ) != displayDriverServer()->portNumber() )
+		try
 		{
-			return;
+			if( boost::lexical_cast<int>( portNumberData->readable() ) != displayDriverServer()->portNumber() )
+			{
+				return;
+			}
+		}
+		catch( boost::bad_lexical_cast &e )
+		{
+			throw IECore::Exception( "Invalid port number: <" + portNumberData->readable() + ">\n" );
 		}
 	}
 
@@ -1009,7 +1135,11 @@ void Catalogue::affects( const Gaffer::Plug *input, AffectedPlugsContainer &outp
 {
 	ImageNode::affects( input, outputs );
 
-	if( input == imageIndexPlug() )
+	auto image = input->parent<Image>();
+	if(
+		input == imageIndexPlug() ||
+		( image && image->parent() == imagesPlug() && input == image->namePlug() )
+	)
 	{
 		outputs.push_back( internalImageIndexPlug() );
 	}
@@ -1020,8 +1150,19 @@ void Catalogue::hash( const Gaffer::ValuePlug *output, const Gaffer::Context *co
 	ImageNode::hash( output, context, h );
 	if( output == internalImageIndexPlug() )
 	{
-		imageIndexPlug()->hash( h );
-		h.append( context->get<std::string>( "catalogue:imageName", "" ) );
+		const std::string imageName = context->get<std::string>( "catalogue:imageName", "" );
+		if( imageName.empty() )
+		{
+			imageIndexPlug()->hash( h );
+		}
+		else
+		{
+			h.append( imageName );
+			for( const auto &image : Image::Range( *imagesPlug() ) )
+			{
+				image->namePlug()->hash( h );
+			}
+		}
 	}
 }
 
@@ -1033,23 +1174,27 @@ void Catalogue::compute( ValuePlug *output, const Context *context ) const
 		return;
 	}
 
-	int index;
-	std::string imageName = context->get<std::string>( "catalogue:imageName", "" );
+	int index = -1;
+	const std::string imageName = context->get<std::string>( "catalogue:imageName", "" );
 	if( imageName.empty() )
 	{
 		index = imageIndexPlug()->getValue();
 	}
 	else
 	{
-		ConstCompoundDataPtr mappingData = mappingPlug()->getValue();
-		const IECore::IntData *indexData = mappingData->member<IntData>( imageName );
-		if( !indexData )
+		size_t childIndex = 0;
+		for( const auto &image : Image::Range( *imagesPlug() ) )
 		{
-			throw IECore::Exception( "Unknown image name." );
+			if( image->namePlug()->getValue() == imageName )
+			{
+				index = childIndex;
+				break;
+			}
+			childIndex++;
 		}
-		else
+		if( index < 0 )
 		{
-			index = indexData->readable();
+			throw IECore::Exception( "Unknown image name \"" + imageName + "\"." );
 		}
 	}
 
@@ -1057,17 +1202,7 @@ void Catalogue::compute( ValuePlug *output, const Context *context ) const
 
 }
 
-void Catalogue::computeNameToIndexMapping()
+const std::type_info &Catalogue::internalImageTypeInfo()
 {
-	CompoundDataPtr mapData = new CompoundData();
-	std::map<InternedString, DataPtr> &map = mapData->writable();
-
-	int count = 0;
-	for( const auto &image : imagesPlug()->children() )
-	{
-		map[image->getName()] = new IntData( count );
-		++count;
-	}
-
-	mappingPlug()->setValue( mapData );
+	return typeid( InternalImage );
 }

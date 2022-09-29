@@ -50,6 +50,8 @@
 
 #include "boost/container/flat_set.hpp"
 
+#include "ai_metadata.h"
+
 using namespace std;
 using namespace Imath;
 using namespace boost;
@@ -72,7 +74,7 @@ const AtString g_ClosurePlugArnoldString( "ClosurePlug" );
 template<typename PlugType>
 Gaffer::Plug *setupNumericPlug( const AtNodeEntry *node, const AtParamEntry *parameter, Gaffer::GraphComponent *plugParent, Gaffer::Plug::Direction direction )
 {
-	typedef typename PlugType::ValueType ValueType;
+	using ValueType = typename PlugType::ValueType;
 
 	ValueType defaultValue = 0;
 	ValueType minValue = Imath::limits<ValueType>::min();
@@ -90,7 +92,7 @@ Gaffer::Plug *setupNumericPlug( const AtNodeEntry *node, const AtParamEntry *par
 		}
 	}
 	else
-	{  
+	{
 		int metadataDefault;
 		if( AiMetaDataGetInt( node, name, g_gafferDefaultArnoldString, &metadataDefault ) )
 		{
@@ -189,53 +191,55 @@ Gaffer::Plug *setupTypedPlug( const AtNodeEntry *node, const AtParamEntry *param
 template<typename PlugType>
 Gaffer::Plug *setupColorPlug( const AtNodeEntry *node, const AtParamEntry *parameter, Gaffer::GraphComponent *plugParent, Gaffer::Plug::Direction direction )
 {
-	typedef typename PlugType::ValueType ValueType;
-	typedef typename ValueType::BaseType BaseType;
-
-	ValueType defaultValue( 1 );
+	using ValueType = typename PlugType::ValueType;
+	using BaseType = typename ValueType::BaseType;
 
 	AtString name = AiParamGetName( parameter );
-	bool defaultOverridden = false;
-	if( std::is_same< ValueType, Color4f >::value )
+
+	// Get the default value from Arnold. Due to `gaffer.plugType` metadata,
+	// the dimensions of this default might not match those of the plug we're
+	// making (e.g. we might be making a Color3f plug for an RGBA parameter, or
+	// any other combination).
+
+	const float *arnoldDefault;
+	unsigned int arnoldDefaultDimensions;
+	switch( AiParamGetType( parameter ) )
 	{
-		#if AI_VERSION_ARCH_NUM >= 6 || ( AI_VERSION_ARCH_NUM == 5 && AI_VERSION_MAJOR_NUM >= 3 )
-		AtRGBA metadataDefault;
-		if( AiMetaDataGetRGBA( node, name, g_gafferDefaultArnoldString, &metadataDefault ) )
-		{
-			memcpy( &defaultValue, &metadataDefault.r, sizeof( ValueType ) );
-			defaultOverridden = true;
-		}
-		#endif
-	}
-	else
-	{  
-		AtRGB metadataDefault;
-		if( AiMetaDataGetRGB( node, name, g_gafferDefaultArnoldString, &metadataDefault ) )
-		{
-			memcpy( &defaultValue, &metadataDefault.r, sizeof( ValueType ) );
-			defaultOverridden = true;
-		}
+		case AI_TYPE_RGB :
+			arnoldDefault = &AiParamGetDefault( parameter )->RGB().r;
+			arnoldDefaultDimensions = 3;
+			break;
+		case AI_TYPE_RGBA :
+			arnoldDefault = &AiParamGetDefault( parameter )->RGBA().r;
+			arnoldDefaultDimensions = 4;
+			break;
+		default :
+			return nullptr;
 	}
 
-	if( !defaultOverridden )
+	// Override the default using metadata registered with Arnold. Again,
+	// either RGB or RGBA may have been registered, regardless of plug or
+	// parameter type.
+
+	AtRGB rgbMetadata;
+	AtRGBA rgbaMetadata;
+	if( AiMetaDataGetRGB( node, name, g_gafferDefaultArnoldString, &rgbMetadata ) )
 	{
-		switch( AiParamGetType( parameter ) )
-		{
-			case AI_TYPE_RGB :
-				defaultValue[0] = AiParamGetDefault( parameter )->RGB().r;
-				defaultValue[1] = AiParamGetDefault( parameter )->RGB().g;
-				defaultValue[2] = AiParamGetDefault( parameter )->RGB().b;
-				break;
-			case AI_TYPE_RGBA :
-				defaultValue[0] = AiParamGetDefault( parameter )->RGBA().r;
-				defaultValue[1] = AiParamGetDefault( parameter )->RGBA().g;
-				defaultValue[2] = AiParamGetDefault( parameter )->RGBA().b;
-				defaultValue[3] = AiParamGetDefault( parameter )->RGBA().a;
-				break;
-			default :
-				return nullptr;
-		}
+		arnoldDefault = &rgbMetadata.r;
+		arnoldDefaultDimensions = 3;
 	}
+	else if( AiMetaDataGetRGBA( node, name, g_gafferDefaultArnoldString, &rgbaMetadata ) )
+	{
+		arnoldDefault = &rgbaMetadata.r;
+		arnoldDefaultDimensions = 4;
+	}
+
+	// Create our default from the Arnold default, with alpha defaulting to 1 if
+	// not provided by Arnold.
+	ValueType defaultValue( 1 );
+	std::copy_n( arnoldDefault, std::min( ValueType::dimensions(), arnoldDefaultDimensions ), defaultValue.getValue() );
+
+	// Now create (or reuse) a plug as necessary.
 
 	ValueType minValue( Imath::limits<BaseType>::min() );
 	ValueType maxValue( Imath::limits<BaseType>::max() );
@@ -276,6 +280,20 @@ Gaffer::Plug *setupClosurePlug( const IECore::InternedString &parameterName, Gaf
 	PlugAlgo::replacePlug( plugParent, plug );
 
 	return plug.get();
+}
+
+Gaffer::Plug *setupNodePlug( const AtNodeEntry *nodeEntry, const InternedString &parameterName, GraphComponent *plugParent, Plug::Direction direction )
+{
+	if( AiNodeEntryGetType( nodeEntry ) == AI_NODE_DRIVER && parameterName == "input" )
+	{
+		return setupPlug( parameterName, plugParent, direction );
+	}
+	else
+	{
+		// We don't know what type of Arnold node this parameter expects to be
+		// connected to.
+		return nullptr;
+	}
 }
 
 const string nodeName ( Gaffer::GraphComponent *plugParent )
@@ -335,6 +353,10 @@ Gaffer::Plug *ParameterHandler::setupPlug( const IECore::InternedString &paramet
 		case AI_TYPE_BOOLEAN :
 
 			return setupTypedPlug<BoolPlug>( parameterName, plugParent, direction, false );
+
+		case AI_TYPE_MATRIX :
+
+			return setupTypedPlug<M44fPlug>( parameterName, plugParent, direction, M44f() );
 
 		default :
 
@@ -510,6 +532,16 @@ Gaffer::Plug *ParameterHandler::setupPlug( const AtNodeEntry *node, const AtPara
 		case AI_TYPE_CLOSURE :
 
 			plug = setupClosurePlug(
+				AiParamGetName( parameter ).c_str(),
+				plugParent,
+				direction
+			);
+			break;
+
+		case AI_TYPE_NODE :
+
+			plug = setupNodePlug(
+				node,
 				AiParamGetName( parameter ).c_str(),
 				plugParent,
 				direction

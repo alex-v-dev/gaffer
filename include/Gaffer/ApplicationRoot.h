@@ -45,6 +45,9 @@ namespace Gaffer
 
 IE_CORE_FORWARDDECLARE( Preferences )
 
+/// \todo Derive from Node and merge with `Gaffer.Application`,
+/// using `Gaffer::Plugs` instead of `IECore::Parameters` to
+/// provide command-line arguments.
 class GAFFER_API ApplicationRoot : public GraphComponent
 {
 
@@ -77,7 +80,7 @@ class GAFFER_API ApplicationRoot : public GraphComponent
 		/// Sets the clipboard contents - a copy of clip is taken.
 		void setClipboardContents( const IECore::Object *clip );
 		/// A signal emitted when the clipboard contents have changed.
-		typedef boost::signal<void (ApplicationRoot *)> ClipboardSignal;
+		using ClipboardSignal = Signals::Signal<void (ApplicationRoot *), Signals::CatchingCombiner<void>>;
 		ClipboardSignal &clipboardContentsChangedSignal();
 		//@}
 

@@ -51,14 +51,12 @@ using namespace GafferArnold;
 namespace
 {
 
-typedef boost::unordered_set<InteractiveArnoldRender *> InstanceSet;
+using InstanceSet = boost::unordered_set<InteractiveArnoldRender *>;
 InstanceSet &instances()
 {
 	static InstanceSet i;
 	return i;
 }
-
-typedef std::pair<IntPlug *, InteractiveRender::State> Interrupted;
 
 } // namespace
 
@@ -66,7 +64,7 @@ typedef std::pair<IntPlug *, InteractiveRender::State> Interrupted;
 // InteractiveArnoldRender
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( InteractiveArnoldRender );
+GAFFER_NODE_DEFINE_TYPE( InteractiveArnoldRender );
 
 InteractiveArnoldRender::InteractiveArnoldRender( const std::string &name )
 	:	InteractiveRender( "Arnold", name )
@@ -81,29 +79,26 @@ InteractiveArnoldRender::~InteractiveArnoldRender()
 
 void InteractiveArnoldRender::flushCaches( int flags )
 {
-	std::vector<Interrupted> interrupted;
-
-	const InstanceSet &i = instances();
-	for( InstanceSet::const_iterator it = i.begin(), eIt = i.end(); it != eIt; ++it )
+	/// \todo Perhaps this makes more sense as a non-static method
+	/// that can be called directly on individual instances?
+	for( const auto &instance : instances() )
 	{
-		IntPlug *statePlug = (*it)->statePlug()->source<IntPlug>();
+		IntPlug *statePlug = instance->statePlug()->source<IntPlug>();
 		if( !statePlug->settable() )
 		{
 			continue;
 		}
 
-		const State state = (InteractiveRender::State)statePlug->getValue();
-		if( state != Stopped )
+		if( !instance->renderer() )
 		{
-			statePlug->setValue( Stopped );
-			interrupted.push_back( Interrupted( statePlug, state ) );
+			continue;
 		}
-	}
 
-	AiUniverseCacheFlush( flags );
+		const State state = (InteractiveRender::State)statePlug->getValue();
+		statePlug->setValue( Paused );
 
-	for( std::vector<Interrupted>::const_iterator it = interrupted.begin(), eIt = interrupted.end(); it != eIt; ++it )
-	{
-		it->first->setValue( it->second );
+		instance->renderer()->command( "ai:cacheFlush", { { "flags", new IECore::IntData( flags ) } } );
+
+		statePlug->setValue( state );
 	}
 }

@@ -49,8 +49,8 @@ using namespace IECoreDelight;
 namespace
 {
 
-static const char *g_catmullRom = "catmull-rom";
-static const char *g_bSpline = "b-spline";
+const char *g_catmullRom = "catmull-rom";
+const char *g_bSpline = "b-spline";
 
 void staticParameters( const IECoreScene::CurvesPrimitive *object, ParameterList &parameters )
 {
@@ -77,7 +77,8 @@ void staticParameters( const IECoreScene::CurvesPrimitive *object, ParameterList
 			basis,
 			NSITypeString,
 			0,
-			1
+			1,
+			0
 		} );
 	}
 

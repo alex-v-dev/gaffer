@@ -49,7 +49,7 @@ using namespace IECore;
 using namespace Gaffer;
 using namespace GafferImage;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( RankFilter );
+GAFFER_NODE_DEFINE_TYPE( RankFilter );
 
 size_t RankFilter::g_firstPlugIndex = 0;
 
@@ -64,6 +64,7 @@ RankFilter::RankFilter( const std::string &name, Mode mode )
 	addChild( new StringPlug( "masterChannel" ) );
 	addChild( new V2iVectorDataPlug( "__pixelOffsets", Plug::Out, new V2iVectorData ) );
 
+	outPlug()->viewNamesPlug()->setInput( inPlug()->viewNamesPlug() );
 	outPlug()->formatPlug()->setInput( inPlug()->formatPlug() );
 	outPlug()->metadataPlug()->setInput( inPlug()->metadataPlug() );
 	outPlug()->channelNamesPlug()->setInput( inPlug()->channelNamesPlug() );
@@ -342,7 +343,7 @@ void RankFilter::hashChannelData( const GafferImage::ImagePlug *parent, const Ga
 	if( masterChannel != "" )
 	{
 		ImagePlug::ChannelDataScope pixelOffsetsScope( context );
-		pixelOffsetsScope.setChannelName( masterChannel );
+		pixelOffsetsScope.setChannelName( &masterChannel );
 
 		pixelOffsetsPlug()->hash( h );
 	}
@@ -377,7 +378,7 @@ IECore::ConstFloatVectorDataPtr RankFilter::computeChannelData( const std::strin
 		ConstV2iVectorDataPtr pixelOffsets;
 		{
 			ImagePlug::ChannelDataScope pixelOffsetsScope( context );
-			pixelOffsetsScope.setChannelName( masterChannel );
+			pixelOffsetsScope.setChannelName( &masterChannel );
 
 			pixelOffsets = pixelOffsetsPlug()->getValue();
 		}

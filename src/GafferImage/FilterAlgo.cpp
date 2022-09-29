@@ -73,8 +73,7 @@ class SmoothGaussian2D : public OIIO::Filter2D
 
 		float operator()( float x, float y ) const override
 		{
-			return gauss1d( x * m_radiusInverse.x ) *
-			       gauss1d( y * m_radiusInverse.y );
+			return gauss1d( x * m_radiusInverse.x ) * gauss1d( y * m_radiusInverse.y );
 		}
 
 		bool separable() const override
@@ -129,8 +128,7 @@ class FilterCubicSimple2D : public OIIO::Filter2D
 
 		float operator()( float x, float y ) const override
 		{
-			return cubicSimple( x * m_wrad_inv )
-				 * cubicSimple( y * m_hrad_inv );
+			return cubicSimple( x * m_wrad_inv ) * cubicSimple( y * m_hrad_inv );
 		}
 
 		bool separable() const override
@@ -230,7 +228,7 @@ void ensureMinimumParallelogramWidth( V2f &dpdx, V2f &dpdy )
 	}
 }
 
-typedef std::pair<std::string, const OIIO::Filter2D *> FilterPair;
+using FilterPair = std::pair<std::string, const OIIO::Filter2D *>;
 
 tbb::spin_rw_mutex g_filtersInitMutex;
 
@@ -286,7 +284,7 @@ const std::vector<std::string> &GafferImage::FilterAlgo::filterNames()
 
 const OIIO::Filter2D *GafferImage::FilterAlgo::acquireFilter( const std::string &name )
 {
-	typedef std::map<std::string, const OIIO::Filter2D *> FilterMapType;
+	using FilterMapType = std::map<std::string, const OIIO::Filter2D *>;
 	static FilterMapType filterMap;
 
 	{

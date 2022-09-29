@@ -43,12 +43,13 @@
 using namespace Gaffer;
 using namespace GafferSceneTest;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( TestLight )
+GAFFER_NODE_DEFINE_TYPE( TestLight )
 
 TestLight::TestLight( const std::string &name )
 	:	Light( name )
 {
 	parametersPlug()->addChild( new Color3fPlug( "intensity" ) );
+	parametersPlug()->addChild( new FloatPlug( "exposure" ) );
 	parametersPlug()->addChild( new BoolPlug( "areaLight" ) );
 }
 
@@ -58,7 +59,7 @@ TestLight::~TestLight()
 
 void TestLight::hashLight( const Gaffer::Context *context, IECore::MurmurHash &h ) const
 {
-	for( ValuePlugIterator it( parametersPlug() ); !it.done(); ++it )
+	for( ValuePlug::Iterator it( parametersPlug() ); !it.done(); ++it )
 	{
 		(*it)->hash( h );
 	}
@@ -68,6 +69,7 @@ IECoreScene::ConstShaderNetworkPtr TestLight::computeLight( const Gaffer::Contex
 {
 	IECoreScene::ShaderPtr shader = new IECoreScene::Shader( "testLight", "light" );
 	shader->parameters()["intensity"] = new IECore::Color3fData( parametersPlug()->getChild<Color3fPlug>( "intensity" )->getValue() );
+	shader->parameters()["exposure"] = new IECore::FloatData( parametersPlug()->getChild<FloatPlug>( "exposure" )->getValue() );
 	shader->parameters()["__areaLight"] = new IECore::BoolData( parametersPlug()->getChild<BoolPlug>( "areaLight" )->getValue() );
 
 	IECoreScene::ShaderNetworkPtr network = new IECoreScene::ShaderNetwork();

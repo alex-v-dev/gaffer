@@ -58,9 +58,9 @@ class GAFFER_API DependencyNode : public Node
 		DependencyNode( const std::string &name=defaultName<DependencyNode>() );
 		~DependencyNode() override;
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( Gaffer::DependencyNode, DependencyNodeTypeId, Node );
+		GAFFER_NODE_DECLARE_TYPE( Gaffer::DependencyNode, DependencyNodeTypeId, Node );
 
-		typedef std::vector<const Plug *> AffectedPlugsContainer;
+		using AffectedPlugsContainer = std::vector<const Plug *>;
 
 		/// Must be implemented to fill outputs with all the plugs whose computation
 		/// will be affected by the specified input. It is an error to pass a compound plug
@@ -90,9 +90,6 @@ class GAFFER_API DependencyNode : public Node
 		//@}
 
 };
-
-typedef FilteredChildIterator<TypePredicate<DependencyNode> > DependencyNodeIterator;
-typedef FilteredRecursiveChildIterator<TypePredicate<DependencyNode> > RecursiveDependencyNodeIterator;
 
 } // namespace Gaffer
 

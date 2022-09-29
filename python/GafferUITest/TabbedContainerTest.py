@@ -70,12 +70,12 @@ class TabbedContainerTest( GafferUITest.TestCase ) :
 		b = GafferUI.Button( "baby" )
 		t.setCornerWidget( b )
 		self.assertTrue( t.getCornerWidget() is b )
-		self.assertTrue( b.parent() is t )
+		self.assertTrue( t.isAncestorOf( b ) )
 
 		b2 = GafferUI.Button( "b" )
 		t.setCornerWidget( b2 )
 		self.assertTrue( t.getCornerWidget() is b2 )
-		self.assertTrue( b2.parent() is t )
+		self.assertTrue( t.isAncestorOf( b2 ) )
 		self.assertIsNone( b.parent() )
 
 	def testIndex( self ) :
@@ -132,7 +132,7 @@ class TabbedContainerTest( GafferUITest.TestCase ) :
 			self.assertTrue( t is tc )
 			self.__current = c
 
-		c = tc.currentChangedSignal().connect( s )
+		c = tc.currentChangedSignal().connect( s, scoped = True )
 		self.__current = None
 
 		self.assertIsNone( tc.getCurrent() )
@@ -228,7 +228,7 @@ class TabbedContainerTest( GafferUITest.TestCase ) :
 
 		t.setCornerWidget( b )
 		self.assertEqual( len( l ), 0 )
-		self.assertEqual( b.parent(), t )
+		self.assertTrue( t.isAncestorOf( b ) )
 
 	def testInsert( self ) :
 

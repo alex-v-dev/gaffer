@@ -39,8 +39,6 @@
 #include "GafferOSL/ClosurePlug.h"
 #include "GafferOSL/ShadingEngine.h"
 
-#include "GafferScene/RendererAlgo.h"
-
 #include "Gaffer/CompoundNumericPlug.h"
 #include "Gaffer/Metadata.h"
 #include "Gaffer/NumericPlug.h"
@@ -58,6 +56,7 @@
 #include "OSL/oslquery.h"
 
 #include "boost/algorithm/string/predicate.hpp"
+#include "boost/container/flat_set.hpp"
 
 #include "tbb/mutex.h"
 
@@ -100,7 +99,7 @@ struct ShadingEngineCacheGetterKey
 
 };
 
-ConstShadingEnginePtr getter( const ShadingEngineCacheGetterKey &key, size_t &cost )
+ConstShadingEnginePtr getter( const ShadingEngineCacheGetterKey &key, size_t &cost, const IECore::Canceller *canceller )
 {
 	cost = 1;
 
@@ -128,8 +127,45 @@ ConstShadingEnginePtr getter( const ShadingEngineCacheGetterKey &key, size_t &co
 	return new ShadingEngine( network );
 }
 
-typedef IECorePreview::LRUCache<IECore::MurmurHash, ConstShadingEnginePtr, IECorePreview::LRUCachePolicy::Parallel, ShadingEngineCacheGetterKey> ShadingEngineCache;
+using ShadingEngineCache = IECorePreview::LRUCache<IECore::MurmurHash, ConstShadingEnginePtr, IECorePreview::LRUCachePolicy::Parallel, ShadingEngineCacheGetterKey>;
 ShadingEngineCache g_shadingEngineCache( getter, 10000 );
+
+using ShaderTypeSet = boost::container::flat_set<IECore::InternedString>;
+ShaderTypeSet &compatibleShaders()
+{
+	static ShaderTypeSet g_compatibleShaders;
+	return g_compatibleShaders;
+}
+
+} // namespace
+
+/////////////////////////////////////////////////////////////////////////
+// LRUCache of OSLQueries
+//////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+using OSLQueryPtr = shared_ptr<OSLQuery>;
+using QueryCache = IECorePreview::LRUCache<string, OSLQueryPtr, IECorePreview::LRUCachePolicy::Parallel>;
+
+QueryCache &queryCache()
+{
+	static QueryCache g_cache(
+		[] ( const std::string &shaderName, size_t &cost, const IECore::Canceller *canceller ) {
+			const char *searchPath = getenv( "OSL_SHADER_PATHS" );
+			OSLQueryPtr query = make_shared<OSLQuery>();
+			if( !query->open( shaderName, searchPath ? searchPath : "" ) )
+			{
+				throw Exception( query->geterror() );
+			}
+			cost = 1;
+			return query;
+		},
+		10000
+	);
+	return g_cache;
+}
 
 } // namespace
 
@@ -137,7 +173,7 @@ ShadingEngineCache g_shadingEngineCache( getter, 10000 );
 // OSLShader
 //////////////////////////////////////////////////////////////////////////
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( OSLShader );
+GAFFER_NODE_DEFINE_TYPE( OSLShader );
 
 OSLShader::OSLShader( const std::string &name )
 	:	GafferScene::Shader( name )
@@ -199,19 +235,19 @@ bool OSLShader::acceptsInput( const Plug *plug, const Plug *inputPlug ) const
 
 		if( sourceShaderOutPlug && ( sourceShaderOutPlug == inputPlug || sourceShaderOutPlug->isAncestorOf( inputPlug ) ) )
 		{
-			// Source is the output of a shader node, so it needs to
-			// be coming from another OSL shader. Although because Arnold allows
-			// mixing and matching Arnold native shaders and OSL shaders,
-			// we must also accept connections from ArnoldShaders.
-			if( !sourceShader->isInstanceOf( staticTypeId() ) && !sourceShader->isInstanceOf( "GafferArnold::ArnoldShader" ) )
+			if( sourceShader->isInstanceOf( staticTypeId() ) )
 			{
-				return false;
+				return true;
 			}
-			const std::string sourceShaderType = sourceShader->typePlug()->getValue();
-			if( sourceShaderType != "osl:shader" && sourceShaderType != "ai:surface" )
+
+			const IECore::InternedString sourceShaderType = sourceShader->typePlug()->getValue();
+			const ShaderTypeSet &cs = compatibleShaders();
+			if( cs.find( sourceShaderType ) != cs.end() )
 			{
-				return false;
+				return true;
 			}
+
+			return false;
 		}
 	}
 
@@ -289,7 +325,7 @@ Plug *loadStringArrayParameter( const OSLQuery::Parameter *parameter, const Inte
 template<typename PlugType>
 Plug *loadNumericParameter( const OSLQuery::Parameter *parameter, const InternedString &name, Gaffer::Plug *parent, const CompoundData *metadata )
 {
-	typedef typename PlugType::ValueType ValueType;
+	using ValueType = typename PlugType::ValueType;
 
 	ValueType defaultValue( 0 );
 	if( parameter->idefault.size() )
@@ -345,9 +381,9 @@ Plug *loadNumericParameter( const OSLQuery::Parameter *parameter, const Interned
 template<typename PlugType>
 Plug *loadNumericArrayParameter( const OSLQuery::Parameter *parameter, const InternedString &name, Gaffer::Plug *parent, const CompoundData *metadata )
 {
-	typedef typename PlugType::ValueType DataType;
-	typedef typename DataType::ValueType ValueType;
-	typedef typename ValueType::value_type ElementType;
+	using DataType = typename PlugType::ValueType;
+	using ValueType = typename DataType::ValueType;
+	using ElementType = typename ValueType::value_type;
 
 	typename DataType::Ptr defaultValueData = new DataType();
 	ValueType &defaultValueDataWritable = defaultValueData->writable();
@@ -394,8 +430,8 @@ Plug *loadNumericArrayParameter( const OSLQuery::Parameter *parameter, const Int
 template <typename PlugType>
 Plug *loadCompoundNumericParameter( const OSLQuery::Parameter *parameter, const InternedString &name, Gaffer::Plug *parent, const CompoundData *metadata )
 {
-	typedef typename PlugType::ValueType ValueType;
-	typedef typename ValueType::BaseType BaseType;
+	using ValueType = typename PlugType::ValueType;
+	using BaseType = typename ValueType::BaseType;
 
 	ValueType defaultValue( 0 );
 	if( parameter->idefault.size() )
@@ -467,10 +503,10 @@ Plug *loadCompoundNumericParameter( const OSLQuery::Parameter *parameter, const 
 template <typename PlugType>
 Plug *loadCompoundNumericArrayParameter( const OSLQuery::Parameter *parameter, const InternedString &name, Gaffer::Plug *parent, const CompoundData *metadata )
 {
-	typedef typename PlugType::ValueType DataType;
-	typedef typename DataType::ValueType ValueType;
-	typedef typename ValueType::value_type ElementType;
-	typedef typename ElementType::BaseType BaseType;
+	using DataType = typename PlugType::ValueType;
+	using ValueType = typename DataType::ValueType;
+	using ElementType = typename ValueType::value_type;
+	using BaseType = typename ElementType::BaseType;
 
 	typename DataType::Ptr defaultValueData = new DataType();
 	ValueType &defaultValueDataWritable = defaultValueData->writable();
@@ -660,6 +696,10 @@ Plug *loadSplineParameters( const OSLQuery::Parameter *positionsParameter, const
 	{
 		defaultValue.interpolation = SplineDefinitionInterpolationLinear;
 	}
+	else if( basis == "constant" )
+	{
+		defaultValue.interpolation = SplineDefinitionInterpolationConstant;
+	}
 
 	updatePoints( defaultValue.points, positionsParameter, valuesParameter );
 
@@ -774,7 +814,7 @@ Plug *loadStructParameter( const OSLQuery &query, const OSLQuery::Parameter *par
 		if( existingPlug )
 		{
 			// Transfer old plugs onto the replacement.
-			for( PlugIterator it( existingPlug ); !it.done(); ++it )
+			for( Plug::Iterator it( existingPlug ); !it.done(); ++it )
 			{
 				result->addChild( *it );
 			}
@@ -997,13 +1037,7 @@ void OSLShader::loadShader( const std::string &shaderName, bool keepExistingValu
 		return;
 	}
 
-	const char *searchPath = getenv( "OSL_SHADER_PATHS" );
-
-	OSLQuery query;
-	if( !query.open( shaderName, searchPath ? searchPath : "" ) )
-	{
-		throw Exception( query.geterror() );
-	}
+	OSLQueryPtr query = queryCache().get( shaderName );
 
 	const bool outPlugHadChildren = existingOut ? existingOut->children().size() : false;
 	if( !keepExistingValues )
@@ -1020,7 +1054,7 @@ void OSLShader::loadShader( const std::string &shaderName, bool keepExistingValu
 
 	m_metadata = nullptr;
 	namePlug->source<StringPlug>()->setValue( shaderName );
-	typePlug->source<StringPlug>()->setValue( std::string( "osl:" ) + query.shadertype().c_str() );
+	typePlug->source<StringPlug>()->setValue( std::string( "osl:" ) + query->shadertype().c_str() );
 
 	const IECore::CompoundData *metadata = OSLShader::metadata();
 	const IECore::CompoundData *parameterMetadata = nullptr;
@@ -1029,7 +1063,7 @@ void OSLShader::loadShader( const std::string &shaderName, bool keepExistingValu
 		parameterMetadata = metadata->member<IECore::CompoundData>( "parameter" );
 	}
 
-	loadShaderParameters( query, parametersPlug, parameterMetadata );
+	loadShaderParameters( *query, parametersPlug, parameterMetadata );
 
 	if( existingOut )
 	{
@@ -1046,7 +1080,7 @@ void OSLShader::loadShader( const std::string &shaderName, bool keepExistingValu
 			// We had an out plug but it was the wrong type (we used
 			// to use a CompoundPlug before that was deprecated). Move
 			// over any existing child plugs onto our replacement.
-			for( PlugIterator it( existingOut ); !it.done(); ++it )
+			for( Plug::Iterator it( existingOut ); !it.done(); ++it )
 			{
 				outPlug->addChild( *it );
 			}
@@ -1054,9 +1088,9 @@ void OSLShader::loadShader( const std::string &shaderName, bool keepExistingValu
 		setChild( "out", outPlug );
 	}
 
-	if( query.shadertype() == "shader" )
+	if( query->shadertype() == "shader" )
 	{
-		loadShaderParameters( query, outPlug(), parameterMetadata );
+		loadShaderParameters( *query, outPlug(), parameterMetadata );
 	}
 	else
 	{
@@ -1068,7 +1102,7 @@ void OSLShader::loadShader( const std::string &shaderName, bool keepExistingValu
 		// OSLShaderUI registers a dynamic metadata entry which depends on whether or
 		// not the plug has children, so we must notify the world that the value will
 		// have changed.
-		Metadata::plugValueChangedSignal()( staticTypeId(), "out", "nodule:type", outPlug() );
+		Metadata::plugValueChangedSignal( this )( outPlug(), "nodule:type", Metadata::ValueChangedReason::StaticRegistration );
 	}
 }
 
@@ -1159,7 +1193,7 @@ static IECore::CompoundDataPtr convertMetadata( const std::vector<OSLQuery::Para
 	return result;
 }
 
-static IECore::ConstCompoundDataPtr metadataGetter( const std::string &key, size_t &cost )
+static IECore::ConstCompoundDataPtr metadataGetter( const std::string &key, size_t &cost, const IECore::Canceller *canceller )
 {
 	cost = 1;
 	if( !key.size() )
@@ -1213,7 +1247,7 @@ static IECore::ConstCompoundDataPtr metadataGetter( const std::string &key, size
 	return metadata;
 }
 
-typedef IECorePreview::LRUCache<std::string, IECore::ConstCompoundDataPtr> MetadataCache;
+using MetadataCache = IECorePreview::LRUCache<std::string, IECore::ConstCompoundDataPtr>;
 MetadataCache g_metadataCache( metadataGetter, 10000 );
 
 const IECore::CompoundData *OSLShader::metadata() const
@@ -1261,9 +1295,15 @@ const IECore::Data *OSLShader::parameterMetadata( const Gaffer::Plug *plug, cons
 
 void OSLShader::reloadShader()
 {
-	// Remove any metadata cache entry for the given shader name, allowing
-	// it to be reloaded fresh if it has changed
+	// Remove any cache entries for the given shader name, allowing
+	// them to be reloaded fresh if the shader has changed.
+	queryCache().erase( namePlug()->getValue() );
 	g_metadataCache.erase( namePlug()->getValue() );
 	Shader::reloadShader();
 }
 
+bool OSLShader::registerCompatibleShader( const IECore::InternedString shaderType )
+{
+	ShaderTypeSet &cs = compatibleShaders();
+	return cs.insert( shaderType ).second;
+}

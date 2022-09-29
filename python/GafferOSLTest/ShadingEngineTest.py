@@ -487,7 +487,7 @@ class ShadingEngineTest( GafferOSLTest.OSLTestCase ) :
 					"n" : IECore.V3fData( imath.V3f( 13, 14, 15 ), IECore.GeometricData.Interpretation.Normal ),
 					"noInterp" : imath.V3f( 16, 17, 18 ),
 
-				 } )
+				} )
 			},
 			output = "output"
 		) )
@@ -630,16 +630,18 @@ class ShadingEngineTest( GafferOSLTest.OSLTestCase ) :
 		) )
 
 		p = self.rectanglePoints()
-		p["strattr"] = IECore.StringVectorData( [ "testo" if x % 2 == 0 else "no-testo"  for x in range(len(p["P"])) ] )
+		p["strattr"] = IECore.StringVectorData( [ "testo" if i % 2 == 0 else "no-testo" for i in range(len(p["P"])) ] )
 
 		r = e.shade( p )
 
 		for i, c in enumerate( r["Ci"] ) :
-			f = 1.0 if x % 2 == 0 else 0.0
+
+			f = 1.0 if i % 2 == 0 else 0.0
 
 			self.assertEqual(
 				c,
-				imath.Color3f( f, f, f ) )
+				imath.Color3f( f, f, f )
+			)
 
 	def testUVProvidedAsV2f( self ) :
 
@@ -680,6 +682,35 @@ class ShadingEngineTest( GafferOSLTest.OSLTestCase ) :
 
 		for i, c in enumerate( r["Ci"] ) :
 			self.assertAlmostEqual( c[1], p["v"][i], delta = 0.02 )
+
+	def testDerivatives( self ) :
+
+		s = self.compileShader( os.path.dirname( __file__ ) +  "/shaders/derivatives.osl" )
+
+		with Gaffer.Context() as c :
+
+			c["colorUserData"] = imath.Color3f( 0.25, 0.7, 0.6 )
+
+			for obj in [ "gaffer:context", "" ] :
+
+				for name in [ "colorUserData", "P" ] :
+
+					for direction in [ "X", "Y", "Z" ] :
+
+						e = GafferOSL.ShadingEngine( IECoreScene.ShaderNetwork(
+							shaders = {
+								"output" : IECoreScene.Shader( s, "osl:surface",
+								{
+									"object"    : obj,
+									"name"      : name,
+									"direction" : direction
+								} ),
+							},
+							output = "output"
+						) )
+
+						p = e.shade( self.rectanglePoints() )
+						self.assertEqual( p["Ci"], IECore.Color3fVectorData( [ imath.Color3f( 0 ) ] * 100 ) )
 
 	def testTime( self ) :
 
@@ -905,6 +936,27 @@ class ShadingEngineTest( GafferOSLTest.OSLTestCase ) :
 		) )
 
 		self.assertFalse( e.hasDeformation() )
+
+	def testReadConstantArraySize1( self ) :
+
+		s = self.compileShader( os.path.dirname( __file__ ) +  "/shaders/attribute.osl" )
+		e = GafferOSL.ShadingEngine( IECoreScene.ShaderNetwork(
+			shaders = {
+				"output" : IECoreScene.Shader( s, "osl:surface", { "name" : "constantColor" } )
+			},
+			output = "output"
+		) )
+
+		p = self.rectanglePoints()
+		p["constantColor"] = IECore.Color3fVectorData( [ imath.Color3f( 1, 2, 3 ) ] )
+
+		r = e.shade( p )
+
+		for i, c in enumerate( r["Ci"] ) :
+			self.assertEqual(
+				c,
+				imath.Color3f( 1, 2, 3 )
+			)
 
 if __name__ == "__main__":
 	unittest.main()

@@ -53,6 +53,7 @@ _primitiveVariableNamesOptions = {
 	"uv" : IECore.V3fData( imath.V3f(0), IECore.GeometricData.Interpretation.UV ),
 	"scale" : IECore.V3fData( imath.V3f(1) ),
 	"width" : IECore.FloatData(),
+	"prototypeIndex" : IECore.IntData(),
 	"Cs" : IECore.Color3fData(),
 	"customInt" : IECore.IntData(),
 	"customFloat" : IECore.FloatData(),
@@ -214,6 +215,7 @@ Gaffer.Metadata.registerNode(
 		],
 		"primitiveVariables.*" : [
 
+			"deletable", True,
 			# Although the parameters plug is positioned
 			# as we want above, we must also register
 			# appropriate values for each individual parameter,
@@ -237,7 +239,6 @@ Gaffer.Metadata.registerNode(
 			# for the case where they get promoted to a box
 			# individually.
 			"noduleLayout:section", "left",
-			"nodule:type", "GafferUI::StandardNodule",
 			"noduleLayout:label", lambda plug : plug.parent().getName() if plug.typeId() == GafferOSL.ClosurePlug.staticTypeId() else plug.parent()["name"].getValue(),
 			"ui:visibleDimensions", lambda plug : 2 if hasattr( plug, "interpretation" ) and plug.interpretation() == IECore.GeometricData.Interpretation.UV else None,
 		],
@@ -284,37 +285,3 @@ Gaffer.Metadata.registerNode(
 	}
 
 )
-
-#########################################################################
-# primitiveVariable plug menu
-##########################################################################
-
-def __deletePlug( plug ) :
-
-	with Gaffer.UndoScope( plug.ancestor( Gaffer.ScriptNode ) ) :
-		plug.parent().removeChild( plug )
-
-def __plugPopupMenu( menuDefinition, plugValueWidget ) :
-
-	plug = plugValueWidget.getPlug()
-	if not isinstance( plug.node(), GafferOSL.OSLObject ):
-		return
-
-	relativeName = plug.relativeName( plug.node() ).split( "." )
-	if relativeName[0] != "primitiveVariables" or len( relativeName ) < 2:
-		return
-
-	primVarPlug = plug.node()["primitiveVariables"][relativeName[1]]
-
-	menuDefinition.append( "/DeleteDivider", { "divider" : True } )
-	menuDefinition.append(
-		"/Delete",
-		{
-			"command" : functools.partial( __deletePlug, primVarPlug ),
-			"active" : not plugValueWidget.getReadOnly() and not Gaffer.MetadataAlgo.readOnly( primVarPlug ),
-		}
-	)
-
-GafferUI.PlugValueWidget.popupMenuSignal().connect( __plugPopupMenu, scoped = False )
-
-

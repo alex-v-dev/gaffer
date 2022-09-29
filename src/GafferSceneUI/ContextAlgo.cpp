@@ -105,12 +105,7 @@ void setExpandedPaths( Context *context, const IECore::PathMatcher &paths )
 
 IECore::PathMatcher getExpandedPaths( const Gaffer::Context *context )
 {
-	if( const IECore::PathMatcherData *expandedPaths = context->get<IECore::PathMatcherData>( g_expandedPathsName, nullptr ) )
-	{
-		return expandedPaths->readable();
-	}
-
-	return IECore::PathMatcher();
+	return context->get<PathMatcher>( g_expandedPathsName, IECore::PathMatcher() );
 }
 
 bool affectsExpandedPaths( const IECore::InternedString &name )
@@ -120,14 +115,13 @@ bool affectsExpandedPaths( const IECore::InternedString &name )
 
 void expand( Context *context, const PathMatcher &paths, bool expandAncestors )
 {
-	IECore::PathMatcherData *expandedPaths = const_cast<IECore::PathMatcherData *>( context->get<IECore::PathMatcherData>( g_expandedPathsName, nullptr ) );
+	const IECore::PathMatcher *expandedPaths = context->getIfExists<PathMatcher>( g_expandedPathsName );
 	if( !expandedPaths )
 	{
-		expandedPaths = new IECore::PathMatcherData();
-		context->set( g_expandedPathsName, expandedPaths );
+		context->set( g_expandedPathsName, new IECore::PathMatcherData() );
+		expandedPaths = context->getIfExists<PathMatcher>( g_expandedPathsName );
 	}
-
-	IECore::PathMatcher &expanded = expandedPaths->writable();
+	IECore::PathMatcher &expanded = *const_cast<IECore::PathMatcher*>(expandedPaths);
 
 	bool needUpdate = false;
 	if( expandAncestors )
@@ -147,23 +141,16 @@ void expand( Context *context, const PathMatcher &paths, bool expandAncestors )
 
 	if( needUpdate )
 	{
-		// We modified the expanded paths in place to avoid unecessary copying,
-		// so the context doesn't know they've changed. So we emit the changed
-		// signal ourselves
-		context->changedSignal()( context, g_expandedPathsName );
+		// We modified the expanded paths in place with const_cast to avoid unecessary copying,
+		// so the context doesn't know they've changed. So we must let it know
+		// about the change.
+		context->set( g_expandedPathsName, *expandedPaths );
 	}
 }
 
 IECore::PathMatcher expandDescendants( Context *context, const IECore::PathMatcher &paths, const ScenePlug *scene, int depth )
 {
-	IECore::PathMatcherData *expandedPaths = const_cast<IECore::PathMatcherData *>( context->get<IECore::PathMatcherData>( g_expandedPathsName, nullptr ) );
-	if( !expandedPaths )
-	{
-		expandedPaths = new IECore::PathMatcherData();
-		context->set( g_expandedPathsName, expandedPaths );
-	}
-
-	IECore::PathMatcher &expanded = expandedPaths->writable();
+	IECore::PathMatcher expandedPaths = context->get<PathMatcher>( g_expandedPathsName, IECore::PathMatcher() );
 
 	bool needUpdate = false;
 	IECore::PathMatcher leafPaths;
@@ -171,15 +158,13 @@ IECore::PathMatcher expandDescendants( Context *context, const IECore::PathMatch
 	// \todo: parallelize the walk
 	for( IECore::PathMatcher::Iterator it = paths.begin(), eIt = paths.end(); it != eIt; ++it )
 	{
-		needUpdate |= expandWalk( *it, scene, depth + 1, expanded, leafPaths );
+		needUpdate |= expandWalk( *it, scene, depth + 1, expandedPaths, leafPaths );
 	}
 
 	if( needUpdate )
 	{
-		// We modified the expanded paths in place to avoid unecessary copying,
-		// so the context doesn't know they've changed. So we emit the changed
-		// signal ourselves
-		context->changedSignal()( context, g_expandedPathsName );
+		// If we modified the expanded paths, we need to set the value back on the context
+		context->set( g_expandedPathsName, expandedPaths );
 	}
 
 	return leafPaths;

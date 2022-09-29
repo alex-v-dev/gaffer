@@ -43,10 +43,10 @@
 
 #include "IECore/Exception.h"
 
+#include "foundation/core/version.h"
 #include "renderer/api/edf.h"
 #include "renderer/api/environmentedf.h"
 #include "renderer/api/light.h"
-#include "renderer/api/version.h"
 
 #include "boost/format.hpp"
 
@@ -56,7 +56,7 @@ using namespace GafferAppleseed;
 namespace asf = foundation;
 namespace asr = renderer;
 
-GAFFER_GRAPHCOMPONENT_DEFINE_TYPE( AppleseedLight );
+GAFFER_NODE_DEFINE_TYPE( AppleseedLight );
 
 size_t AppleseedLight::g_firstPlugIndex = 0;
 
@@ -107,7 +107,7 @@ void AppleseedLight::loadShader( const std::string &shaderName )
 
 void AppleseedLight::hashLight( const Gaffer::Context *context, IECore::MurmurHash &h ) const
 {
-	for( ValuePlugIterator it( parametersPlug() ); !it.done(); ++it )
+	for( ValuePlug::Iterator it( parametersPlug() ); !it.done(); ++it )
 	{
 		(*it)->hash( h );
 	}
@@ -117,9 +117,9 @@ void AppleseedLight::hashLight( const Gaffer::Context *context, IECore::MurmurHa
 IECoreScene::ConstShaderNetworkPtr AppleseedLight::computeLight( const Gaffer::Context *context ) const
 {
 	IECoreScene::ShaderPtr shader = new IECoreScene::Shader( modelPlug()->getValue(), "as:light" );
-	for( InputValuePlugIterator it( parametersPlug() ); !it.done(); ++it )
+	for( ValuePlug::InputIterator it( parametersPlug() ); !it.done(); ++it )
 	{
-		shader->parameters()[(*it)->getName()] = PlugAlgo::extractDataFromPlug( it->get() );
+		shader->parameters()[(*it)->getName()] = PlugAlgo::getValueAsData( it->get() );
 	}
 
 	IECoreScene::ShaderNetworkPtr result = new IECoreScene::ShaderNetwork();

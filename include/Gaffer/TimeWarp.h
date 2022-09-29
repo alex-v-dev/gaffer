@@ -48,7 +48,7 @@ class IECORE_EXPORT TimeWarp : public ContextProcessor
 
 	public :
 
-		GAFFER_GRAPHCOMPONENT_DECLARE_TYPE( Gaffer::TimeWarp, TimeWarpTypeId, ContextProcessor );
+		GAFFER_NODE_DECLARE_TYPE( Gaffer::TimeWarp, TimeWarpTypeId, ContextProcessor );
 
 		TimeWarp( const std::string &name=GraphComponent::defaultName<TimeWarp>() );
 		~TimeWarp() override;
@@ -62,7 +62,7 @@ class IECORE_EXPORT TimeWarp : public ContextProcessor
 	protected :
 
 		bool affectsContext( const Plug *input ) const override;
-		void processContext( Context::EditableScope &context ) const override;
+		void processContext( Context::EditableScope &context, IECore::ConstRefCountedPtr &storage ) const override;
 
 	private :
 

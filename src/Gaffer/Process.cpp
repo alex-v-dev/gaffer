@@ -92,6 +92,21 @@ Process::~Process()
 	{
 		m->processFinished( this );
 	}
+
+	if( context()->canceller() )
+	{
+		const auto t = context()->canceller()->elapsedTime();
+		if( t > std::chrono::seconds( 1 ) )
+		{
+			IECore::msg(
+				IECore::Msg::Warning, "Process::~Process",
+				boost::format( "Cancellation for `%1%` (%2%) took %3%s" )
+					% plug()->fullName()
+					% type()
+					% std::chrono::duration<float>( t ).count()
+			);
+		}
+	}
 }
 
 const Process *Process::current()
@@ -158,6 +173,23 @@ void Process::emitError( const std::string &error, const Plug *source ) const
 		plug = plug != m_plug ? plug->getInput() : nullptr;
 	}
 }
+
+bool Process::forceMonitoringInternal( const ThreadState &s, const Plug *plug, const IECore::InternedString &processType )
+{
+	if( s.m_monitors )
+	{
+		for( const auto &m : *s.m_monitors )
+		{
+			if( m->forceMonitoring( plug, processType ) )
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 
 //////////////////////////////////////////////////////////////////////////
 // ProcessException

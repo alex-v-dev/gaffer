@@ -50,7 +50,8 @@
 #include "IECore/TypedData.h"
 #include "IECore/VectorTypedData.h"
 
-#include "ai.h"
+#include "ai_version.h"
+#include "ai_shader_lights.h"
 
 using namespace Imath;
 using namespace IECore;
@@ -101,7 +102,7 @@ struct SurfaceTextureCacheGetterKey
 	MurmurHash hash;
 };
 
-CompoundDataPtr surfaceTextureGetter( const SurfaceTextureCacheGetterKey &key, size_t &cost )
+CompoundDataPtr surfaceTextureGetter( const SurfaceTextureCacheGetterKey &key, size_t &cost, const IECore::Canceller *canceller )
 {
 	cost = key.resolution.x * key.resolution.y * 3 * 4; // 3 x 32bit float channels;
 
@@ -112,7 +113,7 @@ CompoundDataPtr surfaceTextureGetter( const SurfaceTextureCacheGetterKey &key, s
 	return nullptr;
 }
 
-typedef IECorePreview::LRUCache<IECore::MurmurHash, CompoundDataPtr, IECorePreview::LRUCachePolicy::Parallel, SurfaceTextureCacheGetterKey> SurfaceTextureCache;
+using SurfaceTextureCache = IECorePreview::LRUCache<IECore::MurmurHash, CompoundDataPtr, IECorePreview::LRUCachePolicy::Parallel, SurfaceTextureCacheGetterKey>;
 // Cache cost is in bytes
 SurfaceTextureCache g_surfaceTextureCache( surfaceTextureGetter, 1024 * 1024 * 64 );
 
@@ -179,7 +180,7 @@ IECoreGL::RenderablePtr iesVisualisation( const std::string &filename )
 // ArnoldLightVisualiser implementation
 //////////////////////////////////////////////////////////////////////////
 
-class GAFFERSCENEUI_API ArnoldLightVisualiser : public GafferSceneUI::StandardLightVisualiser
+class ArnoldLightVisualiser : public GafferSceneUI::StandardLightVisualiser
 {
 
 	public :
@@ -292,4 +293,3 @@ IECore::DataPtr ArnoldLightVisualiser::surfaceTexture( const IECoreScene::Shader
 }
 
 }
-

@@ -44,14 +44,16 @@
 #include "IECore/SimpleTypedData.h"
 #include "IECore/StringAlgo.h"
 
-#include "boost/bind.hpp"
+#include "boost/bind/bind.hpp"
 #include "boost/multi_index/member.hpp"
 #include "boost/multi_index/ordered_index.hpp"
 #include "boost/multi_index/sequenced_index.hpp"
 #include "boost/multi_index_container.hpp"
-#include "boost/optional.hpp"
 
-#include "tbb/tbb.h"
+#include "tbb/concurrent_hash_map.h"
+#include "tbb/recursive_mutex.h"
+
+#include <unordered_map>
 
 using namespace std;
 using namespace boost;
@@ -59,12 +61,153 @@ using namespace tbb;
 using namespace IECore;
 using namespace Gaffer;
 
+//////////////////////////////////////////////////////////////////////////
+// Internal implementation details
+//////////////////////////////////////////////////////////////////////////
+
 namespace
 {
 
-typedef std::pair<InternedString, Metadata::ValueFunction> NamedValue;
+// Signals
+// =======
+//
+// We store all our signals in a map indexed by `Node *`. Although we do not
+// allow concurrent edits to a node graph, we do allow different node graphs to
+// be edited concurrently from different threads. This means that we require
+// thread-safety for the operations on the map, but _not_ for the signals
+// themselves. `tbb::concurrent_unordered_map` would be ideal for this if it
+// provided concurrent erasure, but it doesn't. And in practice we expect
+// very little contention anyway, so just use a simple `std::unordered_map`
+// protected by a mutex.
 
-typedef multi_index::multi_index_container<
+struct NodeSignals
+{
+	Metadata::NodeValueChangedSignal nodeSignal;
+	Metadata::PlugValueChangedSignal plugSignal;
+};
+
+using SignalsMap = std::unordered_map<Node *, unique_ptr<NodeSignals>>;
+using SignalsMapLock = tbb::recursive_mutex::scoped_lock;
+
+// Access to the signals requires the passing of a scoped_lock that
+// will be locked for you automatically, and must remain locked while
+// the result is used.
+SignalsMap &signalsMap( SignalsMapLock &lock )
+{
+	static SignalsMap *g_signalsMap = new SignalsMap;
+	static tbb::recursive_mutex g_signalsMapMutex;
+	lock.acquire( g_signalsMapMutex );
+	return *g_signalsMap;
+}
+
+NodeSignals *nodeSignals( Node *node, bool createIfMissing )
+{
+	SignalsMapLock lock;
+	auto &m = signalsMap( lock );
+
+	auto it = m.find( node );
+	if( it == m.end() )
+	{
+		if( !createIfMissing )
+		{
+			return nullptr;
+		}
+		it = m.emplace( node, std::make_unique<NodeSignals>() ).first;
+	}
+	return it->second.get();
+}
+
+void emitValueChangedSignals( IECore::TypeId typeId, IECore::InternedString key, Metadata::ValueChangedReason reason )
+{
+	if( typeId == Node::staticTypeId() || RunTimeTyped::inheritsFrom( typeId, Node::staticTypeId() ) )
+	{
+		Metadata::nodeValueChangedSignal()( typeId, key, nullptr );
+
+		SignalsMapLock lock;
+		for( const auto &s : signalsMap( lock ) )
+		{
+			if( s.first->isInstanceOf( typeId ) )
+			{
+				s.second->nodeSignal( s.first, key, reason );
+			}
+		}
+	}
+	else if( typeId == Plug::staticTypeId() || RunTimeTyped::inheritsFrom( typeId, Plug::staticTypeId() ) )
+	{
+		Metadata::plugValueChangedSignal()( typeId, "", key, nullptr );
+
+		SignalsMapLock lock;
+		for( const auto &s : signalsMap( lock ) )
+		{
+			for( auto &plug : Plug::RecursiveRange( *s.first ) )
+			{
+				if( plug->isInstanceOf( typeId ) )
+				{
+					s.second->plugSignal( plug.get(), key, reason );
+				}
+			}
+		}
+	}
+}
+
+void emitMatchingPlugValueChangedSignals( Metadata::PlugValueChangedSignal &signal, Plug *plug, const vector<InternedString> &path, const StringAlgo::MatchPatternPath &matchPath, IECore::InternedString key, Metadata::ValueChangedReason reason )
+{
+	/// \todo There is scope for pruning the recursion here early if we
+	/// reproduce the logic of StringAlgo::match ourselves. We don't
+	/// really expect this code path to be exercised while there are active
+	/// signals though, as type-based (rather than instance-based) registrations
+	/// are typically only made during startup.
+	if( StringAlgo::match( path, matchPath ) )
+	{
+		signal( plug, key, reason );
+	}
+
+	vector<InternedString> childPath = path;
+	childPath.push_back( InternedString() ); // Room for child name
+	for( const auto &child : Plug::Range( *plug ) )
+	{
+		childPath.back() = child->getName();
+		emitMatchingPlugValueChangedSignals( signal, child.get(), childPath, matchPath, key, reason );
+	}
+}
+
+// The `matchPatternPath` is passed redundantly rather than derived from `plugPath`
+// because in all cases we have already done the work of tokenizing it outside this function.
+void emitPlugValueChangedSignals( IECore::TypeId ancestorTypeId, const StringAlgo::MatchPattern &plugPath, const StringAlgo::MatchPatternPath &matchPatternPath, IECore::InternedString key, Metadata::ValueChangedReason reason )
+{
+	assert( reason == Metadata::ValueChangedReason::StaticRegistration || reason == Metadata::ValueChangedReason::StaticDeregistration );
+
+	Metadata::plugValueChangedSignal()( ancestorTypeId, plugPath, key, nullptr );
+
+	SignalsMapLock lock;
+	for( const auto &s : signalsMap( lock ) )
+	{
+		if( s.first->isInstanceOf( ancestorTypeId ) )
+		{
+			for( const auto &plug : Plug::Range( *s.first ) )
+			{
+				emitMatchingPlugValueChangedSignals( s.second->plugSignal, plug.get(), { plug->getName() }, matchPatternPath, key, reason );
+			}
+		}
+		else if( ancestorTypeId == Plug::staticTypeId() || RunTimeTyped::inheritsFrom( ancestorTypeId, Plug::staticTypeId() ) )
+		{
+			for( const auto &plug : Plug::RecursiveRange( *s.first ) )
+			{
+				if( plug->isInstanceOf( ancestorTypeId ) )
+				{
+					emitMatchingPlugValueChangedSignals( s.second->plugSignal, plug.get(), {}, matchPatternPath, key, reason );
+				}
+			}
+		}
+	}
+}
+
+// Value storage for string targets
+// ================================
+
+using NamedValue = std::pair<InternedString, Metadata::ValueFunction>;
+
+using Values = multi_index::multi_index_container<
 	NamedValue,
 	multi_index::indexed_by<
 		multi_index::ordered_unique<
@@ -72,23 +215,26 @@ typedef multi_index::multi_index_container<
 		>,
 		multi_index::sequenced<>
 	>
-> Values;
+>;
 
-typedef std::map<IECore::InternedString, Values> MetadataMap;
+using MetadataMap = std::map<IECore::InternedString, Values>;
 
 MetadataMap &metadataMap()
 {
-	static MetadataMap m;
-	return m;
+	static auto g_m = new MetadataMap;
+	return *g_m;
 }
+
+// Value storage for type-based targets
+// ====================================
 
 struct GraphComponentMetadata
 {
 
-	typedef std::pair<InternedString, Metadata::GraphComponentValueFunction> NamedValue;
-	typedef std::pair<InternedString, Metadata::PlugValueFunction> NamedPlugValue;
+	using NamedValue = std::pair<InternedString, Metadata::GraphComponentValueFunction>;
+	using NamedPlugValue = std::pair<InternedString, Metadata::PlugValueFunction>;
 
-	typedef multi_index::multi_index_container<
+	using Values = multi_index::multi_index_container<
 		NamedValue,
 		multi_index::indexed_by<
 			multi_index::ordered_unique<
@@ -96,9 +242,9 @@ struct GraphComponentMetadata
 			>,
 			multi_index::sequenced<>
 		>
-	> Values;
+	>;
 
-	typedef multi_index::multi_index_container<
+	using PlugValues = multi_index::multi_index_container<
 		NamedPlugValue,
 		multi_index::indexed_by<
 			multi_index::ordered_unique<
@@ -106,22 +252,25 @@ struct GraphComponentMetadata
 			>,
 			multi_index::sequenced<>
 		>
-	> PlugValues;
+	>;
 
-	typedef map<StringAlgo::MatchPatternPath, PlugValues> PlugPathsToValues;
+	using PlugPathsToValues = map<StringAlgo::MatchPatternPath, PlugValues>;
 
 	Values values;
 	PlugPathsToValues plugPathsToValues;
 
 };
 
-typedef std::map<IECore::TypeId, GraphComponentMetadata> GraphComponentMetadataMap;
+using GraphComponentMetadataMap = std::map<IECore::TypeId, GraphComponentMetadata>;
 
 GraphComponentMetadataMap &graphComponentMetadataMap()
 {
-	static GraphComponentMetadataMap m;
-	return m;
+	static auto g_m = new GraphComponentMetadataMap;
+	return *g_m;
 }
+
+// Value storage for instance targets
+// ==================================
 
 struct NamedInstanceValue
 {
@@ -135,7 +284,7 @@ struct NamedInstanceValue
 	bool persistent;
 };
 
-typedef multi_index::multi_index_container<
+using InstanceValues = multi_index::multi_index_container<
 	NamedInstanceValue,
 	multi_index::indexed_by<
 		multi_index::ordered_unique<
@@ -143,9 +292,9 @@ typedef multi_index::multi_index_container<
 		>,
 		multi_index::sequenced<>
 	>
-> InstanceValues;
+>;
 
-typedef concurrent_hash_map<const GraphComponent *, InstanceValues *> InstanceMetadataMap;
+using InstanceMetadataMap = concurrent_hash_map<const GraphComponent *, InstanceValues *>;
 
 InstanceMetadataMap &instanceMetadataMap()
 {
@@ -178,7 +327,7 @@ InstanceValues *instanceMetadata( const GraphComponent *instance, bool createIfM
 // It's valid to register null as an instance value and expect it to override
 // any non-null registration. We use OptionalData as a way of distinguishing
 // between an explicit registration of null and no registration at all.
-typedef boost::optional<ConstDataPtr> OptionalData;
+using OptionalData = std::optional<ConstDataPtr>;
 
 OptionalData instanceValue( const GraphComponent *instance, InternedString key, bool *persistent = nullptr )
 {
@@ -230,15 +379,25 @@ void registerInstanceValueAction( GraphComponent *instance, InternedString key, 
 		}
 	}
 
+	const Metadata::ValueChangedReason reason = value ? Metadata::ValueChangedReason::InstanceRegistration : Metadata::ValueChangedReason::InstanceDeregistration;
+
 	if( Node *node = runTimeCast<Node>( instance ) )
 	{
 		Metadata::nodeValueChangedSignal()( node->typeId(), key, node );
+		if( NodeSignals *s = nodeSignals( node, /* createIfMissing = */ false ) )
+		{
+			s->nodeSignal( node, key, reason );
+		}
 	}
 	else if( Plug *plug = runTimeCast<Plug>( instance ) )
 	{
-		if( const Node *node = plug->node() )
+		if( Node *node = plug->node() )
 		{
 			Metadata::plugValueChangedSignal()( node->typeId(), plug->relativeName( node ), key, plug );
+			if( NodeSignals *s = nodeSignals( node, /* createIfMissing = */ false ) )
+			{
+				s->plugSignal( plug, key, reason );
+			}
 		}
 	}
 }
@@ -294,6 +453,10 @@ void registeredInstanceValues( const GraphComponent *graphComponent, std::vector
 }
 
 } // namespace
+
+//////////////////////////////////////////////////////////////////////////
+// Public implementation
+//////////////////////////////////////////////////////////////////////////
 
 void Metadata::registerValue( IECore::InternedString target, IECore::InternedString key, IECore::ConstDataPtr value )
 {
@@ -386,14 +549,7 @@ void Metadata::registerValue( IECore::TypeId typeId, IECore::InternedString key,
 		m.replace( it, namedValue );
 	}
 
-	if( typeId == Node::staticTypeId() || RunTimeTyped::inheritsFrom( typeId, Node::staticTypeId() ) )
-	{
-		nodeValueChangedSignal()( typeId, key, nullptr );
-	}
-	else if( typeId == Plug::staticTypeId() || RunTimeTyped::inheritsFrom( typeId, Plug::staticTypeId() ) )
-	{
-		plugValueChangedSignal()( typeId, "", key, nullptr );
-	}
+	emitValueChangedSignals( typeId, key, Metadata::ValueChangedReason::StaticRegistration );
 }
 
 void Metadata::deregisterValue( IECore::TypeId typeId, IECore::InternedString key )
@@ -406,21 +562,14 @@ void Metadata::deregisterValue( IECore::TypeId typeId, IECore::InternedString ke
 	}
 
 	m.erase( it );
-
-	if( typeId == Node::staticTypeId() || RunTimeTyped::inheritsFrom( typeId, Node::staticTypeId() ) )
-	{
-		nodeValueChangedSignal()( typeId, key, nullptr );
-	}
-	else if( typeId == Plug::staticTypeId() || RunTimeTyped::inheritsFrom( typeId, Plug::staticTypeId() ) )
-	{
-		plugValueChangedSignal()( typeId, "", key, nullptr );
-	}
+	emitValueChangedSignals( typeId, key, Metadata::ValueChangedReason::StaticDeregistration );
 }
 
 void Metadata::deregisterValue( IECore::TypeId ancestorTypeId, const StringAlgo::MatchPattern &plugPath, IECore::InternedString key )
 {
 	auto &m = graphComponentMetadataMap()[ancestorTypeId];
-	auto &plugValues = m.plugPathsToValues[StringAlgo::matchPatternPath( plugPath, '.' )];
+	const StringAlgo::MatchPatternPath matchPatternPath = StringAlgo::matchPatternPath( plugPath, '.' );
+	auto &plugValues = m.plugPathsToValues[matchPatternPath];
 
 	auto it = plugValues.find( key );
 	if( it == plugValues.end() )
@@ -429,7 +578,8 @@ void Metadata::deregisterValue( IECore::TypeId ancestorTypeId, const StringAlgo:
 	}
 
 	plugValues.erase( it );
-	plugValueChangedSignal()( ancestorTypeId, plugPath, key, nullptr );
+
+	emitPlugValueChangedSignals( ancestorTypeId, plugPath, matchPatternPath, key, Metadata::ValueChangedReason::StaticDeregistration );
 }
 
 void Metadata::deregisterValue( GraphComponent *target, IECore::InternedString key )
@@ -462,7 +612,7 @@ std::vector<Node*> Metadata::nodesWithMetadata( GraphComponent *root, IECore::In
 	}
 	else
 	{
-		for( RecursiveNodeIterator it( root ); !it.done(); ++it )
+		for( Node::RecursiveIterator it( root ); !it.done(); ++it )
 		{
 			if( valueInternal( it->get(), key, instanceOnly ) )
 			{
@@ -480,8 +630,9 @@ void Metadata::registerValue( IECore::TypeId ancestorTypeId, const StringAlgo::M
 
 void Metadata::registerValue( IECore::TypeId ancestorTypeId, const StringAlgo::MatchPattern &plugPath, IECore::InternedString key, PlugValueFunction value )
 {
-	auto &graphComponentMetadata = graphComponentMetadataMap()[ancestorTypeId];
-	auto &plugValues = graphComponentMetadata.plugPathsToValues[StringAlgo::matchPatternPath( plugPath, '.' )];
+	auto &m = graphComponentMetadataMap()[ancestorTypeId];
+	const StringAlgo::MatchPatternPath matchPatternPath = StringAlgo::matchPatternPath( plugPath, '.' );
+	auto &plugValues = m.plugPathsToValues[matchPatternPath];
 
 	GraphComponentMetadata::NamedPlugValue namedValue( key, value );
 
@@ -495,7 +646,7 @@ void Metadata::registerValue( IECore::TypeId ancestorTypeId, const StringAlgo::M
 		plugValues.replace( it, namedValue );
 	}
 
-	plugValueChangedSignal()( ancestorTypeId, plugPath, key, nullptr );
+	emitPlugValueChangedSignals( ancestorTypeId, plugPath, matchPatternPath, key, Metadata::ValueChangedReason::StaticRegistration );
 }
 
 std::vector<Plug*> Metadata::plugsWithMetadata( GraphComponent *root, IECore::InternedString key, bool instanceOnly )
@@ -689,19 +840,34 @@ Metadata::ValueChangedSignal &Metadata::valueChangedSignal()
 	return *s;
 }
 
-Metadata::NodeValueChangedSignal &Metadata::nodeValueChangedSignal()
+Metadata::NodeValueChangedSignal &Metadata::nodeValueChangedSignal( Node *node )
 {
-	static NodeValueChangedSignal *s = new NodeValueChangedSignal;
+	return nodeSignals( node, /* createIfMissing = */ true )->nodeSignal;
+}
+
+Metadata::PlugValueChangedSignal &Metadata::plugValueChangedSignal( Node *node )
+{
+	return nodeSignals( node, /* createIfMissing = */ true )->plugSignal;
+}
+
+Metadata::LegacyNodeValueChangedSignal &Metadata::nodeValueChangedSignal()
+{
+	static LegacyNodeValueChangedSignal *s = new LegacyNodeValueChangedSignal;
 	return *s;
 }
 
-Metadata::PlugValueChangedSignal &Metadata::plugValueChangedSignal()
+Metadata::LegacyPlugValueChangedSignal &Metadata::plugValueChangedSignal()
 {
-	static PlugValueChangedSignal *s = new PlugValueChangedSignal;
+	static LegacyPlugValueChangedSignal *s = new LegacyPlugValueChangedSignal;
 	return *s;
 }
 
-void Metadata::clearInstanceMetadata( const GraphComponent *graphComponent )
+void Metadata::instanceDestroyed( GraphComponent *graphComponent )
 {
 	instanceMetadataMap().erase( graphComponent );
+	if( auto node = runTimeCast<Node>( graphComponent ) )
+	{
+		SignalsMapLock lock;
+		signalsMap( lock ).erase( node );
+	}
 }

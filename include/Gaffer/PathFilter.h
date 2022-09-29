@@ -39,12 +39,11 @@
 #define GAFFER_PATHFILTER_H
 
 #include "Gaffer/Export.h"
+#include "Gaffer/Signals.h"
 #include "Gaffer/TypeIds.h"
 
 #include "IECore/CompoundData.h"
 #include "IECore/RunTimeTyped.h"
-
-#include "boost/signals.hpp"
 
 namespace Gaffer
 {
@@ -71,16 +70,16 @@ class GAFFER_API PathFilter : public IECore::RunTimeTyped
 		void setEnabled( bool enabled );
 		bool getEnabled() const;
 
-		void filter( std::vector<PathPtr> &paths ) const;
+		void filter( std::vector<PathPtr> &paths, const IECore::Canceller *canceller = nullptr ) const;
 
-		typedef boost::signal<void ( PathFilter * )> ChangedSignal;
+		using ChangedSignal = Signals::Signal<void ( PathFilter * )>;
 		ChangedSignal &changedSignal();
 
 	protected :
 
 		/// Must be implemented by derived classes to filter the passed
 		/// paths in place.
-		virtual void doFilter( std::vector<PathPtr> &paths ) const = 0;
+		virtual void doFilter( std::vector<PathPtr> &paths, const IECore::Canceller *canceller ) const = 0;
 
 	private :
 
